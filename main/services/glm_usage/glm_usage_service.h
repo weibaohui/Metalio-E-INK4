@@ -2,8 +2,9 @@
 
 #include <cstdint>
 #include <ctime>
-#include <string>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
@@ -11,43 +12,61 @@
 
 #include "services/glm_usage/glm_usage.h"
 
-// Configuration persisted in the `glm` NVS namespace.
-struct GlmUsageConfig {
-    std::string api_key;
+// A discovered organization/project pair. Usage snapshots are stored per pair,
+// so the dashboard can switch between contexts without refetching.
+struct GlmUsageContext {
     std::string organization;
     std::string project;
+    std::string name;
 
-    bool HasKey() const { return !api_key.empty(); }
-    bool IsTeam() const { return !organization.empty() && !project.empty(); }
-};
+    int project_type = 0;
+    bool organization_default = false;
+    bool project_default = false;
 
-// Observable client state. version increases after every worker fetch attempt,
-// so lightweight UI polling can distinguish new results from unchanged data.
-struct GlmUsageStatus {
-    uint32_t version = 0;
-    bool configured = false;
-    bool team = false;
-    bool busy = false;
+    bool has_usage = false;
     bool last_ok = false;
     time_t updated_at = 0;
     std::string error = "尚未查询";
+    GlmUsage usage;
 };
 
-// Resident GLM quota client. It owns credentials, polling, HTTP, parsing, and
-// MCP registration. The LVGL app is only an observer/configurator.
+// Only api_key is persisted. The Web JWT is one-shot and lives only long
+// enough for the resident worker to discover all available contexts.
+struct GlmUsageConfig {
+    std::string api_key;
+
+    bool HasKey() const { return !api_key.empty(); }
+};
+
+struct GlmUsageStatus {
+    uint32_t version = 0;
+    bool configured = false;
+    bool busy = false;
+    bool discovering = false;
+    bool last_ok = false;
+    time_t updated_at = 0;
+    size_t active_context = 0;
+    size_t context_count = 0;
+    std::string error = "尚未查询";
+};
+
+// Resident GLM quota service and MCP tool provider. The LVGL app is only an
+// observer and context switcher.
 class GlmUsageService {
 public:
     static GlmUsageService& GetInstance();
 
-    // Idempotent. Starts the resident worker and registers MCP tools.
     void Start();
 
     GlmUsageConfig GetConfig();
-    void SaveConfig(GlmUsageConfig config);
-    void RequestRefresh();
-
-    GlmUsage GetSnapshot();
+    std::vector<GlmUsageContext> GetContexts();
     GlmUsageStatus GetStatus();
+
+    // MCP-facing one-step setup: save the API key and use the Web JWT once to
+    // discover every organization/project offered by the account.
+    void Configure(const std::string& api_key, const std::string& jwt_token);
+    void SelectContext(size_t index);
+    void RequestRefresh();
 
 private:
     GlmUsageService() = default;
@@ -58,12 +77,21 @@ private:
     void RegisterMcpTools();
     void Worker();
     void FetchOnce();
-    void StoreResult(bool ok, const GlmUsage& usage, std::string error);
 
-    std::mutex mutex_;
+    bool DiscoverContexts(const std::string& jwt_token, std::string& error);
+    bool FetchContext(GlmUsageContext& context, std::string& error);
+    void StoreContextResult(size_t index, const GlmUsageContext& context);
+    void StoreGlobalResult();
+    void PersistContexts();
+    void LoadPersisted();
+    void SaveApiKey(const std::string& api_key);
+    void SignalWorker();
+
+    mutable std::mutex mutex_;
     GlmUsageConfig config_;
-    GlmUsage usage_;
+    std::vector<GlmUsageContext> contexts_;
     GlmUsageStatus status_;
+    std::string pending_web_token_;
 
     EventGroupHandle_t event_group_ = nullptr;
     TaskHandle_t worker_ = nullptr;
