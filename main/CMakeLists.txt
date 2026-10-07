@@ -34,7 +34,8 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/home_screen/home_screen.cc"
             "display/screen/home_screen/home_hero.cc"
             "display/screen/checklist_cache.cc"
-            "display/screen/glm_usage_screen/glm_usage.cc"
+            "services/glm_usage/glm_usage.cc"
+            "services/glm_usage/glm_usage_service.cc"
             "display/screen/glm_usage_screen/glm_usage_screen.cc"
             "display/screen/standby_screen/standby_screen.cc"
             "display/screen/standby_screen/standby_classic.cc"
@@ -123,7 +124,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader")
+set(INCLUDE_DIRS "." "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services")
 
 # Add board common files（GLOB 缓存：新增 boards/common/*.cc 后需 idf.py reconfigure）
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)

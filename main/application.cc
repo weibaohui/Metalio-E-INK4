@@ -7,6 +7,7 @@
 #include "websocket_protocol.h"
 #include "assets/lang_config.h"
 #include "mcp_server.h"
+#include "services/glm_usage/glm_usage_service.h"
 #include "assets.h"
 #include "assistant_screen/assistant_screen.h"
 #include "a2ui_img_cache.h"
@@ -1111,6 +1112,9 @@ void Application::Start() {
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddCommonTools();
     mcp_server.AddUserOnlyTools();
+    // Built-in application services register their MCP tools and resident
+    // workers here; UI screens later attach to their observable state.
+    GlmUsageService::GetInstance().Start();
 
     boot_ready_.store(true, std::memory_order_release);
 

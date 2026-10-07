@@ -1,31 +1,16 @@
 #include "glm_usage_screen/glm_usage_screen.h"
 
-#include <algorithm>
-#include <atomic>
 #include <cctype>
-#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <mutex>
-#include <memory>
-#include <string>
-#include <vector>
-
-#include "http.h"
-#include "network_interface.h"
 
 #include <esp_log.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 
-#include "board.h"
 #include "fontpack_lvgl.h"
-#include "glm_usage_screen/glm_usage.h"
 #include "haptic_feedback.h"
-#include "power_policy.h"
 #include "screen_common.h"
-#include "settings.h"
+#include "services/glm_usage/glm_usage_service.h"
 #include "vk_key_handler.h"
 
 namespace {
@@ -45,26 +30,6 @@ constexpr lv_coord_t kKeyboardH = 230;
 constexpr size_t kApiKeyMax = 128;
 constexpr size_t kOrgMax = 64;
 constexpr size_t kProjectMax = 64;
-constexpr int kHttpTimeoutMs = 15000;
-constexpr int kRefreshIntervalMs = 5 * 60 * 1000;
-
-struct GlmConfig {
-    std::string api_key;
-    std::string organization;
-    std::string project;
-
-    bool HasKey() const { return !api_key.empty(); }
-    bool IsTeam() const { return !organization.empty() && !project.empty(); }
-};
-
-struct FetchResult {
-    bool ok = false;
-    GlmUsage usage;
-    std::string error;
-    time_t updated = 0;
-};
-
-void RefreshUsageUi();
 
 struct GlmUi {
     lv_obj_t* screen = nullptr;
@@ -94,14 +59,8 @@ struct GlmUi {
 GlmUi s_ui;
 bool s_screen_alive = false;
 bool s_usage_tab = true;
-std::atomic_bool s_fetch_busy{false};
-lv_timer_t* s_refresh_timer = nullptr;
-
-std::mutex s_state_mu;
-GlmUsage s_usage;
-std::string s_error = "尚未查询";
-bool s_last_ok = false;
-time_t s_updated_at = 0;
+uint32_t s_seen_version = 0xffffffff;
+lv_timer_t* s_status_timer = nullptr;
 
 const lv_font_t* UiFont() {
     return fontpack_lv_font_ui();
@@ -109,10 +68,6 @@ const lv_font_t* UiFont() {
 
 void DisableScroll(lv_obj_t* obj) {
     lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
-}
-
-void HapticAttach(lv_obj_t* obj) {
-    HapticAttachClick(obj);
 }
 
 lv_obj_t* MakeCard(lv_obj_t* parent) {
@@ -156,7 +111,7 @@ lv_obj_t* MakeButton(lv_obj_t* parent, const char* text, lv_coord_t width,
     lv_obj_set_style_border_width(button, 2, 0);
     lv_obj_set_style_radius(button, LV_RADIUS_CIRCLE, 0);
     lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
-    HapticAttach(button);
+    HapticAttachClick(button);
     lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t* label = lv_label_create(button);
@@ -174,251 +129,50 @@ void SetFooter(const char* text) {
     }
 }
 
-void SetFooterFmt(const char* fmt, ...) {
-    char text[160];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(text, sizeof(text), fmt, args);
-    va_end(args);
-    SetFooter(text);
-}
-
-GlmConfig LoadConfig() {
-    Settings settings("glm", false);
-    GlmConfig config;
-    config.api_key = settings.GetString("api_key");
-    config.organization = settings.GetString("org_id");
-    config.project = settings.GetString("project_id");
-    return config;
-}
-
-std::string Trim(const std::string& value) {
-    size_t begin = 0;
-    size_t end = value.size();
-    while (begin < end && std::isspace(static_cast<unsigned char>(value[begin]))) ++begin;
-    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) --end;
-    return value.substr(begin, end - begin);
-}
-
-bool SaveConfig(GlmConfig config) {
-    Settings settings("glm", true);
-    settings.SetString("api_key", config.api_key);
-    settings.SetString("org_id", config.organization);
-    settings.SetString("project_id", config.project);
-    return true;
-}
-
-struct HttpResult {
-    bool ok = false;
-    int status = 0;
-    std::string body;
-    std::string error;
-};
-
-bool HttpRequest(const std::string& url, const std::vector<std::pair<std::string, std::string>>& headers,
-                 HttpResult& result) {
-    result = {};
-    PowerNeedHold hold_network(PowerNeed::OtaDownload);
-    if (!Board::GetInstance().EnsureNetworkReady()) {
-        result.error = "网络未就绪";
-        return false;
-    }
-    NetworkInterface* network = Board::GetInstance().GetNetwork();
-    if (network == nullptr) {
-        result.error = "网络不可用";
-        return false;
-    }
-    std::unique_ptr<Http> http = network->CreateHttp(0);
-    if (http == nullptr) {
-        result.error = "创建请求失败";
-        return false;
-    }
-
-    http->SetTimeout(kHttpTimeoutMs);
-    http->SetHeader("Accept", "application/json");
-    for (const auto& header : headers) {
-        http->SetHeader(header.first, header.second);
-    }
-    ESP_LOGI(TAG, "quota request: %s", url.c_str());
-    if (!http->Open("GET", url)) {
-        result.error = "请求失败";
-        return false;
-    }
-    result.status = http->GetStatusCode();
-    result.body = http->ReadAll();
-    http->Close();
-    result.ok = result.status >= 200 && result.status < 300;
-    if (!result.ok && result.error.empty()) {
-        result.error = "HTTP " + std::to_string(result.status);
-    }
-    return result.ok;
-}
-
-void AppendAuthHeaders(std::vector<std::pair<std::string, std::string>>& headers,
-                       const GlmConfig& config) {
-    headers.emplace_back("Authorization", config.api_key);
-    if (config.IsTeam()) {
-        headers.emplace_back("bigmodel-organization", config.organization);
-        headers.emplace_back("bigmodel-project", config.project);
-    }
-}
-
-FetchResult FetchUsage() {
-    FetchResult result;
-    const GlmConfig config = LoadConfig();
-    if (!config.HasKey()) {
-        result.error = "请先配置 API Key";
-        return result;
-    }
-
-    std::vector<std::pair<std::string, std::string>> headers;
-    AppendAuthHeaders(headers, config);
-    const std::string url = "https://open.bigmodel.cn/api/monitor/usage/quota/limit" +
-                            std::string(config.IsTeam() ? "?type=2" : "");
-    HttpResult http_result;
-    HttpRequest(url, headers, http_result);
-
-    bool recognized = GlmUsageParse(http_result.body, result.usage);
-    if (http_result.status == 200 && recognized && result.usage.ok) {
-        result.ok = true;
-    } else if (recognized && !result.usage.msg.empty()) {
-        result.error = result.usage.msg;
-    } else if (!http_result.error.empty()) {
-        result.error = http_result.error;
-    } else {
-        result.error = "响应格式错误";
-    }
-
-    if (result.ok && config.IsTeam()) {
-        static int last_five = -1;
-        static int last_week = -1;
-        int five = -1;
-        int week = -1;
-        bool got = false;
-        const std::string reset_url =
-            "https://open.bigmodel.cn/api/biz/customer-package-reset/list?targetType=TEAM";
-        for (int attempt = 0; attempt < 4 && !got; ++attempt) {
-            HttpResult reset_result;
-            std::vector<std::pair<std::string, std::string>> reset_headers;
-            AppendAuthHeaders(reset_headers, config);
-            HttpRequest(reset_url, reset_headers, reset_result);
-            if (reset_result.ok && GlmResetsParse(reset_result.body, five, week) &&
-                five >= 0 && week >= 0) {
-                last_five = five;
-                last_week = week;
-                got = true;
-            } else if (attempt < 3) {
-                vTaskDelay(pdMS_TO_TICKS(400));
-            }
-        }
-        if (got) {
-            result.usage.five_hour_resets_left = five;
-            result.usage.week_resets_left = week;
-        } else {
-            ESP_LOGW(TAG, "reset counts unavailable; keep previous values");
-            result.usage.five_hour_resets_left = last_five;
-            result.usage.week_resets_left = last_week;
-        }
-    }
-
-    result.updated = time(nullptr);
-    ESP_LOGI(TAG, "usage fetch ok=%d status=%d", result.ok, http_result.status);
-    return result;
-}
-
-void ApplyResult(void* user_data) {
-    FetchResult* result = static_cast<FetchResult*>(user_data);
-    s_fetch_busy.store(false, std::memory_order_release);
-    if (result == nullptr) {
-        return;
-    }
-    {
-        std::lock_guard<std::mutex> lock(s_state_mu);
-        if (result->ok) {
-            s_usage = result->usage;
-            s_error.clear();
-            s_last_ok = true;
-        } else {
-            s_error = result->error;
-            s_last_ok = false;
-        }
-        s_updated_at = result->updated;
-    }
-    delete result;
-
-    if (!s_screen_alive) {
-        return;
-    }
-    RefreshUsageUi();
-    if (s_last_ok) {
-        SetFooter("已更新");
-    } else {
-        SetFooterFmt("查询失败：%s", s_error.c_str());
-    }
-}
-
-void FetchTask(void* /*argument*/) {
-    FetchResult* result = new FetchResult(FetchUsage());
-    if (!ScreenLvAsyncUrgent(ApplyResult, result)) {
-        delete result;
-        s_fetch_busy.store(false, std::memory_order_release);
-    }
-    vTaskDelete(nullptr);
-}
-
-void StartFetch(bool force = true) {
-    bool expected = false;
-    if (!s_fetch_busy.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        SetFooter("正在查询...");
-        return;
-    }
-    (void)force;
-    SetFooter("正在查询...");
-    TaskHandle_t handle = nullptr;
-    if (xTaskCreatePinnedToCore(FetchTask, "glm_fetch", 8192, nullptr,
-                                tskIDLE_PRIORITY + 2, &handle, 0) != pdPASS) {
-        s_fetch_busy.store(false, std::memory_order_release);
-        SetFooter("查询任务启动失败");
-    }
-}
-
-void OnRefreshClicked(lv_event_t* /*event*/) {
-    StartFetch();
-}
-
 std::string PercentText(int percent) {
     return percent >= 0 ? std::to_string(percent) + "%" : "--";
 }
 
-std::string UpdatedText() {
-    time_t updated = 0;
-    {
-        std::lock_guard<std::mutex> lock(s_state_mu);
-        updated = s_updated_at;
-    }
-    if (updated <= 0) {
+std::string UpdatedText(time_t updated_at) {
+    if (updated_at <= 0) {
         return "尚未更新";
     }
     struct tm local{};
-    localtime_r(&updated, &local);
-    char text[24];
+    localtime_r(&updated_at, &local);
+    char text[16];
     std::snprintf(text, sizeof(text), "%02d:%02d", local.tm_hour, local.tm_min);
     return "已更新 " + std::string(text);
+}
+
+void SyncFooter() {
+    const GlmUsageStatus status = GlmUsageService::GetInstance().GetStatus();
+    if (status.version == s_seen_version) {
+        return;
+    }
+    s_seen_version = status.version;
+    if (!status.configured) {
+        SetFooter("请先在配置页填 API Key");
+    } else if (status.busy) {
+        SetFooter("正在查询...");
+    } else if (status.last_ok) {
+        SetFooter(UpdatedText(status.updated_at).c_str());
+    } else {
+        SetFooter(("查询失败：" + status.error).c_str());
+    }
 }
 
 void RefreshUsageUi() {
     if (!s_screen_alive || s_ui.plan_lbl == nullptr) {
         return;
     }
-    GlmUsage usage;
-    {
-        std::lock_guard<std::mutex> lock(s_state_mu);
-        usage = s_usage;
-    }
+    auto& service = GlmUsageService::GetInstance();
+    const GlmUsage usage = service.GetSnapshot();
+    const GlmUsageStatus status = service.GetStatus();
 
     const std::string level = usage.level.empty() ? std::string("套餐") : usage.level;
-    std::string plan = level + " · " + UpdatedText();
-    lv_label_set_text(s_ui.plan_lbl, plan.c_str());
+    const std::string plan_state =
+        status.last_ok ? UpdatedText(status.updated_at) : std::string("尚未成功");
+    lv_label_set_text(s_ui.plan_lbl, (level + " · " + plan_state).c_str());
 
     lv_label_set_text(s_ui.five_pct_lbl,
                       ("5 小时窗口  " + PercentText(usage.tokens_5h_used_pct)).c_str());
@@ -497,12 +251,11 @@ void OnConfigTabClicked(lv_event_t* /*event*/) {
 }
 
 lv_obj_t* MakeTabButton(lv_obj_t* parent, const char* text, bool usage) {
-    lv_obj_t* button = MakeButton(parent, text, 140, usage ? OnUsageTabClicked : OnConfigTabClicked);
-    return button;
+    return MakeButton(parent, text, 140, usage ? OnUsageTabClicked : OnConfigTabClicked);
 }
 
 void LoadConfigFields() {
-    const GlmConfig config = LoadConfig();
+    const GlmUsageConfig config = GlmUsageService::GetInstance().GetConfig();
     if (s_ui.key_ta != nullptr) {
         lv_textarea_set_text(s_ui.key_ta, config.api_key.c_str());
     }
@@ -520,15 +273,25 @@ void HideKeyboard() {
     }
 }
 
+std::string Trim(const std::string& value) {
+    size_t begin = 0;
+    size_t end = value.size();
+    while (begin < end && std::isspace(static_cast<unsigned char>(value[begin]))) ++begin;
+    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) --end;
+    return value.substr(begin, end - begin);
+}
+
 void OnSaveClicked(lv_event_t* /*event*/) {
-    GlmConfig config;
+    GlmUsageConfig config;
     config.api_key = Trim(s_ui.key_ta != nullptr ? lv_textarea_get_text(s_ui.key_ta) : "");
     config.organization = Trim(s_ui.org_ta != nullptr ? lv_textarea_get_text(s_ui.org_ta) : "");
     config.project = Trim(s_ui.project_ta != nullptr ? lv_textarea_get_text(s_ui.project_ta) : "");
     HideKeyboard();
-    SaveConfig(config);
+
+    auto& service = GlmUsageService::GetInstance();
+    service.SaveConfig(config);
+    service.RequestRefresh();
     SetFooter("已保存，开始查询");
-    StartFetch();
 }
 
 void OnTextareaFocused(lv_event_t* event) {
@@ -566,17 +329,19 @@ bool OnVkKey(const char* key_name) {
 
 void OnScreenUnloaded(lv_event_t* /*event*/) {
     s_screen_alive = false;
-    if (s_refresh_timer != nullptr) {
-        lv_timer_delete(s_refresh_timer);
-        s_refresh_timer = nullptr;
+    if (s_status_timer != nullptr) {
+        lv_timer_delete(s_status_timer);
+        s_status_timer = nullptr;
     }
     s_ui = {};
 }
 
-void OnRefreshTimer(lv_timer_t* /*timer*/) {
-    if (s_screen_alive && s_usage_tab) {
-        StartFetch();
+void OnStatusTimer(lv_timer_t* /*timer*/) {
+    if (!s_screen_alive) {
+        return;
     }
+    SyncFooter();
+    RefreshUsageUi();
 }
 
 lv_obj_t* CreateUsagePage(lv_obj_t* parent) {
@@ -602,7 +367,11 @@ lv_obj_t* CreateUsagePage(lv_obj_t* parent) {
     lv_obj_t* title = MakeLabel(title_row, "GLM 用量", 30);
     lv_obj_set_width(title, LV_SIZE_CONTENT);
     lv_obj_set_flex_grow(title, 1);
-    s_ui.refresh_btn = MakeButton(title_row, "刷新", 110, OnRefreshClicked);
+    s_ui.refresh_btn = MakeButton(title_row, "刷新", 110,
+                                  [](lv_event_t* /*event*/) {
+                                      GlmUsageService::GetInstance().RequestRefresh();
+                                      SetFooter("已请求刷新");
+                                  });
 
     s_ui.plan_lbl = MakeLabel(page, "尚未更新");
 
@@ -638,8 +407,7 @@ lv_obj_t* CreateUsagePage(lv_obj_t* parent) {
     s_ui.mcp_lbl = MakeLabel(extra_card, "MCP 调用 --");
     s_ui.team_lbl = MakeLabel(extra_card, "团队重置次数 不适用");
 
-    lv_obj_t* hint = MakeLabel(page, "触摸“刷新”立即更新，应用停留时每 5 分钟自动刷新。");
-    lv_obj_set_style_text_opa(hint, LV_OPA_70, 0);
+    MakeLabel(page, "配置也可通过 MCP 工具 self.glm_usage.configure 完成。");
     return page;
 }
 
@@ -702,7 +470,6 @@ lv_obj_t* CreateConfigPage(lv_obj_t* parent) {
     DisableScroll(actions);
     lv_obj_clear_flag(actions, LV_OBJ_FLAG_CLICKABLE);
     s_ui.save_btn = MakeButton(actions, "保存并刷新", 190, OnSaveClicked);
-
     return page;
 }
 
@@ -712,7 +479,11 @@ lv_obj_t* GlmUsageScreen::Create() {
     s_ui = {};
     s_screen_alive = true;
     s_usage_tab = true;
+    s_seen_version = 0xffffffff;
     ScreenSetIsHome(false);
+
+    auto& service = GlmUsageService::GetInstance();
+    service.Start();
 
     lv_obj_t* screen = lv_obj_create(nullptr);
     s_ui.screen = screen;
@@ -774,13 +545,9 @@ lv_obj_t* GlmUsageScreen::Create() {
     LoadConfigFields();
     SwitchTab(true);
     RefreshUsageUi();
-    {
-        std::lock_guard<std::mutex> lock(s_state_mu);
-        SetFooter(s_last_ok ? "已更新" : ("查询失败：" + s_error).c_str());
-    }
-    StartFetch();
+    SyncFooter();
 
-    s_refresh_timer = lv_timer_create(OnRefreshTimer, kRefreshIntervalMs, nullptr);
+    s_status_timer = lv_timer_create(OnStatusTimer, 1000, nullptr);
     VkKey_AttachScreen(screen, kScreenId,
                        VkKeyScreenDesc{GlmUsageScreen::Create, OnVkKey});
     return screen;
