@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 #include "cJSON.h"
 
@@ -171,26 +172,14 @@ std::string GlmFormatResetMs(int64_t reset_ms) {
 
     // The quota console is aimed at China, so display resets in UTC+8 like the
     // original AI Passport application.
-    const int64_t seconds = reset_ms / 1000 + 8 * 3600;
-    const int64_t days = seconds / 86400;
-    const int64_t remainder = seconds % 86400;
-    if (days < 0) {
+    const time_t seconds = static_cast<time_t>(reset_ms / 1000 + 8 * 3600);
+    struct tm utc {};
+    if (gmtime_r(&seconds, &utc) == nullptr) {
         return "--";
     }
 
-    // Howard Hinnant's civil-from-days algorithm.
-    const int64_t z = days + 719468;
-    const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-    const int64_t doe = z - era * 146097;
-    const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    const int64_t mp = (5 * doy + 2) / 153;
-    const int64_t day = doy - (153 * mp + 2) / 5 + 1;
-    const int64_t month = mp < 10 ? mp + 3 : mp - 9;
     char text[48];
-    std::snprintf(text, sizeof(text), "%02lld-%02lld %02lld:%02lld",
-                  static_cast<long long>(month), static_cast<long long>(day),
-                  static_cast<long long>(remainder / 3600),
-                  static_cast<long long>((remainder % 3600) / 60));
+    std::snprintf(text, sizeof(text), "%02d月%02d日 %02d时%02d分",
+                  utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min);
     return text;
 }

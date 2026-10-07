@@ -36,6 +36,7 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/checklist_cache.cc"
             "services/glm_usage/glm_usage.cc"
             "services/glm_usage/glm_usage_service.cc"
+            "services/local_mcp/local_mcp_server.cc"
             "display/screen/glm_usage_screen/glm_usage_screen.cc"
             "display/screen/standby_screen/standby_screen.cc"
             "display/screen/standby_screen/standby_classic.cc"
@@ -336,7 +337,7 @@ set_source_files_properties(
 # zlib：reader/ZipReader 解压 EPUB；EbookDocument 分块 inflate .ebook
 # esp-ml307 / esp-wifi-connect：本地 vendored 组件（components/），不再走 Component Manager
 # esp_tinyusb：设置页模拟 U 盘（MSC）；仅 S3 拉取，链接 usb PHY
-target_link_libraries(${COMPONENT_LIB} PRIVATE idf::fatfs idf::sdmmc idf::esp_driver_sdmmc idf::espressif__zlib idf::esp_partition idf::espcoredump idf::esp-ml307 idf::esp-wifi-connect idf::espressif__freetype)
+target_link_libraries(${COMPONENT_LIB} PRIVATE idf::fatfs idf::sdmmc idf::esp_driver_sdmmc idf::espressif__zlib idf::esp_partition idf::espcoredump idf::esp-ml307 idf::esp-wifi-connect idf::esp_http_server idf::espressif__freetype)
 if(TARGET idf::espressif__esp_tinyusb)
     target_link_libraries(${COMPONENT_LIB} PRIVATE idf::espressif__esp_tinyusb idf::usb)
 endif()

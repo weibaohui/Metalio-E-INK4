@@ -8,6 +8,7 @@
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 #include "services/glm_usage/glm_usage_service.h"
+#include "services/local_mcp/local_mcp_server.h"
 #include "assets.h"
 #include "assistant_screen/assistant_screen.h"
 #include "a2ui_img_cache.h"
@@ -1115,6 +1116,7 @@ void Application::Start() {
     // Built-in application services register their MCP tools and resident
     // workers here; UI screens later attach to their observable state.
     GlmUsageService::GetInstance().Start();
+    LocalMcpServer::GetInstance().Start();
 
     boot_ready_.store(true, std::memory_order_release);
 
