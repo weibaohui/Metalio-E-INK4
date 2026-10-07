@@ -19,6 +19,7 @@
 #include <freertos/task.h>
 #include "fontpack_lvgl.h"
 #include "assets/lang_config.h"
+#include "wifi_station.h"
 
 namespace {
 
@@ -37,6 +38,7 @@ struct NetworkUi {
     lv_obj_t* sim_ext_btn = nullptr;
     lv_obj_t* sim_int_btn = nullptr;
     lv_obj_t* sim_cur_lbl = nullptr;
+    lv_obj_t* ip_lbl = nullptr;
     lv_obj_t* overlay = nullptr;
     lv_obj_t* overlay_msg = nullptr;
     lv_timer_t* reboot_timer = nullptr;
@@ -229,6 +231,16 @@ void SetWifiConfigSectionVisible(bool visible) {
     }
 }
 
+void UpdateIpAddressLabel(bool is_wifi) {
+    if (s_ui.ip_lbl == nullptr) {
+        return;
+    }
+    const std::string ip = is_wifi ? WifiStation::GetInstance().GetIpAddress() : "";
+    char text[32];
+    snprintf(text, sizeof(text), "IP: %s", ip.empty() ? "--" : ip.c_str());
+    lv_label_set_text(s_ui.ip_lbl, text);
+}
+
 void RefreshNetworkOptions() {
     const bool is_cell = IsCellNetwork();
     if (s_ui.wifi_btn != nullptr) {
@@ -246,6 +258,7 @@ void RefreshNetworkOptions() {
     if (is_cell) {
         RefreshSimUi();
     }
+    UpdateIpAddressLabel(!is_cell);
 }
 
 struct SwitchNetworkJob {
@@ -718,4 +731,12 @@ void SettingsNetworkTab_Build(lv_obj_t* page) {
     if (IsCellNetwork()) {
         ScheduleSimSlotQuery();
     }
+
+    // Keep the live IPv4 address visible at the bottom of the network page.
+    s_ui.ip_lbl = lv_label_create(page);
+    lv_label_set_text(s_ui.ip_lbl, "IP: --");
+    lv_obj_set_style_text_font(s_ui.ip_lbl, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(s_ui.ip_lbl, lv_color_black(), 0);
+    lv_obj_clear_flag(s_ui.ip_lbl, LV_OBJ_FLAG_CLICKABLE);
+    UpdateIpAddressLabel(!IsCellNetwork());
 }
