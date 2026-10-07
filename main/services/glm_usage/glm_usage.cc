@@ -1,4 +1,4 @@
-#include "glm_usage_screen/glm_usage.h"
+#include "services/glm_usage/glm_usage.h"
 
 #include <cstdio>
 #include <cstdlib>
