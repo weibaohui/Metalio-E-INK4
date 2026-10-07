@@ -313,6 +313,7 @@ public:
 
 class McpServer {
 public:
+    using ResponseSink = std::function<void(const std::string&)>;
     static McpServer& GetInstance() {
         static McpServer instance;
         return instance;
@@ -323,8 +324,11 @@ public:
     void AddTool(McpTool* tool);
     void AddTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
     void AddUserOnlyTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
-    void ParseMessage(const cJSON* json);
     void ParseMessage(const std::string& message);
+    void ParseMessage(const cJSON* json, const ResponseSink& response_sink);
+    // Compatibility wrapper used by protocol transports; responses go through
+    // the currently connected Xiaozhi transport.
+    void ParseMessage(const cJSON* json);
 
 private:
     McpServer();
@@ -332,11 +336,13 @@ private:
 
     void ParseCapabilities(const cJSON* capabilities);
 
-    void ReplyResult(int id, const std::string& result);
-    void ReplyError(int id, const std::string& message);
+    void ReplyResult(int id, const std::string& result, const ResponseSink& response_sink);
+    void ReplyError(int id, const std::string& message, const ResponseSink& response_sink);
 
-    void GetToolsList(int id, const std::string& cursor, bool list_user_only_tools);
-    void DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments);
+    void GetToolsList(int id, const std::string& cursor, bool list_user_only_tools,
+                      const ResponseSink& response_sink);
+    void DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments,
+                    const ResponseSink& response_sink);
 
     std::vector<McpTool*> tools_;
 };
