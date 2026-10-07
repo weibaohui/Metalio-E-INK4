@@ -5,12 +5,12 @@
 #include "assets/lang_config.h"
 #include "book_screen/book_screen.h"
 #include "cloud_screen/cloud_screen.h"
+#include "glm_usage_screen/glm_usage_screen.h"
 #include "haptic_feedback.h"
 #include "lv_adapter_display.h"
 #include "screen_common.h"
 #include "settings.h"
 #include "settings_screen/settings_screen.h"
-#include "task_screen/task_screen.h"
 #include "vk_key_handler.h"
 #include "vk_page_repeat.h"
 #include "wallpaper_screen/wallpaper_screen.h"
@@ -139,7 +139,7 @@ namespace
         lv_obj_t *(*create)();
     };
 
-    const char *AppNameTask() { return Lang::Strings::HOME_APP_TASK; }
+    const char *AppNameGlm() { return "GLM 用量"; }
     const char *AppNameAssistant() { return Lang::Strings::HOME_APP_ASSISTANT; }
     const char *AppNameBook() { return Lang::Strings::HOME_APP_BOOK; }
     const char *AppNameWallpaper() { return Lang::Strings::HOME_APP_WALLPAPER; }
@@ -147,7 +147,7 @@ namespace
     const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
 
     constexpr AppEntry kApps[] = {
-        {"A:ic_app_home_task.spng", AppNameTask, TaskScreen::Create},
+        {"A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
         {"A:ic_app_home_teacher.spng", AppNameAssistant, AssistantScreen::Create},
         {"A:ic_app_home_book.spng", AppNameBook, BookScreen::Create},
         {"A:ic_app_home_wallpaper.spng", AppNameWallpaper, WallpaperScreen::Create},
@@ -160,7 +160,7 @@ namespace
         {"A:ic_app_home_book.spng", AppNameBook, BookScreen::Create},
         {"A:ic_app_home_wallpaper.spng", AppNameWallpaper, WallpaperScreen::Create},
         {"A:ic_app_home_teacher.spng", AppNameAssistant, AssistantScreen::Create},
-        {"A:ic_app_home_task.spng", AppNameTask, TaskScreen::Create},
+        {"A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
         {"A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
         {"A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };

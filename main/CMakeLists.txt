@@ -34,6 +34,8 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/home_screen/home_screen.cc"
             "display/screen/home_screen/home_hero.cc"
             "display/screen/checklist_cache.cc"
+            "display/screen/glm_usage_screen/glm_usage.cc"
+            "display/screen/glm_usage_screen/glm_usage_screen.cc"
             "display/screen/standby_screen/standby_screen.cc"
             "display/screen/standby_screen/standby_classic.cc"
             "display/screen/standby_screen/standby_wallpaper.cc"
@@ -542,4 +544,4 @@ spiffs_create_partition_assets(
     MMAP_SUPPORT_SJPG
     MMAP_SUPPORT_SPNG
     MMAP_SPLIT_HEIGHT 16
-) 
+)
