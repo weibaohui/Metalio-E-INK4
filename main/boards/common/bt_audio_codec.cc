@@ -1,5 +1,6 @@
 #include "bt_audio_codec.h"
 
+#include <esp_err.h>
 #include <esp_log.h>
 #include <cmath>
 #include <cstring>
@@ -100,8 +101,17 @@ int BTAudioCodec::Write(const int16_t *data, int samples)
         buffer[i * 2 + 1] = processed_sample; // 右声道（复制相同的数据）
     }
 
-    size_t bytes_written;
-    ESP_ERROR_CHECK(i2s_channel_write(tx_handle_, buffer.data(), samples * 2 * sizeof(int32_t), &bytes_written, portMAX_DELAY));
+    size_t bytes_written = 0;
+    // 用有限超时而非 portMAX_DELAY:DMA 停摆时永久阻塞会一直占住 data_if_mutex_,
+    // 导致 LVGL/MCP 拿不到锁整机假死;去掉 ESP_ERROR_CHECK:任何非 OK 返回(如
+    // 通道被 disable 的 ESP_ERR_INVALID_STATE)不再 abort 整机。出错记日志并丢本块
+    // (音频毛刺),远优于重启/假死。60ms 分片喂流,1000ms 超时留足 DMA 排空余量。
+    esp_err_t err = i2s_channel_write(tx_handle_, buffer.data(), samples * 2 * sizeof(int32_t),
+                                      &bytes_written, pdMS_TO_TICKS(1000));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2s_channel_write failed: %s (samples=%d)", esp_err_to_name(err), samples);
+        return 0;
+    }
     // 返回写入的采样点数量（以单声道计算）
     return bytes_written / (2 * sizeof(int32_t));
 }

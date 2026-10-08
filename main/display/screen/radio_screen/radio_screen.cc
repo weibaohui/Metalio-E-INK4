@@ -397,18 +397,15 @@ bool OnVkKey(const char* key) {
 void OnScreenUnloaded(lv_event_t*) {
     s_alive = false;
     radio_stop();           // 先投停止请求,让流尽快结束(LVGL 线程上即可,无 flash 操作)
+    radio_player_shutdown(); // 非阻塞置退出标志,任务异步自删释放 8K PSRAM 栈。
+    // 同步置位很关键:unload 立刻置 s_quit,紧随其后的播放请求会在 radio_player_start
+    // 里等到旧任务退出再重建 —— 不会丢请求。此处不再 Schedule(本身不阻塞)。
     s_playing.clear();
     if (s_timer != nullptr) {
         lv_timer_delete(s_timer);
         s_timer = nullptr;
     }
     s_ui = {};
-    // 再真正收掉收音任务(释放 8K PSRAM 栈),不播放即不占内存。
-    // shutdown 轮询任务退出最多阻塞 3s(等重连延迟/读超时收尾),不能在 LVGL
-    // worker 上跑,故 Schedule 到 main 任务。
-    Application::GetInstance().Schedule([]() {
-        radio_player_shutdown();
-    });
 }
 
 }  // namespace
