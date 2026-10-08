@@ -603,6 +603,13 @@ void GlmUsageService::Worker() {
         }
         FetchOnce();
     }
+    // 退出前自清 worker_ 句柄,随后 vTaskDelete 自删。Stop 靠轮询 worker_==nullptr
+    // 判断已收尾 —— 不能对已自删任务调 eTaskGetState(其 TCB 可能已被 idle 任务
+    // 回收,读悬空句柄即读已释放内存,会崩)。
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        worker_ = nullptr;
+    }
     vTaskDelete(nullptr);
 }
 
@@ -782,6 +789,10 @@ void GlmUsageService::Start() {
         inited_ = true;
     }
 
+    // 清残留 kStopBit:上次 Stop 若因 worker 卡在拉取而超时,stop 位可能没被
+    // WaitBits 消费掉。不清掉会让新 worker 一启动 WaitBits 就读到 kStopBit 自杀。
+    xEventGroupClearBits(event_group_, kStopBit);
+
     auto* service = this;
     BaseType_t ok = xTaskCreatePinnedToCore(
         [](void* context) {
@@ -801,22 +812,31 @@ void GlmUsageService::Start() {
 }
 
 void GlmUsageService::Stop() {
-    // 非 LVGL 线程调用(屏幕 OnScreenUnloaded 会 Schedule 到 main 任务)。置 kStopBit
-    // 让 Worker() 退出并 vTaskDelete(nullptr) 自删;轮询 eTaskGetState==eDeleted。
-    // 若 worker 正卡在一次 FetchOnce(慢网络),最长等 3s;期间不冻结 UI(跑在 main)。
-    TaskHandle_t task = worker_;
-    if (event_group_ != nullptr && task != nullptr) {
-        xEventGroupSetBits(event_group_, kStopBit);
-        int waited = 0;
-        while (worker_ != nullptr && waited < 3000) {
-            if (eTaskGetState(task) == eDeleted) {
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(50));
-            waited += 50;
-        }
+    // 由屏幕 OnScreenUnloaded Schedule 到 main 任务(轮询会阻塞,不能跑在 LVGL worker)。
+    // 置 kStopBit 让 Worker() 退出;Worker 退出前自清 worker_,故这里轮询 worker_
+    // 成员判断收尾 —— 绝不 eTaskGetState 悬空句柄(自删任务的 TCB 可能已被 idle 回收)。
+    {
         std::lock_guard<std::mutex> lock(mutex_);
-        worker_ = nullptr;   // 自删后句柄成 zombie,置空供下次 Start 重建
+        if (event_group_ == nullptr || worker_ == nullptr) {
+            return;
+        }
+        xEventGroupSetBits(event_group_, kStopBit);
+    }
+    int waited = 0;
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (worker_ == nullptr) break;   // worker 已退出并自清句柄
+        }
+        if (waited >= 3000) {
+            // 病态:worker 卡在一次慢拉取里。此处不置空 worker_ —— 留着它,Start 看到
+            // worker_!=nullptr 便幂等返回,不会重复建任务;等旧 worker 的网络调用超时
+            // 返回后,它会读 kStopBit 自行退出并自清 worker_。
+            ESP_LOGW(TAG, "stop: worker 3s 未退出(可能在慢网络拉取中),待其自行收尾");
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+        waited += 50;
     }
     ESP_LOGI(TAG, "stopped: worker 已退出,16K 任务栈已释放");
 }
