@@ -39,7 +39,6 @@
 #define HOME_APP_CARD_NAME_PAD_BOT 10 // 卡片内名称距卡片底部 (px)，水平居中
 #define HOME_APP_CARD_BORDER_W 4      // 描边样式时黑色描边宽度 (px)
 #define HOME_PAGE_INDICATOR_H 36      // 多页时底部页码高度 (px)
-#define HOME_APPS_VISIBLE_ROWS 2      // 贴底宫格按两行算高（当前 6 app）
 #define HOME_SLASH_ROWS 3             // 斜切主题：3 行 × 2 列
 #define HOME_SLASH_SIDE_PAD 16        // 宫格左右边距（防右卡图标贴屏边）
 #define HOME_SLASH_ROW_GAP 10         // 行间距；左右斜边平行缝同此宽度
@@ -747,9 +746,13 @@ lv_obj_t *HomeScreen::Create()
     home_hero::Start();
 
     const int indicator_h = pages > 1 ? HOME_PAGE_INDICATOR_H : 0;
+    // 行数按实际 app 数自动算(kColsPerRow=3):新增第 7 个 app 时容器若仍按
+    // 两行算高,第三行整行落在容器外且不可滚动 —— 表现为"只有 6 个图标"。
+    const int apps_rows =
+        (kTotalApps + kColsPerRow - 1) / kColsPerRow;
     const lv_coord_t apps_content_h =
-        HOME_APPS_PAD_TOP + HOME_APPS_VISIBLE_ROWS * HOME_APP_CARD_H +
-        (HOME_APPS_VISIBLE_ROWS > 1 ? (HOME_APPS_VISIBLE_ROWS - 1) * HOME_APP_CARD_GAP_ROW : 0) +
+        HOME_APPS_PAD_TOP + apps_rows * HOME_APP_CARD_H +
+        (apps_rows > 1 ? (apps_rows - 1) * HOME_APP_CARD_GAP_ROW : 0) +
         HOME_APPS_PAD_BOT;
     const lv_coord_t apps_bottom_inset =
         HOME_APPS_LIFT + (indicator_h > 0 ? indicator_h : 0);
