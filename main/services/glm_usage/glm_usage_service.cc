@@ -750,6 +750,21 @@ void GlmUsageService::SignalWorker() {
     }
 }
 
+void GlmUsageService::Init() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (inited_) {
+        return;
+    }
+    if (event_group_ == nullptr) {
+        event_group_ = xEventGroupCreate();
+    }
+    LoadPersisted();
+    RegisterMcpTools();
+    inited_ = true;
+    ESP_LOGI(TAG, "inited: configured=%d contexts=%u (worker 未启动,不占 16K)",
+             status_.configured, static_cast<unsigned>(status_.context_count));
+}
+
 void GlmUsageService::Start() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (event_group_ == nullptr) {
@@ -759,8 +774,13 @@ void GlmUsageService::Start() {
         return;
     }
 
-    LoadPersisted();
-    RegisterMcpTools();
+    // 工具注册与持久化载入在 boot 期 Init() 完成;此处幂等兜底(屏幕先于 boot
+    // 跑到的情况)。Init() 含 NVS 读,但 inited_ 守卫使其只执行一次。
+    if (!inited_) {
+        LoadPersisted();
+        RegisterMcpTools();
+        inited_ = true;
+    }
 
     auto* service = this;
     BaseType_t ok = xTaskCreatePinnedToCore(
@@ -778,4 +798,25 @@ void GlmUsageService::Start() {
     if (config_.HasKey()) {
         xEventGroupSetBits(event_group_, kRefreshBit);
     }
+}
+
+void GlmUsageService::Stop() {
+    // 非 LVGL 线程调用(屏幕 OnScreenUnloaded 会 Schedule 到 main 任务)。置 kStopBit
+    // 让 Worker() 退出并 vTaskDelete(nullptr) 自删;轮询 eTaskGetState==eDeleted。
+    // 若 worker 正卡在一次 FetchOnce(慢网络),最长等 3s;期间不冻结 UI(跑在 main)。
+    TaskHandle_t task = worker_;
+    if (event_group_ != nullptr && task != nullptr) {
+        xEventGroupSetBits(event_group_, kStopBit);
+        int waited = 0;
+        while (worker_ != nullptr && waited < 3000) {
+            if (eTaskGetState(task) == eDeleted) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
+            waited += 50;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        worker_ = nullptr;   // 自删后句柄成 zombie,置空供下次 Start 重建
+    }
+    ESP_LOGI(TAG, "stopped: worker 已退出,16K 任务栈已释放");
 }

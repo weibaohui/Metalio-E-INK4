@@ -56,7 +56,12 @@ class GlmUsageService {
 public:
     static GlmUsageService& GetInstance();
 
+    // boot 期一次性:创建 event group、载入持久化、注册 MCP 工具。不跑 worker,
+    // 故不占 16K 任务内存;MCP self.glm_usage.* 在屏幕未开时仍可返回缓存快照。
+    void Init();
+    // 启动 16K 常驻 worker(进入 GLM 用量屏时调);Stop 配对释放(离屏时调)。
     void Start();
+    void Stop();
 
     GlmUsageConfig GetConfig();
     std::vector<GlmUsageContext> GetContexts();
@@ -95,4 +100,5 @@ private:
 
     EventGroupHandle_t event_group_ = nullptr;
     TaskHandle_t worker_ = nullptr;
+    bool inited_ = false;   // Init() 已执行(注册工具+载入持久化),幂等
 };
