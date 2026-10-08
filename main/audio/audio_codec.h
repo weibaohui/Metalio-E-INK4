@@ -8,6 +8,7 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <atomic>
 
 #include "board.h"
 
@@ -53,6 +54,8 @@ protected:
     int input_channels_ = 1;
     int output_channels_ = 1;
     int output_volume_ = 5;   // 默认音量 5%(用户要求:原 70% 偏吵)
+    // 音量落盘去抖标志:SetOutputVolume 把 NVS 写合并成一次并投递到 main 任务
+    std::atomic<bool> volume_persist_scheduled_{false};
     float input_gain_ = 0.0;
 
     virtual int Read(int16_t* dest, int samples) = 0;

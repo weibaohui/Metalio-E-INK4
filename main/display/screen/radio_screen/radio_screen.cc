@@ -334,7 +334,14 @@ lv_obj_t* MakeRow(lv_obj_t* parent, lv_coord_t height) {
 }
 
 void SyncStateLabels() {
-    if (!s_alive || s_ui.station_lbl == nullptr) return;
+    // 全量判空:任一 label 缺失就整体跳过,绝不把 NULL 喂给 lv_label_set_text
+    // (NULL 会以垃圾坐标触发无限重绘,整机假死 —— 见 Create 里的注释)
+    if (!s_alive || s_ui.station_lbl == nullptr || s_ui.title_lbl == nullptr ||
+        s_ui.state_lbl == nullptr || s_ui.play_btn_lbl == nullptr ||
+        s_ui.fav_btn_lbl == nullptr || s_ui.page_lbl == nullptr ||
+        s_ui.scope_btn_lbl == nullptr) {
+        return;
+    }
     radio_player_snap_t snap;
     radio_player_snapshot(&snap);
     if (snap.station[0] != '\0') {
@@ -465,28 +472,27 @@ lv_obj_t* RadioScreen::Create() {
     constexpr lv_coord_t kBtnW3 = 136;
     lv_obj_t* row1 = MakeRow(body, kButtonH);
     MakeButton(row1, "上一台", kBtnW3, OnPrevNextClicked, (void*)0);
-    s_ui.play_btn_lbl = lv_obj_get_child(
-        MakeButton(row1, "播放", kBtnW3, OnPlayStopClicked, nullptr), 0);
+    // MakeButton 返回的就是 label 本身,不能再 get_child(0)(label 无子对象,
+    // 返回 NULL → 后续 lv_label_set_text(NULL) 把垃圾坐标喂进渲染器,收音机页
+    // 一打开就陷入无限重绘,整机假死 —— 实测 OpenOCD 采样定位)。
+    s_ui.play_btn_lbl = MakeButton(row1, "播放", kBtnW3, OnPlayStopClicked, nullptr);
     MakeButton(row1, "下一台", kBtnW3, OnPrevNextClicked, (void*)1);
 
     // 随机/收藏/音量行
     constexpr lv_coord_t kBtnW4 = 100;
     lv_obj_t* row2 = MakeRow(body, kButtonH);
     MakeButton(row2, "随机", kBtnW4, OnRandomClicked, nullptr);
-    s_ui.fav_btn_lbl = lv_obj_get_child(
-        MakeButton(row2, "\xE2\x98\x86 收藏", kBtnW4, OnFavClicked, nullptr), 0);
+    s_ui.fav_btn_lbl = MakeButton(row2, "\xE2\x98\x86 收藏", kBtnW4, OnFavClicked, nullptr);
     MakeButton(row2, "音量-", kBtnW4, OnVolumeClicked, (void*)0);
     MakeButton(row2, "音量+", kBtnW4, OnVolumeClicked, (void*)1);
 
     // 列表头:翻页 + 范围切换
     lv_obj_t* row3 = MakeRow(body, kButtonH);
     MakeButton(row3, "<", 90, OnPageClicked, (void*)0);
-    s_ui.page_lbl = lv_obj_get_child(
-        MakeButton(row3, "1/1", 90,
-                   [](lv_event_t*) {}, nullptr), 0);
+    s_ui.page_lbl = MakeButton(row3, "1/1", 90,
+                               [](lv_event_t*) {}, nullptr);
     MakeButton(row3, ">", 90, OnPageClicked, (void*)1);
-    s_ui.scope_btn_lbl = lv_obj_get_child(
-        MakeButton(row3, "全部", 110, OnScopeClicked, nullptr), 0);
+    s_ui.scope_btn_lbl = MakeButton(row3, "全部", 110, OnScopeClicked, nullptr);
 
     // 电台列表(6 行整页重画,不滚动)
     s_ui.list = lv_obj_create(body);

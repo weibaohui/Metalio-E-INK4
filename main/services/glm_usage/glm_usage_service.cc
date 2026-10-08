@@ -781,12 +781,12 @@ void GlmUsageService::Start() {
         return;
     }
 
-    // 工具注册与持久化载入在 boot 期 Init() 完成;此处幂等兜底(屏幕先于 boot
-    // 跑到的情况)。Init() 含 NVS 读,但 inited_ 守卫使其只执行一次。
+    // 工具注册与持久化载入在 boot 期 Init()(main 任务,内部栈)完成。此处
+    // 绝不做 NVS:Start 由 GLM 用量屏在 LVGL worker(PSRAM 栈)上直调,flash
+    // 读会关 cache 触发断言崩机。正常时序 Init 一定先于任何屏幕,走不到这里。
     if (!inited_) {
-        LoadPersisted();
-        RegisterMcpTools();
-        inited_ = true;
+        ESP_LOGW(TAG, "start before init (unexpected order); skip NVS on LVGL stack");
+        return;
     }
 
     // 清残留 kStopBit:上次 Stop 若因 worker 卡在拉取而超时,stop 位可能没被

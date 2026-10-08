@@ -104,6 +104,7 @@ void AudioService::Start() {
         opus_encoder_ = std::make_unique<OpusEncoderWrapper>(16000, 1, OPUS_FRAME_DURATION_MS);
         opus_encoder_->SetComplexity(0);
     }
+    opus_task_exited_.store(false);
 
     esp_timer_start_periodic(audio_power_timer_, 1000000);
 
@@ -261,9 +262,23 @@ void AudioService::Stop() {
         opus_codec_tcb_ = nullptr;
     }
 
-    // opus 编解码器随管线释放(任务已于上方 vTaskDelay 等待自删后退出,无并发访问)。
-    opus_decoder_.reset();
-    opus_encoder_.reset();
+    // 释放 opus 对象前必须等 OpusCodecTask 越过最后一次访问(它可能在解码
+    // 一帧的中途收到 Stop):上方的 50ms vTaskDelay 只是软等待,不构成同步点。
+    {
+        int waited = 0;
+        while (!opus_task_exited_.load() && waited < 2000) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            waited += 20;
+        }
+    }
+    if (opus_task_exited_.load()) {
+        opus_decoder_.reset();
+        opus_encoder_.reset();
+    } else {
+        // 病态:任务 2s 未退出。留着对象不释放,下次 Start 复用(!opus_decoder_
+        // 分支),宁可暂不还内存也不能释放正在使用的对象(use-after-free)。
+        ESP_LOGW(TAG, "opus task not exited in 2s, keep wrappers alive");
+    }
 }
 
 bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {
@@ -507,6 +522,8 @@ void AudioService::OpusCodecTask() {
         }
     }
 
+    // 越过此点后任务不再触碰 opus_decoder_/encoder_:Stop 据此判断可以安全释放
+    opus_task_exited_.store(true);
     ESP_LOGW(TAG, "Opus codec task stopped");
 }
 
