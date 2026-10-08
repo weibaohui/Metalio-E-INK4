@@ -103,6 +103,14 @@ public:
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
     void PlaySound(const std::string_view& sound);
+    /**
+     * 外部长期占用音频输出的任务(如收音机直写 codec)必须周期性调用:
+     * 声明"输出仍在用"并续上电源计时器。否则 CheckAndUpdateAudioPowerState
+     * 会在 AUDIO_POWER_TIMEOUT_MS 后 EnableOutput(false),使正在阻塞的
+     * i2s_channel_write 永不返回 -> 永久占住 codec 锁 -> 界面一起死。
+     * 未启动 audio_service 时是 no-op。
+     */
+    void KeepOutputAlive();
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
     /**

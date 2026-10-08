@@ -8,6 +8,7 @@
 #include "glm_usage_screen/glm_usage_screen.h"
 #include "haptic_feedback.h"
 #include "lv_adapter_display.h"
+#include "radio_screen/radio_screen.h"
 #include "screen_common.h"
 #include "settings.h"
 #include "settings_screen/settings_screen.h"
@@ -140,6 +141,7 @@ namespace
     };
 
     const char *AppNameGlm() { return "GLM 用量"; }
+    const char *AppNameRadio() { return "收音机"; }
     const char *AppNameAssistant() { return Lang::Strings::HOME_APP_ASSISTANT; }
     const char *AppNameBook() { return Lang::Strings::HOME_APP_BOOK; }
     const char *AppNameWallpaper() { return Lang::Strings::HOME_APP_WALLPAPER; }
@@ -152,6 +154,7 @@ namespace
         {"A:ic_app_home_book.spng", AppNameBook, BookScreen::Create},
         {"A:ic_app_home_wallpaper.spng", AppNameWallpaper, WallpaperScreen::Create},
         {"A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
+        {"A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
         {"A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
@@ -162,6 +165,7 @@ namespace
         {"A:ic_app_home_teacher.spng", AppNameAssistant, AssistantScreen::Create},
         {"A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
         {"A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
+        {"A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
         {"A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 

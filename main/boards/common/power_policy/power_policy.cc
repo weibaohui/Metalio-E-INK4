@@ -114,7 +114,8 @@ bool DeviceWantsPa(DeviceState st)
 
 bool NeedsHardNetActiveLocked()
 {
-    if (NeedHeld(PowerNeed::LocalMic) || NeedHeld(PowerNeed::OtaDownload)) {
+    if (NeedHeld(PowerNeed::LocalMic) || NeedHeld(PowerNeed::OtaDownload) ||
+        NeedHeld(PowerNeed::RadioPlayback)) {
         return true;
     }
     return DeviceWantsPerf(pwr::device_state);
@@ -693,7 +694,8 @@ void PowerPolicy::Acquire(PowerNeed need)
     }
     xSemaphoreTake(pwr::mu, portMAX_DELAY);
     if (need == PowerNeed::PhoneCall || need == PowerNeed::BtAudio || need == PowerNeed::AudioSession ||
-        need == PowerNeed::LocalMic || need == PowerNeed::OtaDownload || need == PowerNeed::UiKeepNet) {
+        need == PowerNeed::LocalMic || need == PowerNeed::OtaDownload || need == PowerNeed::UiKeepNet ||
+        need == PowerNeed::RadioPlayback) {
         pwr::ClearNetGraceLocked();
     }
     uint8_t& ref = pwr::need_ref[static_cast<int>(need)];

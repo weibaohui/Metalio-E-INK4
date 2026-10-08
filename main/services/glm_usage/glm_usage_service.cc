@@ -7,6 +7,8 @@
 #include <vector>
 
 #include <esp_log.h>
+
+#include "application.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
@@ -273,6 +275,19 @@ std::vector<GlmUsageContext> ContextsFromJson(const std::string& json) {
 }
 
 }  // namespace
+
+namespace {
+
+// GLM worker 任务栈 16KB,被 IDF 静默放到 PSRAM(CONFIG_SPIRAM_ALLOW_STACK_
+// EXTERNAL_MEMORY)。PSRAM 栈任务做 NVS 写 = flash 写关 cache = 断言崩机
+// (实测:每次周期刷新随机崩,表现为"点任何东西都可能死机 20s")。
+// 所有 NVS 写统一投递到 main 任务(12KB 内部 RAM 栈,语音页同款安全路径)。
+void PersistOnMainTask(std::function<void()> write) {
+    Application::GetInstance().Schedule([write]() { write(); });
+}
+
+}  // namespace
+
 
 GlmUsageService& GlmUsageService::GetInstance() {
     static GlmUsageService instance;
@@ -690,13 +705,18 @@ void GlmUsageService::PersistContexts() {
 
     cJSON* root = ContextsToJson(contexts);
     char* printed = root == nullptr ? nullptr : cJSON_PrintUnformatted(root);
-    Settings settings("glm", true);
-    if (printed != nullptr) {
-        settings.SetString("contexts_json", printed);
-    }
-    settings.SetInt("active_context", static_cast<int32_t>(active));
-    settings.EraseKey("org_id");
-    settings.EraseKey("project_id");
+    // NVS 写必须离开本任务(PSRAM 栈),见 PersistOnMainTask 注释。
+    const std::string contexts_json = printed != nullptr ? printed : "";
+    const int32_t active_saved = static_cast<int32_t>(active);
+    PersistOnMainTask([contexts_json, active_saved]() {
+        Settings settings("glm", true);
+        if (!contexts_json.empty()) {
+            settings.SetString("contexts_json", contexts_json);
+        }
+        settings.SetInt("active_context", active_saved);
+        settings.EraseKey("org_id");
+        settings.EraseKey("project_id");
+    });
     if (printed != nullptr) {
         cJSON_free(printed);
     }
@@ -718,8 +738,10 @@ void GlmUsageService::LoadPersisted() {
 }
 
 void GlmUsageService::SaveApiKey(const std::string& api_key) {
-    Settings settings("glm", true);
-    settings.SetString("api_key", api_key);
+    PersistOnMainTask([api_key]() {
+        Settings settings("glm", true);
+        settings.SetString("api_key", api_key);
+    });
 }
 
 void GlmUsageService::SignalWorker() {

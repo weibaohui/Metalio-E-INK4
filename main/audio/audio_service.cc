@@ -797,6 +797,20 @@ void AudioService::CheckAndUpdateAudioPowerState() {
     }
 }
 
+void AudioService::KeepOutputAlive() {
+    if (service_stopped_ || codec_ == nullptr) {
+        return;
+    }
+    // 只更新时间戳与使能位。这里由收音任务以 ~16 次/秒调用,绝不能每次去
+    // stop/start_periodic 音频电源计时器:那会和计时器自身的回调在 esp_timer
+    // 任务上抢同一句柄,实测把 esp_timer/HTTP 栈整个卡死(串口监控还在打,
+    // 但网络与 MCP 全无响应)。计时器常驻周期运行,由它自己按时间戳判断即可。
+    last_output_time_ = std::chrono::steady_clock::now();
+    if (!codec_->output_enabled()) {
+        codec_->EnableOutput(true);
+    }
+}
+
 void AudioService::SetModelsList(srmodel_list_t* models_list) {
     // 仅供 AFE/语音处理；本产品不建唤醒词对象，避免 audio_detection 等常驻任务
     models_list_ = models_list;

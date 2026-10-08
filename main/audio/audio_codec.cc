@@ -27,8 +27,15 @@ bool AudioCodec::InputData(std::vector<int16_t>& data) {
 }
 
 void AudioCodec::Start() {
+    {
+        // 释放旧键条目(音量默认 70→5 改键 v2,旧键不再使用;NVS 16KB 很紧,
+        // 曾因空间不足让音量键一次写入 abort 整机)
+        Settings legacy("audio", true);
+        legacy.EraseKey("output_volume");
+    }
     Settings settings("audio", false);
-    output_volume_ = settings.GetInt("output_volume", output_volume_);
+    // 键名 v2:出厂默认从 70 改 5,换键让旧设备里存着的 70 不再盖掉新默认
+    output_volume_ = settings.GetInt("output_volume_v2", output_volume_);
     if (output_volume_ <= 0) {
         ESP_LOGW(TAG, "Output volume value (%d) is too small, setting to default (10)", output_volume_);
         output_volume_ = 10;
@@ -52,7 +59,7 @@ void AudioCodec::SetOutputVolume(int volume) {
     ESP_LOGI(TAG, "Set output volume to %d", output_volume_);
     
     Settings settings("audio", true);
-    settings.SetInt("output_volume", output_volume_);
+    settings.SetInt("output_volume_v2", output_volume_);
 }
 
 void AudioCodec::SetInputGain(float gain) {
