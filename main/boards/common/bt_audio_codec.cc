@@ -66,8 +66,12 @@ BTAudioCodecDuplex::BTAudioCodecDuplex(int input_sample_rate, int output_sample_
 int BTAudioCodec::Write(const int16_t *data, int samples)
 {
     std::lock_guard<std::mutex> lock(data_if_mutex_);
-    // 双声道：每个采样点需要输出左右两个声道的数据
-    std::vector<int32_t> buffer(samples * 2);
+    // 双声道：每个采样点需要输出左右两个声道的数据。
+    // 复用成员缓冲(容量只增不减),杜绝每次调用 8KB 内部堆的分配/释放抖动。
+    if (static_cast<int>(tx_buffer_.size()) < samples * 2) {
+        tx_buffer_.resize(samples * 2);
+    }
+    std::vector<int32_t>& buffer = tx_buffer_;
 
     // output_volume_: 0-100
     // volume_factor_: 0-65536

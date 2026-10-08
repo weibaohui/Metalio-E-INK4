@@ -6,7 +6,11 @@
 #include <vector>
 
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
+#include "board.h"
+#include "display.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "screen_common.h"
@@ -277,6 +281,37 @@ void OnScreenUnloaded(lv_event_t* /*event*/) {
     s_rendered_context_count = 0;
 }
 
+// 进页自动连网（与百问同机制）：开机保网期错过会让 STA Pause 停扫，
+// 这里在后台任务里切片 EnsureNetworkReady 拉起重连，成功后立即刷新一次。
+// 离页即停，不占主循环。
+void GlmNetworkWaitTask(void* /*arg*/) {
+    auto& board = Board::GetInstance();
+    constexpr int kSliceMs = 200;
+    constexpr int kBudgetMs = 30000;
+    for (int elapsed = 0; elapsed < kBudgetMs && s_screen_alive; elapsed += kSliceMs) {
+        if (board.IsNetworkReady()) {
+            if (auto* display = board.GetDisplay()) {
+                display->UpdateStatusBar(true);
+            }
+            GlmUsageService::GetInstance().RequestRefresh();
+            vTaskDelete(nullptr);
+            return;
+        }
+        (void)board.EnsureNetworkReady(kSliceMs);
+    }
+    vTaskDelete(nullptr);
+}
+
+void StartNetworkWaitIfNeeded() {
+    auto& board = Board::GetInstance();
+    if (board.IsNetworkReady() || board.IsWifiConfigMode()) {
+        return;
+    }
+    if (xTaskCreate(GlmNetworkWaitTask, "glm_netwait", 4096, nullptr, 4, nullptr) != pdPASS) {
+        ESP_LOGE(TAG, "xTaskCreate(glm_netwait) failed");
+    }
+}
+
 void OnStatusTimer(lv_timer_t* /*timer*/) {
     if (!s_screen_alive) {
         return;
@@ -419,6 +454,7 @@ lv_obj_t* GlmUsageScreen::Create() {
 
     RefreshUsageUi();
     SyncFooter();
+    StartNetworkWaitIfNeeded();
     s_status_timer = lv_timer_create(OnStatusTimer, 1000, nullptr);
     VkKey_AttachScreen(screen, kScreenId,
                        VkKeyScreenDesc{GlmUsageScreen::Create, OnVkKey});

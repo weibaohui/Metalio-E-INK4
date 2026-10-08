@@ -8,6 +8,7 @@
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 #include "services/glm_usage/glm_usage_service.h"
+#include "services/radio/radio_mcp.h"
 #include "services/local_mcp/local_mcp_server.h"
 #include "assets.h"
 #include "assistant_screen/assistant_screen.h"
@@ -1113,6 +1114,7 @@ void Application::Start() {
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddCommonTools();
     mcp_server.AddUserOnlyTools();
+    RadioRegisterMcpTools();
     // Built-in application services register their MCP tools and resident
     // workers here; UI screens later attach to their observable state.
     GlmUsageService::GetInstance().Start();

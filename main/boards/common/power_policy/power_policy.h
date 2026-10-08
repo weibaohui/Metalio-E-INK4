@@ -27,6 +27,7 @@ enum class PowerNeed : uint8_t {
     BtAudio,       // BT 通话/音频：满功率 + PA
     AudioSession,  // 百问云端通道：待命 NetActive；播报靠 DeviceState 开 PA
     LocalMic,      // 本地录音/实时翻译采麦：硬占网，不驱动 PA
+    RadioPlayback, // 收音机播放：硬占网 + 不计无操作进待机（后台长时间放音必须保网）
     OtaDownload,   // OTA/短时 HTTP/云同步：硬占网；持有期间不计无操作进待机
     UiKeepNet,     // 翻译页保网满频；本页不参与 PA_en
     UsbVirtualDisk, // 虚拟 U 盘启用：不计无操作进待机（不硬占网）
