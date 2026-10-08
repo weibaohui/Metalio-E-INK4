@@ -573,9 +573,12 @@ void ApplyLocked(Mode next)
             }
         }
         // 档位未变时仍按 DeviceState 刷 PA：Idle↔Speaking 等常停在 NetActive
+        // RadioPlayback（收音机直写 codec，不进语音状态机）持有时也拉 PA，
+        // 否则流在解码、I2S 在走、功放却是关的 —— 表现为"播放正常但没声音"
         const bool want_pa =
             !NeedHeld(PowerNeed::UiKeepNet) &&
-            ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)));
+            ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)) ||
+             NeedHeld(PowerNeed::RadioPlayback));
         if (!NeedHeld(PowerNeed::UiKeepNet)) {
             power_hw_pa_set(want_pa);
         }
@@ -605,9 +608,11 @@ void ApplyLocked(Mode next)
     }
 
     const int want_mhz = (next == Mode::AppIdle) ? idle_cpu_mhz : CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
+    // RadioPlayback 持有时拉 PA（收音机不进语音状态机，见上一处注释）
     const bool want_pa =
         !NeedHeld(PowerNeed::UiKeepNet) &&
-        ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)));
+        ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)) ||
+         NeedHeld(PowerNeed::RadioPlayback));
     // 待机须 Overlay 已起来再停网（电源键短按就是先 Show 再 Reevaluate）
     const bool want_wifi_off =
         (next == Mode::AppIdle) ||
