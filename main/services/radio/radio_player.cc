@@ -492,22 +492,24 @@ void RadioTask(void*) {
         }
         NetHold(true);        // 播放:硬占网。否则无交互 ~90s 后电源策略进待机
                               // 并停掉 WiFi(state: run -> init),直播流随之断掉
-        // 设备设计是"进百问语音页才初始化音频"(voice/audio deferred until
-        // Xiaozhi screen)。若跳过它直接写 codec,i2s TX 通道从未使能,第一次
-        // i2s_channel_write 就永久阻塞(实测 4KB 后流冻结)。播放前必须走这个
-        // 幂等入口:它完成 codec_->Start()/i2s 使能与语音管线初始化。
+        // 收音机只需 i2s 输出,不需要整条语音管线(唤醒词/AFE/opus/采麦任务)。
+        // 走"只开输出"路径:停掉可能正跑的语音管线(释放 AFE+opus+任务,但不动
+        // i2s —— AudioService::Stop 不调 i2s_channel_disable),再幂等 codec->Start()
+        // 保证 i2s TX 使能即可。不再调 EnsureAudioServiceRunning(那会把整条管线
+        // 拉起来白白占内存,且与 TLS 抢内部 RAM)。
+        // NVS/flash 操作必须走 main 任务内部栈(PSRAM 栈上做即 cache 断言崩机)。
         if (!s_audio_ensured.load()) {
-            // 关键约束:初始化里含 NVS 写(flash 写会关 cache),绝不能在 PSRAM 栈的
-            // 任务上执行(实测断言崩溃);也不能在收音任务自己的 8KB PSRAM 栈上
-            // 调(语音管线初始化深度 ~10KB,实测栈溢出)。唯一安全出路:投递到
-            // main 任务 —— 12KB 内部 RAM 栈,正是语音页的既有执行路径。
-            ESP_LOGI(TAG, "初始化音频服务(首次播放,投递到 main 任务)...");
+            ESP_LOGI(TAG, "使能 i2s 输出(首次播放,投递到 main 任务)...");
             s_audio_boot_done.store(false);
             Application::GetInstance().Schedule([]() {
-                Application::GetInstance().EnsureAudioServiceRunning();
+                // 若语音管线在跑(用户刚用过语音页),先停掉释放内存。
+                // StopAudioServiceIfRunning 内部 Deinitialize AFE 也在 main 栈执行,flash 安全。
+                Application::GetInstance().StopAudioServiceIfRunning();
+                // 幂等使能 i2s(AudioCodec::Start 已加 started_ 守卫,二次调不 abort)。
+                Board::GetInstance().GetAudioCodec()->Start();
                 // WiFi 退出省电:PS 模式突发收包被压到几 KB/s,直播流必断。
-                // esp_wifi_* 会读 flash 的 PHY 数据,必须在 main 任务(内部栈)
-                // 执行;设置一次全局生效,无需每次开流重复。
+                // esp_wifi_* 会读 flash 的 PHY 数据,必须在 main 任务(内部栈)执行;
+                // 设置一次全局生效,无需每次开流重复。
                 esp_wifi_set_ps(WIFI_PS_NONE);
                 s_audio_boot_done.store(true);
             });
@@ -517,13 +519,13 @@ void RadioTask(void*) {
                 waited += 100;
             }
             if (!s_audio_boot_done.load()) {
-                ESP_LOGW(TAG, "音频服务初始化未完成,本轮跳过");
+                ESP_LOGW(TAG, "i2s 使能未完成,本轮跳过");
                 SetSnapState(RADIO_ERROR, "音频初始化超时");
                 vTaskDelay(pdMS_TO_TICKS(500));
                 continue;
             }
             s_audio_ensured.store(true);
-            ESP_LOGI(TAG, "音频服务就绪");
+            ESP_LOGI(TAG, "i2s 输出就绪");
         }
         // 台名/下标已在 radio_play_indexed() 里同步发布,这里不再覆盖:
         // 否则任务处理"旧"请求时会把界面刚显示的新台名改回旧的。
@@ -535,8 +537,13 @@ void RadioTask(void*) {
             vTaskDelay(pdMS_TO_TICKS(2000));
             {
                 std::lock_guard<std::mutex> lock(s_req_mutex);
-                s_pending = req;          // 同代际重投:不会误伤新请求
-                s_pending_valid = true;
+                // 2s 等待期间用户可能已切台(s_pending_valid=true)。若无条件覆盖,
+                // 新请求被吞、又跳回已断流的旧台 —— 表现为"切台没反应"。
+                // 仅在没有更新请求时才重投旧台。
+                if (!s_pending_valid) {
+                    s_pending = req;          // 同代际重投
+                    s_pending_valid = true;
+                }
             }
             continue;
         }
@@ -552,13 +559,33 @@ void RadioTask(void*) {
         }
     }
     s_task = nullptr;
-    vTaskDelete(nullptr);
+    // 任务由 xTaskCreateWithCaps(PSRAM 栈)创建,必须用 vTaskDeleteWithCaps 配对释放,
+    // 否则 PSRAM 栈释放路径错误。(此前 s_quit 恒为 false、此分支不可达,是潜伏死代码;
+    // 现 shutdown 使其可达,故须配对。)
+    vTaskDeleteWithCaps(nullptr);
 }
 
 }  // namespace
 
 extern "C" int radio_player_start(void) {
-    if (s_task != nullptr) return 0;
+    // 若上一个任务正被 shutdown(s_quit=true)但尚未自删,先等它退出再重建。
+    // 否则会"看到旧任务还在就 return 0、结果旧任务随即因 s_quit 退出、新播放
+    // 请求没人执行"。不持 s_req_mutex 等待 —— 任务循环每轮都短暂持锁自检,
+    // 持锁等会死锁。
+    if (s_task != nullptr && s_quit.load()) {
+        ESP_LOGI(TAG, "start: 上一个收音任务正在退出,等待其收尾...");
+        int waited = 0;
+        while (s_task != nullptr && waited < 3000) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            waited += 50;
+        }
+        if (s_task != nullptr) {
+            ESP_LOGE(TAG, "start: 旧任务 3s 未退出(可能卡在 i2s 写),放弃本次重建");
+            return -1;
+        }
+        s_quit.store(false);
+    }
+    if (s_task != nullptr) return 0;   // 正常在跑:幂等,新请求会经 s_pending 被它拾取
     // 解码器注册是全局一次性动作，放在任务创建前(启动路径)完成
     if (!s_decoders_registered) {
         if (esp_audio_dec_register_default() != ESP_AUDIO_ERR_OK ||
@@ -612,6 +639,19 @@ extern "C" void radio_stop(void) {
     s_pending.stop = true;
     s_pending.seq = ++s_gen;
     s_pending_valid = true;
+}
+
+extern "C" void radio_player_shutdown(void) {
+    // 非阻塞:只置退出标志(可在 LVGL worker 上直调)。任务的读循环与外层循环
+    // 检测到 s_quit 即自行退出并 vTaskDelete 自删,释放 8K PSRAM 栈。
+    // 最坏等待 ≈ 重连 vTaskDelay(2s) 或读超时 1s;期间任务仍活着(s_task!=nullptr)。
+    // 同步置位(而非异步调度)很关键:这样 unload 后立刻置 s_quit,紧随其后的播放
+    // 请求在 radio_player_start 里会看到 dying 任务并等其退出后重建 —— 不会丢请求。
+    // s_quit 不复位:留在 true 也无妨,radio_player_start 重建时会复位(并先等旧任务死)。
+    if (s_task != nullptr) {
+        s_quit.store(true);
+        ESP_LOGI(TAG, "shutdown: 已置退出标志,收音任务将自行退出并释放 8K 栈");
+    }
 }
 
 extern "C" void radio_set_volume(int percent) {

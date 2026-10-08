@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <mutex>
+#include <atomic>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -129,6 +130,9 @@ private:
     std::unique_ptr<AudioDebugger> audio_debugger_;
     std::unique_ptr<OpusEncoderWrapper> opus_encoder_;
     std::unique_ptr<OpusDecoderWrapper> opus_decoder_;
+    // OpusCodecTask 已越过最后一次 opus 对象访问(循环退出,即将自删):
+    // Stop 等 this 为 true 后才允许 reset opus 对象,消除 use-after-free 竞态
+    std::atomic<bool> opus_task_exited_{false};
     OpusResampler input_resampler_;
     OpusResampler reference_resampler_;
     OpusResampler output_resampler_;

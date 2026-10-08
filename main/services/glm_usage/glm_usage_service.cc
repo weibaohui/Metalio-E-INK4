@@ -603,6 +603,13 @@ void GlmUsageService::Worker() {
         }
         FetchOnce();
     }
+    // 退出前自清 worker_ 句柄,随后 vTaskDelete 自删。Stop 靠轮询 worker_==nullptr
+    // 判断已收尾 —— 不能对已自删任务调 eTaskGetState(其 TCB 可能已被 idle 任务
+    // 回收,读悬空句柄即读已释放内存,会崩)。
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        worker_ = nullptr;
+    }
     vTaskDelete(nullptr);
 }
 
@@ -750,6 +757,21 @@ void GlmUsageService::SignalWorker() {
     }
 }
 
+void GlmUsageService::Init() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (inited_) {
+        return;
+    }
+    if (event_group_ == nullptr) {
+        event_group_ = xEventGroupCreate();
+    }
+    LoadPersisted();
+    RegisterMcpTools();
+    inited_ = true;
+    ESP_LOGI(TAG, "inited: configured=%d contexts=%u (worker 未启动,不占 16K)",
+             status_.configured, static_cast<unsigned>(status_.context_count));
+}
+
 void GlmUsageService::Start() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (event_group_ == nullptr) {
@@ -759,8 +781,17 @@ void GlmUsageService::Start() {
         return;
     }
 
-    LoadPersisted();
-    RegisterMcpTools();
+    // 工具注册与持久化载入在 boot 期 Init()(main 任务,内部栈)完成。此处
+    // 绝不做 NVS:Start 由 GLM 用量屏在 LVGL worker(PSRAM 栈)上直调,flash
+    // 读会关 cache 触发断言崩机。正常时序 Init 一定先于任何屏幕,走不到这里。
+    if (!inited_) {
+        ESP_LOGW(TAG, "start before init (unexpected order); skip NVS on LVGL stack");
+        return;
+    }
+
+    // 清残留 kStopBit:上次 Stop 若因 worker 卡在拉取而超时,stop 位可能没被
+    // WaitBits 消费掉。不清掉会让新 worker 一启动 WaitBits 就读到 kStopBit 自杀。
+    xEventGroupClearBits(event_group_, kStopBit);
 
     auto* service = this;
     BaseType_t ok = xTaskCreatePinnedToCore(
@@ -778,4 +809,34 @@ void GlmUsageService::Start() {
     if (config_.HasKey()) {
         xEventGroupSetBits(event_group_, kRefreshBit);
     }
+}
+
+void GlmUsageService::Stop() {
+    // 由屏幕 OnScreenUnloaded Schedule 到 main 任务(轮询会阻塞,不能跑在 LVGL worker)。
+    // 置 kStopBit 让 Worker() 退出;Worker 退出前自清 worker_,故这里轮询 worker_
+    // 成员判断收尾 —— 绝不 eTaskGetState 悬空句柄(自删任务的 TCB 可能已被 idle 回收)。
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (event_group_ == nullptr || worker_ == nullptr) {
+            return;
+        }
+        xEventGroupSetBits(event_group_, kStopBit);
+    }
+    int waited = 0;
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (worker_ == nullptr) break;   // worker 已退出并自清句柄
+        }
+        if (waited >= 3000) {
+            // 病态:worker 卡在一次慢拉取里。此处不置空 worker_ —— 留着它,Start 看到
+            // worker_!=nullptr 便幂等返回,不会重复建任务;等旧 worker 的网络调用超时
+            // 返回后,它会读 kStopBit 自行退出并自清 worker_。
+            ESP_LOGW(TAG, "stop: worker 3s 未退出(可能在慢网络拉取中),待其自行收尾");
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+        waited += 50;
+    }
+    ESP_LOGI(TAG, "stopped: worker 已退出,16K 任务栈已释放");
 }

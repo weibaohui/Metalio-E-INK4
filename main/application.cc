@@ -1117,7 +1117,9 @@ void Application::Start() {
     RadioRegisterMcpTools();
     // Built-in application services register their MCP tools and resident
     // workers here; UI screens later attach to their observable state.
-    GlmUsageService::GetInstance().Start();
+    // GLM 用量:boot 期只 Init()(注册工具+载入持久化,不跑 16K worker)。
+    // worker 由 GLM 用量屏 Create 时 Start、Unload 时 Stop,实现"不进屏不占内存"。
+    GlmUsageService::GetInstance().Init();
     LocalMcpServer::GetInstance().Start();
 
     boot_ready_.store(true, std::memory_order_release);
