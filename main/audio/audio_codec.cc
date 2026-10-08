@@ -1,4 +1,5 @@
 #include "audio_codec.h"
+#include "application.h"
 #include "board.h"
 #include "settings.h"
 
@@ -35,7 +36,9 @@ void AudioCodec::Start() {
     }
     Settings settings("audio", false);
     // 键名 v2:出厂默认从 70 改 5,换键让旧设备里存着的 70 不再盖掉新默认
-    output_volume_ = settings.GetInt("output_volume_v2", output_volume_);
+    // 键名 ≤15 字符(NVS 硬限制):旧键 "output_volume_v2" 16 字符,读写一直
+    // 以 ESP_ERR_NVS_KEY_TOO_LONG 失败,音量从未真正持久化过。
+    output_volume_ = settings.GetInt("out_volume_v2", output_volume_);
     if (output_volume_ <= 0) {
         ESP_LOGW(TAG, "Output volume value (%d) is too small, setting to default (10)", output_volume_);
         output_volume_ = 10;
@@ -61,9 +64,22 @@ void AudioCodec::Start() {
 void AudioCodec::SetOutputVolume(int volume) {
     output_volume_ = volume;
     ESP_LOGI(TAG, "Set output volume to %d", output_volume_);
-    
-    Settings settings("audio", true);
-    settings.SetInt("output_volume_v2", output_volume_);
+
+    // 音量立即生效;NVS 落盘去抖合并为一次,且只在 main 任务(内部 RAM 栈)执行。
+    // 此前在这里同步写 NVS:flash 写会关全局 cache,而本函数会被 esp_timer 上的
+    // 按键回调、MCP 等任意任务调用 —— flash 写窗口撞上核 1 LVGL(PSRAM 栈)执行
+    // flash 代码即触发 "Cache disabled but cached memory region accessed" panic
+    // (实测,点收音机页+按音量键 100% 复现);顺带 esp_timer 也被 NVS 写阻塞,
+    // 拖慢全部软件定时器。见 radio_screen 收音机页打不开的排查结论。
+    if (volume_persist_scheduled_.exchange(true)) {
+        return;   // 已有一次落盘在排队/执行,其读到的就是最新音量
+    }
+    Application::GetInstance().Schedule([this]() {
+        volume_persist_scheduled_.store(false);   // 先放行:写盘期间的调节能再次排队
+        const int v = output_volume_;
+        Settings settings("audio", true);
+        settings.SetInt("out_volume_v2", v);
+    });
 }
 
 void AudioCodec::SetInputGain(float gain) {
