@@ -47,6 +47,7 @@ protected:
     bool input_reference_ = false;
     bool input_enabled_ = false;
     bool output_enabled_ = false;
+    bool started_ = false;   // i2s 通道已使能:Start() 幂等,防二次 i2s_channel_enable abort
     int input_sample_rate_ = 0;
     int output_sample_rate_ = 0;
     int input_channels_ = 1;

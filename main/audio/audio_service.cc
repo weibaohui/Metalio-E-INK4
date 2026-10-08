@@ -44,9 +44,9 @@ void AudioService::Initialize(AudioCodec* codec) {
     codec_->Start();
 
     /* Setup the audio codec */
-    opus_decoder_ = std::make_unique<OpusDecoderWrapper>(codec->output_sample_rate(), 1, OPUS_FRAME_DURATION_MS);
-    opus_encoder_ = std::make_unique<OpusEncoderWrapper>(16000, 1, OPUS_FRAME_DURATION_MS);
-    opus_encoder_->SetComplexity(0);
+    // opus 编解码器改为按需:在 Start() 创建、Stop() 释放。不使用语音(如收音机
+    // 直写 codec)时不再常驻占用内存。消费者只有 OpusCodecTask(随 Start/Stop 起停)、
+    // SetDecodeSampleRate(null-check 并自行重建)、ResetDecoder(null-check)。
 
     if (codec->input_sample_rate() != 16000) {
         input_resampler_.Configure(codec->input_sample_rate(), 16000);
@@ -95,6 +95,15 @@ void AudioService::Start() {
 
     service_stopped_ = false;
     xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+
+    // opus 编解码器随管线起停:Start 创建,Stop 释放。OpusCodecTask 派生前必就位。
+    if (!opus_decoder_) {
+        opus_decoder_ = std::make_unique<OpusDecoderWrapper>(codec_->output_sample_rate(), 1, OPUS_FRAME_DURATION_MS);
+    }
+    if (!opus_encoder_) {
+        opus_encoder_ = std::make_unique<OpusEncoderWrapper>(16000, 1, OPUS_FRAME_DURATION_MS);
+        opus_encoder_->SetComplexity(0);
+    }
 
     esp_timer_start_periodic(audio_power_timer_, 1000000);
 
@@ -251,6 +260,10 @@ void AudioService::Stop() {
         heap_caps_free(opus_codec_tcb_);
         opus_codec_tcb_ = nullptr;
     }
+
+    // opus 编解码器随管线释放(任务已于上方 vTaskDelay 等待自删后退出,无并发访问)。
+    opus_decoder_.reset();
+    opus_encoder_.reset();
 }
 
 bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {

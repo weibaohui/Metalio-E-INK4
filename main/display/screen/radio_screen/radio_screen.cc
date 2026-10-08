@@ -17,6 +17,7 @@
 #include <esp_random.h>
 
 #include "audio_codec.h"
+#include "application.h"
 #include "board.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
@@ -395,13 +396,19 @@ bool OnVkKey(const char* key) {
 
 void OnScreenUnloaded(lv_event_t*) {
     s_alive = false;
-    radio_stop();
+    radio_stop();           // 先投停止请求,让流尽快结束(LVGL 线程上即可,无 flash 操作)
     s_playing.clear();
     if (s_timer != nullptr) {
         lv_timer_delete(s_timer);
         s_timer = nullptr;
     }
     s_ui = {};
+    // 再真正收掉收音任务(释放 8K PSRAM 栈),不播放即不占内存。
+    // shutdown 轮询任务退出最多阻塞 3s(等重连延迟/读超时收尾),不能在 LVGL
+    // worker 上跑,故 Schedule 到 main 任务。
+    Application::GetInstance().Schedule([]() {
+        radio_player_shutdown();
+    });
 }
 
 }  // namespace
@@ -506,6 +513,13 @@ lv_obj_t* RadioScreen::Create() {
 
     SyncStateLabels();
     s_timer = lv_timer_create(OnTimer, 1000, nullptr);
+    // 进收音机页即停掉语音管线(唤醒词/AFE/opus/采麦任务),把内存让给收音机的
+    // 流拉取与可能的 TLS。语音页/其它页再进时各自 EnsureAudioServiceRunning 重建。
+    // StopAudioServiceIfRunning 内部 Deinitialize AFE 会碰 flash,必须走 main 任务
+    // 内部栈;本回调在 LVGL worker(PSRAM 栈),故 Schedule 上去。
+    Application::GetInstance().Schedule([]() {
+        Application::GetInstance().StopAudioServiceIfRunning();
+    });
     VkKey_AttachScreen(screen, kScreenId, VkKeyScreenDesc{RadioScreen::Create, OnVkKey});
     return screen;
 }

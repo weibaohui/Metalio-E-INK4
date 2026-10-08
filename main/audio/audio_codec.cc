@@ -41,12 +41,16 @@ void AudioCodec::Start() {
         output_volume_ = 10;
     }
 
-    if (tx_handle_ != nullptr) {
-        ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
-    }
-
-    if (rx_handle_ != nullptr) {
-        ESP_ERROR_CHECK(i2s_channel_enable(rx_handle_));
+    // 幂等:i2s 通道已使能则跳过(二次 enable 返回 ESP_ERR_INVALID_STATE,
+    // ESP_ERROR_CHECK 会 abort 整机)。收音机等只开输出的路径可安全重复调 Start()。
+    if (!started_) {
+        if (tx_handle_ != nullptr) {
+            ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
+        }
+        if (rx_handle_ != nullptr) {
+            ESP_ERROR_CHECK(i2s_channel_enable(rx_handle_));
+        }
+        started_ = true;
     }
 
     EnableInput(true);

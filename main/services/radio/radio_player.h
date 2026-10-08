@@ -41,6 +41,10 @@ void radio_play(const char* name, const char* url);
 // 停止收听。
 void radio_stop(void);
 
+// 真正收掉播放任务(释放 8K PSRAM 栈):置 s_quit 让任务循环退出并自删。
+// 离开收音机页时调用,实现"不播放即不占内存"。任务由 radio_play_indexed 幂等重建。
+void radio_player_shutdown(void);
+
 // 0..100;直接作用于系统输出音量(AudioCodec::SetOutputVolume)。
 void radio_set_volume(int percent);
 

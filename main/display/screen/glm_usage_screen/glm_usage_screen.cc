@@ -10,6 +10,7 @@
 #include <freertos/task.h>
 
 #include "board.h"
+#include "application.h"
 #include "display.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
@@ -279,6 +280,11 @@ void OnScreenUnloaded(lv_event_t* /*event*/) {
     }
     s_ui = {};
     s_rendered_context_count = 0;
+    // 离页停掉 16K 常驻 worker,释放任务栈。Stop() 轮询任务退出会阻塞(最多 3s,
+    // 等 worker 收尾),不能在 LVGL worker 上跑,故 Schedule 到 main 任务。
+    Application::GetInstance().Schedule([]() {
+        GlmUsageService::GetInstance().Stop();
+    });
 }
 
 // 进页自动连网（与百问同机制）：开机保网期错过会让 STA Pause 停扫，
@@ -417,6 +423,10 @@ lv_obj_t* GlmUsageScreen::Create() {
     s_screen_alive = true;
     s_rendered_context_count = 0;
     ScreenSetIsHome(false);
+
+    // 进页才启动 16K 常驻 worker(boot 期只 Init 注册工具+载入持久化)。
+    // Start() 不碰 NVS(inited_ 已 true),可在 LVGL worker 上直调。
+    GlmUsageService::GetInstance().Start();
 
     lv_obj_t* screen = lv_obj_create(nullptr);
     s_ui.screen = screen;
