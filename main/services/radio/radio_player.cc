@@ -363,6 +363,12 @@ bool RunOneStream(const PlayReq& req, uint64_t seq) {
             break;
         }
 
+        // 未联网就直接失败,别去碰带 1s 超时的建连(省时间也省无效日志)。
+        if (!Board::GetInstance().IsNetworkReady()) {
+            SetSnapState(RADIO_ERROR, "未联网");
+            break;
+        }
+
         SetSnapState(RADIO_CONNECTING, nullptr);
         // 已知同时提供 http 明文源的台系,优先走明文:
         // 本机内部 RAM 实测仅剩 ~30KB、最大连续块 ~10KB,而一次 TLS 握手要
@@ -383,6 +389,22 @@ bool RunOneStream(const PlayReq& req, uint64_t seq) {
                     play_url = "http://" + host_part;
                     break;
                 }
+            }
+        }
+        // 一.6 底层配合(防"连接出错死机"):https(TLS)握手峰值需 mbedtls in-content
+        // 16KB 连续内部块 + 若干工作区,还得给 lwIP/WiFi 留余量;不足时硬开 TLS 会把
+        // 网络栈饿死 -> 整机软死(CPU 在跑但 ping/TCP 全断)。进收音机虽已停语音管线
+        // 腾内存,仍可能不够。内存不足时把 https 降级为 http 明文再试:该台若有明文源
+        // 则照样能播,若无明文源 appfw 会干净报错(连接失败),而不是把整机拖死。
+        if (play_url.rfind("https://", 0) == 0) {
+            const size_t free_b = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+            constexpr size_t kTlsMinLargest = 20 * 1024;  // in-content 16KB 连续块 + 余量
+            constexpr size_t kTlsMinFree    = 28 * 1024;  // 握手峰值 + lwIP/WiFi 余量
+            if (largest < kTlsMinLargest || free_b < kTlsMinFree) {
+                ESP_LOGW(TAG, "内部内存不足(余%uB/最大块%uB),TLS 有风险,降级 http 明文",
+                         (unsigned)free_b, (unsigned)largest);
+                play_url = "http://" + play_url.substr(8);
             }
         }
         const appfw_stream_cfg_t scfg = {
@@ -477,6 +499,22 @@ void RadioTask(void*) {
         if (!have) {
             retry = 0;
             NetHold(false);   // 空闲:释放保网需求,让电源策略正常进待机省电
+            // 上一轮若是出错收尾(重连 3 次全败/建连失败),保留 RADIO_ERROR 给用户看,
+            // 别立刻刷成"已停止" —— 底部 footer 靠 RADIO_ERROR 显示失败原因(需求三.2
+            // "错误状态")。下次播放/切台时 RunOneStream 会置 CONNECTING 覆盖它。
+            // 锁外判定、锁外延时:持 s_snap_mutex 睡 150ms 会周期性堵死 LVGL 的
+            // radio_player_snapshot 与 MCP 状态查询(持锁睡眠反模式)。
+            {
+                bool keep_error = false;
+                {
+                    std::lock_guard<std::mutex> lock(s_snap_mutex);
+                    keep_error = (s_snap.state == RADIO_ERROR);
+                }
+                if (keep_error) {
+                    vTaskDelay(pdMS_TO_TICKS(150));
+                    continue;
+                }
+            }
             SetSnapState(RADIO_STOPPED, nullptr);
             vTaskDelay(pdMS_TO_TICKS(150));
             continue;
