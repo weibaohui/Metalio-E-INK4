@@ -115,13 +115,13 @@ public:
 
     /**
      * @brief 无保网需求后仍保持联网的时长（秒）
-     * @return 30 / 60 / 120
+     * @return 30 / 60 / 120 / -1（永久：空闲不断网，浅睡待机仍会断）
      */
     int GetNetGraceSec() const;
 
     /**
      * @brief 设置断网前暂留时长并写入 NVS
-     * @param sec 仅接受 30 / 60 / 120，其它值归一为默认 30
+     * @param sec 仅接受 30 / 60 / 120 / -1（永久），其它值归一为默认 30
      */
     void SetNetGraceSec(int sec);
 
