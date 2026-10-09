@@ -9,6 +9,7 @@
 #include "haptic_feedback.h"
 #include "power_policy.h"
 #include "screen_common.h"
+#include "boot_key_handler.h"
 #include "standby_screen/standby_screen.h"
 #include "vk_key_handler.h"
 
@@ -56,13 +57,15 @@ void Disarm() {
     if (s_ui.shutdown_lbl != nullptr) lv_label_set_text(s_ui.shutdown_lbl, "关机");
 }
 
-// 息屏:进入待机(EPD 休眠 + 轻睡眠 LP;BOOT/POWER 键唤醒)。屏点击已在 LVGL 线程,
-// 直接调用即可(与 POWER 短按同路径:PreparePowerKeyStandby + StandbyScreen::Show)。
+// 息屏:进入待机(EPD 休眠 + 轻睡眠 LP;BOOT/POWER 键唤醒)。
+// ⚠️ 必须走 PowerKey_OnClick(= PreparePowerKeyStandby + LvAsyncUrgent 排队进
+// StandbyScreen::Show)。不能在点击回调里同步调 Show():待机转换会在 LVGL 事件
+// 分发中途进入轻睡眠,LVGL worker 被冻在渲染半途,唤醒链路失效 → 整机假死
+// (2026-10-09 实测:进电源 APP 点息屏,系统卡死只能 BOOT+USB 硬复位)。
 void OnSleepClicked(lv_event_t*) {
     HapticPulseIfEnabled();
     ESP_LOGI(TAG, "息屏(进入待机)");
-    PowerPolicy::GetInstance().PreparePowerKeyStandby();
-    StandbyScreen::Show();
+    PowerKey_OnClick();
 }
 
 // 重启:二次确认 → 走 main 任务 Application::Reboot(与 MCP self.reboot 同路径)
