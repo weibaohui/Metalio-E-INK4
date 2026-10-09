@@ -7,6 +7,28 @@
 
 #define TAG "BTAudioCodec"
 
+namespace {
+
+// 软限幅(需求三.7 削爆音):逼近满幅时渐近压缩而非硬削顶。硬削顶(对超 INT32 的部分
+// 直接 clamp)在小喇叭上是平顶失真/爆音的主因。80% 满幅以下线性(不动),之上平滑
+// 压缩到 INT32_MAX。纯整数、无分配、有界耗时 —— Write 在持锁的音频路径上,必须如此。
+int32_t SoftClip(int64_t x) {
+    constexpr int64_t kFs = INT32_MAX;
+    constexpr int64_t kKnee = kFs * 8 / 10;   // 80% 拐点
+    if (x <= kKnee && x >= -kKnee) {
+        return static_cast<int32_t>(x);
+    }
+    const int64_t sign = x < 0 ? -1 : 1;
+    const int64_t a = x < 0 ? -x : x;
+    const int64_t range = kFs - kKnee;         // 压缩区宽度
+    const int64_t over = a - kKnee;            // 超出拐点的量
+    // y = knee + range*over/(range+over):over→∞ 时渐近到 range(即 y→FS),平滑不削顶
+    const int64_t y = kKnee + (range * over) / (range + over);
+    return static_cast<int32_t>(sign * y);
+}
+
+}  // namespace
+
 BTAudioCodec::~BTAudioCodec()
 {
     if (rx_handle_ != nullptr)
@@ -81,20 +103,8 @@ int BTAudioCodec::Write(const int16_t *data, int samples)
     for (int i = 0; i < samples; i++)
     {
         int64_t temp = int64_t(data[i]) * volume_factor; // 使用 int64_t 进行乘法运算
-        int32_t processed_sample;
-
-        if (temp > INT32_MAX)
-        {
-            processed_sample = INT32_MAX;
-        }
-        else if (temp < INT32_MIN)
-        {
-            processed_sample = INT32_MIN;
-        }
-        else
-        {
-            processed_sample = static_cast<int32_t>(temp);
-        }
+        // 软限幅取代硬 clamp:逼近满幅平滑压缩,抑制削顶爆音(需求三.7)。
+        int32_t processed_sample = SoftClip(temp);
 
         // 将处理后的采样点复制到左右两个声道（交错排列）
         buffer[i * 2] = processed_sample;     // 左声道
