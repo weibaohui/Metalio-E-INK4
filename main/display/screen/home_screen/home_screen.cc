@@ -8,6 +8,7 @@
 #include "glm_usage_screen/glm_usage_screen.h"
 #include "haptic_feedback.h"
 #include "lv_adapter_display.h"
+#include "power_screen/power_screen.h"
 #include "radio_screen/radio_screen.h"
 #include "screen_common.h"
 #include "settings.h"
@@ -146,6 +147,7 @@ namespace
     const char *AppNameWallpaper() { return Lang::Strings::HOME_APP_WALLPAPER; }
     const char *AppNameCloud() { return Lang::Strings::HOME_APP_CLOUD; }
     const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
+    const char *AppNamePower() { return "电源"; }   // 新 APP 暂不走 i18n
 
     constexpr AppEntry kApps[] = {
         {"A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
@@ -154,6 +156,7 @@ namespace
         {"A:ic_app_home_wallpaper.spng", AppNameWallpaper, WallpaperScreen::Create},
         {"A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
         {"A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
+        {"A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
         {"A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
@@ -165,6 +168,7 @@ namespace
         {"A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
         {"A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
         {"A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
+        {"A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
         {"A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
