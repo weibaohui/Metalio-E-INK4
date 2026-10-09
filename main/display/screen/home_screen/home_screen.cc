@@ -63,8 +63,8 @@ namespace
     constexpr lv_coord_t kIconSize = 70;
     constexpr lv_coord_t kCardRadius = 20;
     constexpr int kColsPerRow = 3;
-    constexpr int kRowsPerPage = 4;
-    constexpr int kAppsPerPage = kColsPerRow * kRowsPerPage; // 每页 12 个
+    constexpr int kRowsPerPage = 3;   // 每页 3 行(贴合 800 竖屏:hero+状态栏后恰好 3 行)
+    constexpr int kAppsPerPage = kColsPerRow * kRowsPerPage; // 每页 9 个
 
     // I1 无真灰阶：#AAAAAA 会量化成白。共用 8x8 L8 平铺（64B），稀疏网点近似浅灰。
     constexpr int kDitherW = 8;
@@ -352,6 +352,35 @@ namespace
         return page_delta < 0 ? s_home_page > 0 : s_home_page < last;
     }
 
+    // 翻页(供手势/虚拟键复用):delta=+1 下一页,-1 上一页,到边界不动
+    void HomeGoPageDelta(int delta)
+    {
+        const int last = PageCount() > 0 ? PageCount() - 1 : 0;
+        int next = s_home_page + delta;
+        if (next < 0) next = 0;
+        else if (next > last) next = last;
+        if (next == s_home_page) return;
+        s_home_page = next;
+        RequestFillAppsPage();
+    }
+
+    // 原生 LVGL 滑动手势(需求:触摸手势 + 首页多屏)。LVGL 9 的 LV_EVENT_GESTURE 默认
+    // 启用(无需改配置),触摸子系统已上报连续 press/move/release,满足 50px 手势阈值。
+    // 约定:左滑(内容左移)= 下一页,右滑 = 上一页(类似安卓);上/下滑暂不翻页。
+    void OnHomeGesture(lv_event_t *e)
+    {
+        lv_indev_t *indev = lv_indev_active();
+        if (indev == nullptr) return;
+        switch (lv_indev_get_gesture_dir(indev))
+        {
+            case LV_DIR_LEFT:  HomeGoPageDelta(+1); break;
+            case LV_DIR_RIGHT: HomeGoPageDelta(-1); break;
+            case LV_DIR_TOP:
+            case LV_DIR_BOTTOM:
+            default: break;
+        }
+    }
+
     bool OnVkKeyLongPress(const char *key)
     {
         return VkPageRepeatTryStart(key, HomePageRepeatStep);
@@ -434,6 +463,8 @@ namespace
         lv_obj_set_style_layout(cell, LV_LAYOUT_NONE, 0);
         lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+        // 手势冒泡:在卡片上起手的左右滑动要冒泡到宫格容器,由屏的手势处理器翻页
+        lv_obj_add_flag(cell, LV_OBJ_FLAG_GESTURE_BUBBLE);
         HapticAttachClick(cell);
         lv_obj_set_user_data(cell, const_cast<AppEntry *>(&entry));
         lv_obj_add_event_cb(cell, OnAppClicked, LV_EVENT_CLICKED, const_cast<AppEntry *>(&entry));
@@ -746,10 +777,11 @@ lv_obj_t *HomeScreen::Create()
     home_hero::Start();
 
     const int indicator_h = pages > 1 ? HOME_PAGE_INDICATOR_H : 0;
-    // 行数按实际 app 数自动算(kColsPerRow=3):新增第 7 个 app 时容器若仍按
-    // 两行算高,第三行整行落在容器外且不可滚动 —— 表现为"只有 6 个图标"。
-    const int apps_rows =
-        (kTotalApps + kColsPerRow - 1) / kColsPerRow;
+    // 多屏分页(需求:触摸手势+多屏):宫格容器固定为"单页视口"(最多 kRowsPerPage 行,
+    // 贴合屏幕),超出的 APP 落到下一页,由左右滑动/盖板虚拟键切换 + 页码指示。
+    // 不再是"行数随 app 总数无限长高"(那样超一屏会溢出且无分页可达)。
+    const int total_rows = (kTotalApps + kColsPerRow - 1) / kColsPerRow;
+    const int apps_rows = total_rows < kRowsPerPage ? total_rows : kRowsPerPage;
     const lv_coord_t apps_content_h =
         HOME_APPS_PAD_TOP + apps_rows * HOME_APP_CARD_H +
         (apps_rows > 1 ? (apps_rows - 1) * HOME_APP_CARD_GAP_ROW : 0) +
@@ -773,6 +805,8 @@ lv_obj_t *HomeScreen::Create()
     lv_obj_set_flex_align(s_apps, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_clear_flag(s_apps, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(s_apps, LV_OBJ_FLAG_CLICKABLE);
+    // 手势冒泡:宫格空白处起手的滑动冒泡到屏;卡片上的滑动由卡片自身的冒泡上来
+    lv_obj_add_flag(s_apps, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
     s_page_lbl = lv_label_create(scr);
     lv_label_set_text(s_page_lbl, "");
@@ -786,6 +820,10 @@ lv_obj_t *HomeScreen::Create()
     }
 
     FillAppsPage();
+
+    // 原生 LVGL 滑动手势:左右滑切宫格页(多屏,需求)。订阅在屏根对象;卡片与宫格容器
+    // 都开了 GESTURE_BUBBLE,手势冒泡到这里统一处理(单点,不重复触发)。
+    lv_obj_add_event_cb(scr, OnHomeGesture, LV_EVENT_GESTURE, nullptr);
 
     lv_obj_add_event_cb(scr, OnHomeDeleted, LV_EVENT_DELETE, nullptr);
     ScreenSetIsHome(true);
