@@ -12,6 +12,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
+#include <freertos/idf_additions.h>   // xTaskCreatePinnedToCoreWithCaps / vTaskDeleteWithCaps
 #include <mbedtls/base64.h>
 #include <mbedtls/md.h>
 
@@ -610,7 +611,7 @@ void GlmUsageService::Worker() {
         std::lock_guard<std::mutex> lock(mutex_);
         worker_ = nullptr;
     }
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);   // WithCaps(PSRAM 栈)任务必须配对删除,纯 vTaskDelete 泄漏栈
 }
 
 void GlmUsageService::RegisterMcpTools() {
@@ -804,11 +805,16 @@ void GlmUsageService::Start() {
     xEventGroupClearBits(event_group_, kStopBit);
 
     auto* service = this;
-    BaseType_t ok = xTaskCreatePinnedToCore(
+    // 栈放 PSRAM:16KB 连续内部 RAM 在 syslog 环(8KB)+time_svc(4KB)加入后
+    // 常态分配失败(实测 "resident worker start failed"),GLM 屏整屏不可用。
+    // 先例:radio 任务同为 PSRAM 栈且跑完整 https 流。WithCaps 任务自删必须
+    // 配对 vTaskDeleteWithCaps(见 Worker 末尾)。
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
         [](void* context) {
             static_cast<GlmUsageService*>(context)->Worker();
         },
-        "glm_usage", 16384, service, tskIDLE_PRIORITY + 2, &worker_, 0);
+        "glm_usage", 16384, service, tskIDLE_PRIORITY + 2, &worker_, 0,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (ok != pdPASS) {
         worker_ = nullptr;
         // 创建失败(内部 RAM 不足/碎片化)要落进状态,否则 UI 只显示默认的
