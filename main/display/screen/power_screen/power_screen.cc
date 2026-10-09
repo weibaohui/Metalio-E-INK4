@@ -9,6 +9,7 @@
 #include "haptic_feedback.h"
 #include "power_policy.h"
 #include "screen_common.h"
+#include "boot_key_handler.h"
 #include "standby_screen/standby_screen.h"
 #include "vk_key_handler.h"
 
@@ -56,13 +57,15 @@ void Disarm() {
     if (s_ui.shutdown_lbl != nullptr) lv_label_set_text(s_ui.shutdown_lbl, "关机");
 }
 
-// 息屏:进入待机(EPD 休眠 + 轻睡眠 LP;BOOT/POWER 键唤醒)。屏点击已在 LVGL 线程,
-// 直接调用即可(与 POWER 短按同路径:PreparePowerKeyStandby + StandbyScreen::Show)。
+// 息屏:进入待机(EPD 休眠 + 轻睡眠 LP;BOOT/POWER 键唤醒)。
+// ⚠️ 必须走 PowerKey_OnClick(= PreparePowerKeyStandby + LvAsyncUrgent 排队进
+// StandbyScreen::Show)。不能在点击回调里同步调 Show():待机转换会在 LVGL 事件
+// 分发中途进入轻睡眠,LVGL worker 被冻在渲染半途,唤醒链路失效 → 整机假死
+// (2026-10-09 实测:进电源 APP 点息屏,系统卡死只能 BOOT+USB 硬复位)。
 void OnSleepClicked(lv_event_t*) {
     HapticPulseIfEnabled();
     ESP_LOGI(TAG, "息屏(进入待机)");
-    PowerPolicy::GetInstance().PreparePowerKeyStandby();
-    StandbyScreen::Show();
+    PowerKey_OnClick();
 }
 
 // 重启:二次确认 → 走 main 任务 Application::Reboot(与 MCP self.reboot 同路径)
@@ -115,7 +118,10 @@ lv_obj_t* MakeBigButton(lv_obj_t* parent, const char* text, lv_event_cb_t cb, lv
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_t* lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
-    lv_obj_set_style_text_font(lbl, fontpack_lv_font_get(34, 2), 0);
+    // 字库若无 34 规格,get 返回 NULL;NULL 字体会让 lv_text 测量死循环卡死
+    // LVGL worker(实测整机假死)——必须空守卫回退 UI 字体。
+    const lv_font_t* big_font = fontpack_lv_font_get(34, 2);
+    lv_obj_set_style_text_font(lbl, big_font != nullptr ? big_font : UiFont(), 0);
     lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
     lv_obj_center(lbl);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
