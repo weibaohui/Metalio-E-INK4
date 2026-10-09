@@ -10,9 +10,11 @@
 
 #include <esp_http_server.h>
 #include <esp_log.h>
+#include <esp_random.h>
 
 #include <cJSON.h>
 
+#include "application.h"
 #include "mcp_server.h"
 #include "settings.h"
 
@@ -104,8 +106,8 @@ bool CheckAuthorization(httpd_req_t* req, const std::string& token) {
 }
 
 esp_err_t PostHandler(httpd_req_t* req) {
-    Settings settings("local_mcp", false);
-    const std::string token = settings.GetString("token");
+    // PIN 即 bearer token(6 位数字),从 RAM 缓存读(避免每次请求都开 NVS)。
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
     if (!CheckAuthorization(req, token)) {
         SetCommonHeaders(req);
         httpd_resp_set_status(req, "401 Unauthorized");
@@ -220,6 +222,14 @@ void LocalMcpServer::Start() {
         return;
     }
 
+    // Start 在 boot 的 main 任务(内部栈)执行,可安全读 NVS。把 PIN 载入 RAM 缓存,
+    // 之后每个请求从缓存校验,不再每次开 NVS。
+    {
+        Settings settings("local_mcp", false);
+        std::lock_guard<std::mutex> lock(pin_mutex_);
+        pin_ = settings.GetString("token");
+    }
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 8080;
     config.ctrl_port = 32769;
@@ -288,4 +298,51 @@ void LocalMcpServer::Stop() {
         httpd_stop(server);
         server_ = nullptr;
     }
+}
+
+// ---- 6 位数字 PIN 认证(需求一.5) ----
+
+bool LocalMcpServer::AuthEnabled() {
+    std::lock_guard<std::mutex> lock(pin_mutex_);
+    return !pin_.empty();
+}
+
+std::string LocalMcpServer::GetPin() {
+    std::lock_guard<std::mutex> lock(pin_mutex_);
+    return pin_;
+}
+
+void LocalMcpServer::SetPin(const std::string& pin) {
+    {
+        std::lock_guard<std::mutex> lock(pin_mutex_);
+        if (pin_ == pin) {
+            return;
+        }
+        pin_ = pin;
+    }
+    // 落盘必须离开 LVGL worker(PSRAM 栈,写 flash 会关 cache 触发断言),调度到 main。
+    // 缓存已先行更新,UI 立即生效;写盘是异步收尾。
+    Application::GetInstance().Schedule([pin]() {
+        Settings settings("local_mcp", true);
+        settings.SetString("token", pin);
+    });
+}
+
+void LocalMcpServer::SetAuthEnabled(bool enable) {
+    if (enable) {
+        if (AuthEnabled()) {
+            return;   // 已有 PIN,保持
+        }
+        RegeneratePin();
+        return;
+    }
+    SetPin("");   // 清空 = 关闭认证(放开)
+}
+
+void LocalMcpServer::RegeneratePin() {
+    // %06u:6 位数字(含前导零),方便局域网内手抄填写,取代长 bearer token。
+    char pin[8];
+    snprintf(pin, sizeof(pin), "%06u", static_cast<unsigned>(esp_random() % 1000000));
+    SetPin(pin);
+    ESP_LOGI(TAG, "MCP auth PIN regenerated");
 }
