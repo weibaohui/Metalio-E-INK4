@@ -1143,8 +1143,8 @@ void Application::Start() {
     // ICS 日历订阅:读 NVS 订阅 URL/最近同步时间(main 任务,内部栈,安全)。
     // 不联网下载——首次进日历屏时按过期策略自动同步。
     CalendarIcs_Init();
-    // APP 开关(需求一.3):开机把 NVS 开关载入 RAM 缓存(main 任务,内部栈)。
-    // 必须早于首页首次渲染。
+    // APP 开关(需求一.3):NVS→RAM 缓存已随显示初始化(SetupUI 首次渲染首页前)
+    // 载入,开机第一屏就按开关过滤图标;此处幂等重载兜底,防启动路径变动回归。
     HomeScreen::InitAppToggles();
 
     boot_ready_.store(true, std::memory_order_release);

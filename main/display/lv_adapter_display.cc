@@ -1311,6 +1311,9 @@ LVAdapterDisplay::LVAdapterDisplay(const esp_lcd_panel_handle_t panel,
     (void)HomeScreen::LoadCardStyle();
     (void)HapticIsEnabled();
     BookReaderPrefsEnsureLoaded();
+    // APP 开关必须在 SetupUI 首次渲染首页前载入:否则 CollectEnabled 走"未载入默认全开",
+    // 开机第一屏显示全部图标,进过设置再回首页才被开关过滤(本末倒置)。
+    HomeScreen::InitAppToggles();
     // 待机壁纸路由：开机即灌 NVS→缓存，勿等 Application::Start 联网后才 classic
     wallpaper::HydrateFromNvsNow();
     // 阅读首页快照：与壁纸同点灌入，首页可点时内存已有最近阅读/总时长
