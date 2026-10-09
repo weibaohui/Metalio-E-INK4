@@ -1,6 +1,7 @@
 // main/services/calendar/calendar_store.cc —— 见 calendar_store.h(需求一.4)。
 #include "calendar_store.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -20,9 +21,13 @@ namespace {
 constexpr const char* TAG = "CalendarStore";
 constexpr const char* kEventsFile = SD_PATH_CALENDAR "/events.json";
 constexpr const char* kEventsTmp  = SD_PATH_CALENDAR "/events.tmp";
+// 订阅日历(ics)分组独立文件:整组替换,与手动日程互不干扰
+constexpr const char* kIcsFile = SD_PATH_CALENDAR "/ics_events.json";
+constexpr const char* kIcsTmp  = SD_PATH_CALENDAR "/ics_events.tmp";
 
 std::mutex s_mutex;
-std::vector<CalendarEvent> s_events;   // RAM 缓存(读全走这里)
+std::vector<CalendarEvent> s_events;      // 手动/MCP 日程 RAM 缓存(读全走这里)
+std::vector<CalendarEvent> s_ics_events;  // 订阅日历(ics)日程缓存
 bool s_loaded = false;
 
 bool SdReady() { return SdCardManager::GetInstance().IsMounted(); }
@@ -47,9 +52,9 @@ bool ValidTime(const std::string& t) {
     return true;
 }
 
-std::string Serialize() {
+std::string Serialize(const std::vector<CalendarEvent>& events) {
     cJSON* root = cJSON_CreateArray();
-    for (const auto& e : s_events) {
+    for (const auto& e : events) {
         cJSON* item = cJSON_CreateObject();
         cJSON_AddStringToObject(item, "date", e.date.c_str());
         cJSON_AddStringToObject(item, "time", e.time.c_str());
@@ -63,8 +68,8 @@ std::string Serialize() {
     return out;
 }
 
-void ParseInto(const std::string& json) {
-    s_events.clear();
+void ParseInto(const std::string& json, std::vector<CalendarEvent>& out, bool from_ics) {
+    out.clear();
     cJSON* root = cJSON_Parse(json.c_str());
     if (root == nullptr || !cJSON_IsArray(root)) {
         if (root != nullptr) cJSON_Delete(root);
@@ -80,13 +85,14 @@ void ParseInto(const std::string& json) {
         e.date = date->valuestring;
         e.time = cJSON_IsString(time) ? time->valuestring : "";
         e.title = title->valuestring;
-        if (ValidDate(e.date)) s_events.push_back(e);
+        e.from_ics = from_ics;
+        if (ValidDate(e.date)) out.push_back(e);
     }
     cJSON_Delete(root);
 }
 
 // 原子写:tmp + rename(SD;无卡返回 false 但缓存已更新)。调用方须持 s_mutex。
-bool PersistLocked() {
+bool PersistTo(const char* tmp_path, const char* file_path, const std::vector<CalendarEvent>& events) {
     if (!SdReady()) {
         ESP_LOGW(TAG, "无 SD 卡,日程仅存 RAM(重启不保留)");
         return false;
@@ -95,8 +101,8 @@ bool PersistLocked() {
         ESP_LOGW(TAG, "calendar 目录创建失败");
         return false;
     }
-    const std::string body = Serialize();
-    FILE* f = fopen(kEventsTmp, "wb");
+    const std::string body = Serialize(events);
+    FILE* f = fopen(tmp_path, "wb");
     if (f == nullptr) {
         ESP_LOGW(TAG, "open tmp failed errno=%d", errno);
         return false;
@@ -105,16 +111,37 @@ bool PersistLocked() {
     fflush(f);
     fclose(f);
     if (w != body.size()) {
-        unlink(kEventsTmp);
+        unlink(tmp_path);
         return false;
     }
-    unlink(kEventsFile);
-    if (rename(kEventsTmp, kEventsFile) != 0) {
+    unlink(file_path);
+    if (rename(tmp_path, file_path) != 0) {
         ESP_LOGW(TAG, "rename failed errno=%d", errno);
-        unlink(kEventsTmp);
+        unlink(tmp_path);
         return false;
     }
     return true;
+}
+
+bool PersistLocked() { return PersistTo(kEventsTmp, kEventsFile, s_events); }
+bool PersistIcsLocked() { return PersistTo(kIcsTmp, kIcsFile, s_ics_events); }
+
+void LoadFileLocked(const char* path, std::vector<CalendarEvent>& out, bool from_ics) {
+    struct stat st;
+    if (stat(path, &st) != 0 || st.st_size <= 0 || st.st_size > 384 * 1024) {
+        return;   // 无文件或异常:空
+    }
+    char* buf = static_cast<char*>(heap_caps_malloc(st.st_size + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (buf == nullptr) buf = static_cast<char*>(malloc(st.st_size + 1));
+    if (buf == nullptr) return;
+    FILE* f = fopen(path, "rb");
+    if (f != nullptr) {
+        const size_t r = fread(buf, 1, st.st_size, f);
+        fclose(f);
+        buf[r] = '\0';
+        ParseInto(buf, out, from_ics);
+    }
+    free(buf);
 }
 
 void LoadLocked() {
@@ -124,22 +151,10 @@ void LoadLocked() {
         ESP_LOGW(TAG, "无 SD 卡,日程从空开始(仅 RAM)");
         return;
     }
-    struct stat st;
-    if (stat(kEventsFile, &st) != 0 || st.st_size <= 0 || st.st_size > 256 * 1024) {
-        return;   // 无文件或异常:空
-    }
-    char* buf = static_cast<char*>(heap_caps_malloc(st.st_size + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (buf == nullptr) buf = static_cast<char*>(malloc(st.st_size + 1));
-    if (buf == nullptr) return;
-    FILE* f = fopen(kEventsFile, "rb");
-    if (f != nullptr) {
-        const size_t r = fread(buf, 1, st.st_size, f);
-        fclose(f);
-        buf[r] = '\0';
-        ParseInto(buf);
-    }
-    free(buf);
-    ESP_LOGI(TAG, "载入日程 %d 条", (int)s_events.size());
+    LoadFileLocked(kEventsFile, s_events, false);
+    LoadFileLocked(kIcsFile, s_ics_events, true);
+    ESP_LOGI(TAG, "载入日程:手动 %d 条,订阅 %d 条",
+             (int)s_events.size(), (int)s_ics_events.size());
 }
 
 }  // namespace
@@ -182,10 +197,37 @@ int Calendar_RemoveForDate(const std::string& date) {
     return removed;
 }
 
+int Calendar_ReplaceIcsEvents(std::vector<CalendarEvent>&& events) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    LoadLocked();
+    for (auto& e : events) e.from_ics = true;
+    s_ics_events = std::move(events);
+    PersistIcsLocked();
+    ESP_LOGI(TAG, "订阅日程整组替换:%d 条", (int)s_ics_events.size());
+    return (int)s_ics_events.size();
+}
+
+int Calendar_ClearIcsEvents() {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    LoadLocked();
+    const int n = (int)s_ics_events.size();
+    s_ics_events.clear();
+    PersistIcsLocked();
+    return n;
+}
+
+int Calendar_IcsCount() {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    LoadLocked();
+    return (int)s_ics_events.size();
+}
+
 std::vector<CalendarEvent> Calendar_GetAll() {
     std::lock_guard<std::mutex> lock(s_mutex);
     LoadLocked();
-    return s_events;
+    std::vector<CalendarEvent> out = s_events;
+    out.insert(out.end(), s_ics_events.begin(), s_ics_events.end());
+    return out;
 }
 
 std::vector<CalendarEvent> Calendar_GetForDate(const std::string& date) {
@@ -195,6 +237,13 @@ std::vector<CalendarEvent> Calendar_GetForDate(const std::string& date) {
     for (const auto& e : s_events) {
         if (e.date == date) out.push_back(e);
     }
+    for (const auto& e : s_ics_events) {
+        if (e.date == date) out.push_back(e);
+    }
+    // 展示有序:全天在前,定时按 HH:MM;同刻手动在前
+    std::stable_sort(out.begin(), out.end(), [](const CalendarEvent& a, const CalendarEvent& b) {
+        return a.time < b.time;
+    });
     return out;
 }
 
@@ -204,13 +253,16 @@ bool Calendar_HasEvent(const std::string& date) {
     for (const auto& e : s_events) {
         if (e.date == date) return true;
     }
+    for (const auto& e : s_ics_events) {
+        if (e.date == date) return true;
+    }
     return false;
 }
 
 int Calendar_Count() {
     std::lock_guard<std::mutex> lock(s_mutex);
     LoadLocked();
-    return (int)s_events.size();
+    return (int)(s_events.size() + s_ics_events.size());
 }
 
 std::string Calendar_Today() {
