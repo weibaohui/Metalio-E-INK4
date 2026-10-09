@@ -9,6 +9,7 @@ namespace {
 
 constexpr int kMaxApps = 16;
 constexpr lv_coord_t kRowH = 56;
+constexpr lv_coord_t kRowGap = 8;   // 行间距(与原内容页 kSettingsOptionGap 视觉一致)
 
 struct AppsUi {
     lv_obj_t* rows[kMaxApps] = {};
@@ -95,10 +96,24 @@ void SettingsAppsTab_Build(lv_obj_t* page) {
     if (s_ui.count > kMaxApps) s_ui.count = kMaxApps;
 
     MakeText(page, "应用显示", 30);
-    MakeText(page, "关闭的 APP 不在首页显示;\"设置\"常驻(关了就没法再进这里)。返回首页后生效。");
+    MakeText(page, "关闭的 APP 不在首页显示;\"设置\"常驻(关了就没法再进这里)。返回首页后生效。列表可上下滑动。");
+
+    // 行列表独立可滚动容器:标题/说明固定,行数超屏时上下滑动。
+    // 滑动 vs 点按由 LVGL 原生区分:拖动超 scroll limit 后给被按行发
+    // LV_EVENT_PRESS_LOST,CLICKED 不触发,滑动不会误开关应用。
+    lv_obj_t* list = lv_obj_create(page);
+    lv_obj_remove_style_all(list);
+    lv_obj_set_width(list, lv_pct(100));
+    lv_obj_set_flex_grow(list, 1);   // 吃满页面剩余高度,超出的行滚动看
+    lv_obj_set_style_pad_row(list, kRowGap, 0);
+    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    lv_obj_clear_flag(list, LV_OBJ_FLAG_CLICKABLE);
 
     for (int i = 0; i < s_ui.count; ++i) {
-        s_ui.rows[i] = MakeAppRow(page, i);
+        s_ui.rows[i] = MakeAppRow(list, i);
         RefreshRow(i);
     }
 }
