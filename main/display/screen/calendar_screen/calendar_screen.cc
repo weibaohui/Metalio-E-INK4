@@ -14,6 +14,7 @@
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "screen_common.h"
+#include "services/calendar/calendar_ics.h"
 #include "services/calendar/calendar_store.h"
 #include "vk_key_handler.h"
 
@@ -302,6 +303,14 @@ void RebuildGrid() {
 void OnScreenUnloaded(lv_event_t*) {
     s_alive = false;
     s_ui = {};
+    CalendarIcs_SetChangedCallback(nullptr);   // 离开页面不再收订阅刷新通知
+}
+
+// 订阅日历后台同步完成(在工作线程上触发):转到 LVGL 线程重建网格。
+void OnIcsChanged() {
+    ScreenLvAsync([](void*) {
+        if (s_alive) RebuildGrid();
+    }, nullptr);
 }
 
 }  // namespace
@@ -319,6 +328,8 @@ lv_obj_t* CalendarScreen::Create() {
     ScreenSetIsHome(false);
 
     CalendarStore_EnsureLoaded();   // 载入 SD 缓存(幂等)
+    CalendarIcs_SetChangedCallback(&OnIcsChanged);   // 订阅同步完成→自动重画
+    CalendarIcs_MaybeAutoRefresh();   // 已订阅且数据过期(>12h)时后台同步;离线用旧数据
 
     lv_obj_t* screen = lv_obj_create(nullptr);
     s_ui.screen = screen;
