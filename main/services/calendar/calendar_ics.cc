@@ -35,9 +35,12 @@ constexpr int kMaxSpanDays = 31;
 // 标题截断(日历屏一行放不下长标题)。
 constexpr size_t kMaxTitleBytes = 60;
 constexpr int kHttpTimeoutMs = 20000;
-// HTTPS 握手需要约 30KB 连续内部 RAM(mbedtls 16KB 收发缓冲);不足直接报错,
-// 别硬连把网络栈饿崩(与收音机 TLS 守卫同因)。
-constexpr size_t kTlsMinInternalBlock = 30 * 1024;
+// HTTPS 握手的内部 RAM 需求:mbedtls 动态收发缓冲走 malloc 已落 PSRAM
+// (SPIRAM_USE_MALLOC,>16B 即 PSRAM),内部 RAM 只需 lwIP 收包 pbuf 余量与
+// 握手工作集,实测 12KB 起可成。30KB 的保守预检在开机碎片化下永远拦截
+// (44KB 空闲但最大块 <30KB),导致 ICS 永远无法同步。失败路径安全:
+// esp-tls 干净报错,不会把网络栈饿崩(收音机 TLS 守卫同因,失败不致命)。
+constexpr size_t kTlsMinInternalBlock = 12 * 1024;
 constexpr int64_t kAutoRefreshIntervalSec = 12 * 3600;   // 进日历屏时数据超 12h 自动同步
 
 std::mutex s_mutex;
@@ -60,7 +63,7 @@ time_t YmdToNoonEpoch(int y, int m, int d) {
     return mktime(&tmv);
 }
 std::string YmdToStr(int y, int m, int d) {
-    char b[16];
+    char b[40];   // 年份字段理论 11 字节,-Werror 防截断
     snprintf(b, sizeof(b), "%04d-%02d-%02d", y, m, d);
     return b;
 }
