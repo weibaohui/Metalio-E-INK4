@@ -181,23 +181,17 @@ void OnPlayStopClicked(lv_event_t*) {
     }
 }
 
-void PersistVolumeTask(void* arg) {
-    const int vol = static_cast<int>(reinterpret_cast<intptr_t>(arg));
-    radio_set_volume(vol);   // SetOutputVolume 内部写 NVS
-    vTaskDelete(nullptr);
-}
-
 void OnVolumeClicked(lv_event_t* e) {
     const uintptr_t delta = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
     auto* codec = Board::GetInstance().GetAudioCodec();
-    int vol = codec != nullptr ? codec->output_volume() : 70;
-    vol += (delta != 0) ? 10 : -10;
+    if (codec == nullptr) return;
+    int vol = codec->output_volume() + ((delta != 0) ? 10 : -10);
     if (vol > 100) vol = 100;
     if (vol < 0) vol = 0;
-    if (xTaskCreate(PersistVolumeTask, "radio_vol", 4096,
-                    reinterpret_cast<void*>(static_cast<intptr_t>(vol)), 4, nullptr) != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate(radio_vol) failed");
-    }
+    // SetOutputVolume 已是"立即更新成员 + NVS 去抖延迟落盘到 main"(audio_codec.cc),
+    // LVGL worker(PSRAM 栈)直调安全;音量立即生效、可立刻读回 —— 不再开持久化任务。
+    codec->SetOutputVolume(vol);
+    SyncStateLabels();   // 立即刷新音量读数(状态行显示"音量 NN%")
 }
 
 void RefreshList() {
@@ -267,7 +261,9 @@ void OnScopeClicked(lv_event_t*) {
     s_fav_only = !s_fav_only;
     s_page = 0;
     if (s_ui.scope_btn_lbl != nullptr) {
-        lv_label_set_text(s_ui.scope_btn_lbl, s_fav_only ? "收藏" : "全部");
+        // 按钮文字显示"点它将去哪"(动作),而非当前所在视图:
+        // 全部视图下显示"收藏"(点了进收藏夹);收藏夹里显示"全部"(点了返回)。
+        lv_label_set_text(s_ui.scope_btn_lbl, s_fav_only ? "全部" : "收藏");
     }
     RefreshList();
 }
@@ -363,7 +359,15 @@ void SyncStateLabels() {
     } else {
         state = "已停止";
     }
-    lv_label_set_text(s_ui.state_lbl, state);
+    // 状态行附带实时音量,让"音量变了、数字跟着变"(需求三.3)。
+    // output_volume() 是纯成员读(无 flash),LVGL worker 上安全。
+    int vol = 0;
+    if (auto* codec = Board::GetInstance().GetAudioCodec()) {
+        vol = codec->output_volume();
+    }
+    char state_buf[64];
+    snprintf(state_buf, sizeof(state_buf), "%s · 音量 %d%%", state, vol);
+    lv_label_set_text(s_ui.state_lbl, state_buf);
     lv_label_set_text(s_ui.play_btn_lbl,
                       (snap.state == RADIO_PLAYING || snap.state == RADIO_CONNECTING)
                           ? "停止" : "播放");
@@ -388,14 +392,15 @@ void OnTimer(lv_timer_t*) { SyncStateLabels(); }
 
 bool OnVkKey(const char* key) {
     if (key == nullptr || !s_alive) return false;
+    // 实体键(音量+/音量-,主板在收音机屏活跃时派发 vk_prev/vk_next)与触摸
+    // vk 区统一改为"切上一台/下一台",不再翻列表页(列表翻页用屏内 </> 按钮)。
+    // return true 消费掉,避免 vk_prev 落到 DispatchDefault 的"返回上级"。
     if (strcmp(key, "vk_prev") == 0) {
-        s_page--;
-        RefreshList();
+        StepStation(-1);
         return true;
     }
     if (strcmp(key, "vk_next") == 0) {
-        s_page++;
-        RefreshList();
+        StepStation(1);
         return true;
     }
     return false;
@@ -416,6 +421,8 @@ void OnScreenUnloaded(lv_event_t*) {
 }
 
 }  // namespace
+
+bool RadioScreen::IsActive() { return s_alive; }
 
 lv_obj_t* RadioScreen::Create() {
     s_ui = {};
@@ -489,10 +496,16 @@ lv_obj_t* RadioScreen::Create() {
     // 列表头:翻页 + 范围切换
     lv_obj_t* row3 = MakeRow(body, kButtonH);
     MakeButton(row3, "<", 90, OnPageClicked, (void*)0);
-    s_ui.page_lbl = MakeButton(row3, "1/1", 90,
-                               [](lv_event_t*) {}, nullptr);
+    // 页码是纯展示,不做成按钮(原来是个点了没反应的假按钮,易误以为坏了)。
+    s_ui.page_lbl = lv_label_create(row3);
+    lv_label_set_text(s_ui.page_lbl, "1/1");
+    lv_obj_set_width(s_ui.page_lbl, 90);
+    lv_obj_set_style_text_align(s_ui.page_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s_ui.page_lbl, UiFont(), 0);
+    lv_obj_set_style_text_color(s_ui.page_lbl, lv_color_black(), 0);
     MakeButton(row3, ">", 90, OnPageClicked, (void*)1);
-    s_ui.scope_btn_lbl = MakeButton(row3, "全部", 110, OnScopeClicked, nullptr);
+    // 默认显示"全部"列表;按钮文字=动作目标(点了进收藏夹),故初始为"收藏"。
+    s_ui.scope_btn_lbl = MakeButton(row3, "收藏", 110, OnScopeClicked, nullptr);
 
     // 电台列表(6 行整页重画,不滚动)
     s_ui.list = lv_obj_create(body);
