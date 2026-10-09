@@ -218,7 +218,7 @@ std::string Calendar_Today() {
     struct tm local = {};
     localtime_r(&now, &local);
     if (local.tm_year + 1900 < 2025) return "";   // 未对时
-    char buf[12];
+    char buf[40];   // 年份字段理论 11 字节,-Werror 防截断
     snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
              local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
     return buf;
