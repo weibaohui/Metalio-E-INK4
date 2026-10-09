@@ -1133,7 +1133,7 @@ void Application::Start() {
     LocalMcpServer::GetInstance().Start();
     // syslog 日志上报(需求一.2):读 NVS 配置,已启用且配了 IP 则启动发送任务。
     Syslog_Init();
-    // 网络对时服务(需求一.1):读时区偏移 + 起后台任务,网络就绪后 SNTP 自动对时。
+    // 网络对时服务(SNTP,需求一.1):读时区偏移 + 起后台任务,网络就绪后自动对时。
     // Init 在 main 任务(内部栈)读 NVS,安全。
     TimeService_Init();
 

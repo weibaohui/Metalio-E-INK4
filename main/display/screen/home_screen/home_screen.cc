@@ -12,6 +12,7 @@
 #include "screen_common.h"
 #include "settings.h"
 #include "settings_screen/settings_screen.h"
+#include "time_sync_screen/time_sync_screen.h"
 #include "vk_key_handler.h"
 #include "vk_page_repeat.h"
 #include "wallpaper_screen/wallpaper_screen.h"
@@ -146,6 +147,7 @@ namespace
     const char *AppNameWallpaper() { return Lang::Strings::HOME_APP_WALLPAPER; }
     const char *AppNameCloud() { return Lang::Strings::HOME_APP_CLOUD; }
     const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
+    const char *AppNameTimeSync() { return "校时"; }   // 新 APP 暂不走 i18n
 
     constexpr AppEntry kApps[] = {
         {"A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
@@ -154,6 +156,7 @@ namespace
         {"A:ic_app_home_wallpaper.spng", AppNameWallpaper, WallpaperScreen::Create},
         {"A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
         {"A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
+        {"A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create},
         {"A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
@@ -165,6 +168,7 @@ namespace
         {"A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
         {"A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
         {"A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
+        {"A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create},
         {"A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
