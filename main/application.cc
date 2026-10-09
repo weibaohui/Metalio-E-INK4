@@ -1055,12 +1055,18 @@ void Application::Start() {
     reader::book_home_snapshot::HydrateFromNvs();
     reader::book_library_warmup::RequestBootWarmup();
 
+    // APP 开关(需求一.3):开机把 NVS 开关载入 RAM 缓存(main 任务,内部栈)。
+    // 必须早于:1) 下方 MCP 工具注册的开关门控;2) 首页首次渲染。
+    HomeScreen::InitAppToggles();
+
     // GLM 用量服务的 Init(NVS 读 + MCP 工具注册)必须在 StartNetwork 之前完成:
     // StartNetwork 会阻塞数十秒(慢路由连网),期间用户已可进入 GLM 用量屏;
     // 若 Init 迟到,屏幕侧 Start() 因 !inited_ 空手而归 → 无 worker 不刷新,
     // 卡"尚未查询"(2026-10-09 实测:22s 进屏报 start-before-init,125s Init 才跑)。
-    // Init 幂等,RadioRegisterMcpTools 里的那次调用空转无害。
-    GlmUsageService::GetInstance().Init();
+    // Init 幂等。应用开关关掉 GLM 用量时不初始化:不注册 MCP,也不载入状态。
+    if (HomeScreen::IsAppEnabledById("glm")) {
+        GlmUsageService::GetInstance().Init();
+    }
 
     /* 有已存 WiFi：等保网时长；失败不 SoftAP。无 SSID 跳过联网，到设置→网络机上配网 */
     board.StartNetwork();
@@ -1126,14 +1132,16 @@ void Application::Start() {
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddCommonTools();
     mcp_server.AddUserOnlyTools();
-    RadioRegisterMcpTools();
-    CalendarRegisterMcpTools();   // 日历:远端 MCP 推送/同步日程(self.calendar.*)
+    // MCP 注册跟随应用开关:关掉的 APP 连 MCP 工具都不注册(改开关重启后生效)。
+    // syslog/MCP 自身是系统服务非 APP,常注册;GLM 的 Init(含 MCP 注册)
+    // 已按开关在 StartNetwork 前完成(见上)。
+    if (HomeScreen::IsAppEnabledById("radio")) {
+        RadioRegisterMcpTools();
+    }
+    if (HomeScreen::IsAppEnabledById("cal")) {
+        CalendarRegisterMcpTools();   // 日历:远端 MCP 推送/同步日程(self.calendar.*)
+    }
     SyslogRegisterMcpTools();   // 需求一.2:syslog 的 MCP 配置接口(self.syslog.*)
-    // Built-in application services register their MCP tools and resident
-    // workers here; UI screens later attach to their observable state.
-    // GLM 用量:boot 期只 Init()(注册工具+载入持久化,不跑 16K worker)。
-    // worker 由 GLM 用量屏 Create 时 Start、Unload 时 Stop,实现"不进屏不占内存"。
-    GlmUsageService::GetInstance().Init();
     LocalMcpServer::GetInstance().Start();
     // syslog 日志上报(需求一.2):读 NVS 配置,已启用且配了 IP 则启动发送任务。
     Syslog_Init();
@@ -1143,9 +1151,6 @@ void Application::Start() {
     // ICS 日历订阅:读 NVS 订阅 URL/最近同步时间(main 任务,内部栈,安全)。
     // 不联网下载——首次进日历屏时按过期策略自动同步。
     CalendarIcs_Init();
-    // APP 开关(需求一.3):开机把 NVS 开关载入 RAM 缓存(main 任务,内部栈)。
-    // 必须早于首页首次渲染。
-    HomeScreen::InitAppToggles();
 
     boot_ready_.store(true, std::memory_order_release);
 

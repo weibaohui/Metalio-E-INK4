@@ -96,7 +96,7 @@ void SettingsAppsTab_Build(lv_obj_t* page) {
     if (s_ui.count > kMaxApps) s_ui.count = kMaxApps;
 
     MakeText(page, "应用显示", 30);
-    MakeText(page, "关闭的 APP 不在首页显示;\"设置\"常驻(关了就没法再进这里)。返回首页后生效。列表可上下滑动。");
+    MakeText(page, "关闭的 APP 不在首页显示,也不再注册 MCP 工具(重启后生效);\"设置\"常驻(关了就没法再进这里)。列表可上下滑动。");
 
     // 行列表独立可滚动容器:标题/说明固定,行数超屏时上下滑动。
     // 滑动 vs 点按由 LVGL 原生区分:拖动超 scroll limit 后给被按行发
