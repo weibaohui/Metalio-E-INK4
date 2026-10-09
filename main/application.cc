@@ -1051,6 +1051,13 @@ void Application::Start() {
     reader::book_home_snapshot::HydrateFromNvs();
     reader::book_library_warmup::RequestBootWarmup();
 
+    // GLM 用量服务的 Init(NVS 读 + MCP 工具注册)必须在 StartNetwork 之前完成:
+    // StartNetwork 会阻塞数十秒(慢路由连网),期间用户已可进入 GLM 用量屏;
+    // 若 Init 迟到,屏幕侧 Start() 因 !inited_ 空手而归 → 无 worker 不刷新,
+    // 卡"尚未查询"(2026-10-09 实测:22s 进屏报 start-before-init,125s Init 才跑)。
+    // Init 幂等,RadioRegisterMcpTools 里的那次调用空转无害。
+    GlmUsageService::GetInstance().Init();
+
     /* 有已存 WiFi：等保网时长；失败不 SoftAP。无 SSID 跳过联网，到设置→网络机上配网 */
     board.StartNetwork();
 

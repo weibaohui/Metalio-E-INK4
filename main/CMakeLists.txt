@@ -88,7 +88,11 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/settings_screen/settings_theme_tab.cc"
             "display/screen/settings_screen/settings_language_tab.cc"
             "display/screen/settings_screen/settings_haptic_tab.cc"
+<<<<<<< HEAD
             "display/screen/settings_screen/settings_time_tab.cc"
+=======
+            "display/screen/settings_screen/settings_mcp_tab.cc"
+>>>>>>> origin/main
             "display/screen/settings_screen/settings_power_tab.cc"
             "display/screen/settings_screen/settings_conversation_tab.cc"
             "display/screen/settings_screen/settings_storage_tab.cc"
