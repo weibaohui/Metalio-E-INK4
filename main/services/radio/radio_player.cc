@@ -502,9 +502,15 @@ void RadioTask(void*) {
             // 上一轮若是出错收尾(重连 3 次全败/建连失败),保留 RADIO_ERROR 给用户看,
             // 别立刻刷成"已停止" —— 底部 footer 靠 RADIO_ERROR 显示失败原因(需求三.2
             // "错误状态")。下次播放/切台时 RunOneStream 会置 CONNECTING 覆盖它。
+            // 锁外判定、锁外延时:持 s_snap_mutex 睡 150ms 会周期性堵死 LVGL 的
+            // radio_player_snapshot 与 MCP 状态查询(持锁睡眠反模式)。
             {
-                std::lock_guard<std::mutex> lock(s_snap_mutex);
-                if (s_snap.state == RADIO_ERROR) {
+                bool keep_error = false;
+                {
+                    std::lock_guard<std::mutex> lock(s_snap_mutex);
+                    keep_error = (s_snap.state == RADIO_ERROR);
+                }
+                if (keep_error) {
                     vTaskDelay(pdMS_TO_TICKS(150));
                     continue;
                 }
