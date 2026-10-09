@@ -51,6 +51,7 @@ extern "C" {
 #define SD_PATH_A2UI_CACHE  SD_APP_ROOT "/a2ui_cache"
 #define SD_PATH_CHAT_LOG    SD_APP_ROOT "/chat_log"
 #define SD_PATH_WALLPAPER    SD_APP_ROOT "/wallpaper"
+#define SD_PATH_CALENDAR     SD_APP_ROOT "/calendar"
 
 /** Reading fonts (BookScreen). */
 #define SD_PATH_BOOK_FONT      SD_PATH_FONTS "/misans_25_2.ef"
