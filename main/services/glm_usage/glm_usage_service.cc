@@ -777,7 +777,7 @@ void GlmUsageService::Start() {
     if (event_group_ == nullptr) {
         event_group_ = xEventGroupCreate();
     }
-    if (event_group_ == nullptr || worker_ != nullptr) {
+    if (event_group_ == nullptr) {
         return;
     }
 
@@ -787,6 +787,16 @@ void GlmUsageService::Start() {
     if (!inited_) {
         ESP_LOGW(TAG, "start before init (unexpected order); skip NVS on LVGL stack");
         return;
+    }
+
+    // 进屏即查:无论本次是新建还是复用 worker,已配置都置刷新位。原来只在
+    // "新建 worker 成功"后才置位,快速"退出→重进"复用旧 worker 时走了
+    // worker_!=nullptr 的早退、不置位 → 不触发刷新 → 卡"尚未查询"(需求二根因)。
+    if (config_.HasKey()) {
+        xEventGroupSetBits(event_group_, kRefreshBit);
+    }
+    if (worker_ != nullptr) {
+        return;   // 已在跑:复用(刷新位已置,worker 会拾取)
     }
 
     // 清残留 kStopBit:上次 Stop 若因 worker 卡在拉取而超时,stop 位可能没被
@@ -801,14 +811,16 @@ void GlmUsageService::Start() {
         "glm_usage", 16384, service, tskIDLE_PRIORITY + 2, &worker_, 0);
     if (ok != pdPASS) {
         worker_ = nullptr;
-        ESP_LOGE(TAG, "resident worker start failed");
+        // 创建失败(内部 RAM 不足/碎片化)要落进状态,否则 UI 只显示默认的
+        // "尚未查询",用户看不出是任务没起来。已在 mutex_ 内,可直接写 status_。
+        status_.last_ok = false;
+        status_.error = "查询任务启动失败(内存不足),请重进或重启";
+        ++status_.version;
+        ESP_LOGE(TAG, "resident worker start failed (internal RAM low/fragmented)");
         return;
     }
     ESP_LOGI(TAG, "resident service started, configured=%d contexts=%u",
              status_.configured, static_cast<unsigned>(status_.context_count));
-    if (config_.HasKey()) {
-        xEventGroupSetBits(event_group_, kRefreshBit);
-    }
 }
 
 void GlmUsageService::Stop() {
