@@ -1,5 +1,6 @@
 #include "home_screen.h"
 
+#include "ai_voice_chat_screen/ai_voice_chat_screen.h"
 #include "home_screen/home_hero.h"
 #include "assistant_screen/assistant_screen.h"
 #include "assets/lang_config.h"
@@ -146,6 +147,7 @@ namespace
     const char *AppNameWallpaper() { return Lang::Strings::HOME_APP_WALLPAPER; }
     const char *AppNameCloud() { return Lang::Strings::HOME_APP_CLOUD; }
     const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
+    const char *AppNameAiChat() { return "AI 对话"; }   // 新 APP 暂不走 i18n
 
     constexpr AppEntry kApps[] = {
         {"A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
@@ -154,6 +156,7 @@ namespace
         {"A:ic_app_home_wallpaper.spng", AppNameWallpaper, WallpaperScreen::Create},
         {"A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
         {"A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
+        {"A:ic_app_home_buddy.spng", AppNameAiChat, AiVoiceChatScreen::Create},
         {"A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
@@ -165,6 +168,7 @@ namespace
         {"A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
         {"A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
         {"A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
+        {"A:ic_app_home_buddy.spng", AppNameAiChat, AiVoiceChatScreen::Create},
         {"A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 

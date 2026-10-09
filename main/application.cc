@@ -9,6 +9,7 @@
 #include "mcp_server.h"
 #include "services/glm_usage/glm_usage_service.h"
 #include "services/radio/radio_mcp.h"
+#include "services/ai_chat/ai_chat_service.h"
 #include "services/local_mcp/local_mcp_server.h"
 #include "assets.h"
 #include "assistant_screen/assistant_screen.h"
@@ -1115,12 +1116,15 @@ void Application::Start() {
     mcp_server.AddCommonTools();
     mcp_server.AddUserOnlyTools();
     RadioRegisterMcpTools();
+    AiChat_RegisterMcpTools();   // AI 语音对话:self.aichat.configure/status(填两个 API Key)
     // Built-in application services register their MCP tools and resident
     // workers here; UI screens later attach to their observable state.
     // GLM 用量:boot 期只 Init()(注册工具+载入持久化,不跑 16K worker)。
     // worker 由 GLM 用量屏 Create 时 Start、Unload 时 Stop,实现"不进屏不占内存"。
     GlmUsageService::GetInstance().Init();
     LocalMcpServer::GetInstance().Start();
+    // AI 语音对话:boot 期载入 NVS 配置(两个 API Key)。codec/录音硬件在进屏时才动。
+    AiChat_Init();
 
     boot_ready_.store(true, std::memory_order_release);
 
