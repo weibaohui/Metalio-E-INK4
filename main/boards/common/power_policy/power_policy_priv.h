@@ -27,6 +27,7 @@ enum class Mode : uint8_t {
 
 inline constexpr int kIdleToStandbySecDefault = 3 * 60;         // 无操作 → 待机默认秒数
 inline constexpr int kNetGraceSecDefault = 30;                  // 断网前暂留默认秒数
+inline constexpr int kNetGraceSecForever = -1;                  // 暂留=永久:空闲不断网(浅睡待机仍会断)
 inline constexpr int kStandbyToShutdownSecDefault = 3 * 60;     // 浅睡累计 → 关机默认秒数
 inline constexpr uint64_t kLightSleepSliceUs = 10ULL * 1000 * 1000; // 单次浅睡切片上限
 inline constexpr int kStandbyUiSettleMs = 2000;                 // 进待机攒帧上限（就绪即提前 Park）
@@ -67,9 +68,12 @@ inline int64_t UserIdleToStandbyUs()
     return static_cast<int64_t>(idle_to_standby_sec) * 1000000LL;
 }
 
-/** @brief 断网前暂留阈值（微秒） */
+/** @brief 断网前暂留阈值（微秒）；永久档返回 INT64_MAX（比较恒真=暂留永不过期） */
 inline int64_t NetGraceUs()
 {
+    if (net_grace_sec == kNetGraceSecForever) {
+        return INT64_MAX;
+    }
     return static_cast<int64_t>(net_grace_sec) * 1000000LL;
 }
 
