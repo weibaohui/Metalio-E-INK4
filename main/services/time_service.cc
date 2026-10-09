@@ -11,6 +11,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
+#include <freertos/idf_additions.h>   // xTaskCreateWithCaps
 
 #include "application.h"
 #include "board.h"
@@ -110,8 +111,13 @@ void TimeService_Init() {
         s_events = xEventGroupCreate();
     }
     if (s_task == nullptr && s_events != nullptr) {
-        // 内部 RAM 栈(对时回调里可能经 RTC 写碰 I2C/后续 flash 相关,不用 PSRAM 栈)
-        xTaskCreate(TimeTask, "time_svc", 4096, nullptr, 2, &s_task);
+        // 栈放 PSRAM:内部 RAM 预算紧张(4KB 挤占 httpd 可用连续块)。本任务只做
+        // 事件组等待 + I2C 写 RTC(驱动不关 cache),与 radio/GLM worker 同先例。
+        if (xTaskCreateWithCaps(TimeTask, "time_svc", 4096, nullptr, 2, &s_task,
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+            s_task = nullptr;
+            ESP_LOGE(TAG, "time_svc task create failed");
+        }
     }
     ESP_LOGI(TAG, "TimeService 初始化, 时区偏移=%d 分钟", s_tz_offset_min.load());
 }
