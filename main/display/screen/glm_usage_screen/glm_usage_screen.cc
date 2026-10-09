@@ -1,5 +1,6 @@
 #include "glm_usage_screen/glm_usage_screen.h"
 
+#include <atomic>
 #include <ctime>
 #include <cstdio>
 #include <cstring>
@@ -52,6 +53,10 @@ GlmUi s_ui;
 bool s_screen_alive = false;
 size_t s_rendered_context_count = 0;
 lv_timer_t* s_status_timer = nullptr;
+// 进/出屏代际:每次 Create/Unload 自增。离屏的 Stop 是异步 Schedule 到 main 的,
+// 快速"退出→重进"时旧的 Stop 可能在新会话重建 worker 后才跑到 —— 若不加守卫,
+// 它会把新会话的 worker 误杀(需求二"多试几次才有概率刷新"的另一根因)。
+std::atomic<int> s_open_gen{0};
 
 const lv_font_t* UiFont() {
     return fontpack_lv_font_ui();
@@ -282,8 +287,13 @@ void OnScreenUnloaded(lv_event_t* /*event*/) {
     s_rendered_context_count = 0;
     // 离页停掉 16K 常驻 worker,释放任务栈。Stop() 轮询任务退出会阻塞(最多 3s,
     // 等 worker 收尾),不能在 LVGL worker 上跑,故 Schedule 到 main 任务。
-    Application::GetInstance().Schedule([]() {
-        GlmUsageService::GetInstance().Stop();
+    // 代际守卫:若 Schedule 还没跑就又重进(Create 已把 s_open_gen 自增),这次
+    // 旧会话的 Stop 作废,worker 留给新会话复用 —— 不会误杀新 worker。
+    const int gen = ++s_open_gen;
+    Application::GetInstance().Schedule([gen]() {
+        if (s_open_gen.load() == gen) {
+            GlmUsageService::GetInstance().Stop();
+        }
     });
 }
 
@@ -424,8 +434,12 @@ lv_obj_t* GlmUsageScreen::Create() {
     s_rendered_context_count = 0;
     ScreenSetIsHome(false);
 
+    // 进屏自增代际:使任何还在路上的"旧会话 Stop"(异步 Schedule 到 main)失效。
+    ++s_open_gen;
+
     // 进页才启动 16K 常驻 worker(boot 期只 Init 注册工具+载入持久化)。
-    // Start() 不碰 NVS(inited_ 已 true),可在 LVGL worker 上直调。
+    // Start() 不碰 NVS(inited_ 已 true),可在 LVGL worker 上直调;且 Start 内部
+    // 已配置就置刷新位 —— 进屏即自动查询(需求二)。
     GlmUsageService::GetInstance().Start();
 
     lv_obj_t* screen = lv_obj_create(nullptr);

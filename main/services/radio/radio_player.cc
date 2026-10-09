@@ -226,6 +226,50 @@ private:
     int hist_valid_ = 0;
 };
 
+// ---- 收音机音质增强(需求三.4/三.7):AGC 削高补低 + 换台淡入 + 软限幅 ----
+// 只作用于收音机路径(OutputPcm),不动 TTS。16k 单声道 int16,在收音任务上跑,
+// float 运算(S3 有 FPU,960 样本/块极轻),无堆分配、有界耗时。
+class RadioAudioEnhancer {
+public:
+    // 换台/开播/重连时调用:重置淡入,避免音量突变"吓一跳"
+    void OnStreamStart() { fade_left_ = kFadeSamples; }
+
+    void Process(int16_t* s, size_t n) {
+        for (size_t i = 0; i < n; ++i) {
+            const float x = (float)s[i] / 32768.0f;   // -1..1
+            // 峰值包络:快攻慢放
+            const float a = x < 0 ? -x : x;
+            env_ += (a - env_) * (a > env_ ? kAttack : kRelease);
+            // AGC:把包络拉向 target —— 包络大则增益<1(削高),小则>1(补低)
+            float desired = 1.0f;
+            if (env_ > 1e-4f) desired = kTarget / env_;
+            if (desired > kMaxBoost) desired = kMaxBoost;
+            if (desired < kMinCut) desired = kMinCut;
+            smooth_gain_ += (desired - smooth_gain_) * kGainSmooth;  // 平滑防 pumping
+            // 淡入
+            float fade = 1.0f;
+            if (fade_left_ > 0) { fade = 1.0f - (float)fade_left_ / (float)kFadeSamples; fade_left_--; }
+            float y = x * smooth_gain_ * fade;
+            // 软限幅(先压到 ±0.98,防后续量化削顶)
+            if (y > 0.98f) y = 0.98f; else if (y < -0.98f) y = -0.98f;
+            const int v = (int)(y * 32767.0f);
+            s[i] = (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
+        }
+    }
+private:
+    static constexpr float kAttack = 0.4f;      // 包络快攻(跟上突响)
+    static constexpr float kRelease = 0.001f;   // 包络慢放(平稳回落)
+    static constexpr float kGainSmooth = 0.02f; // 增益平滑(防喘息感)
+    static constexpr float kTarget = 0.5f;      // 目标包络(约 -6dBFS)
+    static constexpr float kMaxBoost = 3.0f;    // 补低上限 ~+9.5dB
+    static constexpr float kMinCut = 0.35f;     // 削高下限 ~-9dB
+    static constexpr int kFadeSamples = 4000;   // 淡入 ~250ms @16k
+    float env_ = 0.0f;
+    float smooth_gain_ = 1.0f;
+    int fade_left_ = 0;
+};
+RadioAudioEnhancer s_enhancer;
+
 // 把 16k 单声道 PCM 送板载 codec。
 // 输出暂存:内部 RAM + TTS 同尺寸分片。
 // 实测二分结论:用 PSRAM 里的 16KB 大缓冲整块 i2s_channel_write 时,设备会在
@@ -247,6 +291,8 @@ void OutputPcm(std::vector<int16_t>& pcm) {
     // 在 i2s_channel_write(portMAX_DELAY) 上持着 codec 锁,写永不返回 ->
     // 锁永久占用 -> LVGL 刷新拿不到锁 -> 界面与 MCP 一起无响应。
     Application::GetInstance().GetAudioService().KeepOutputAlive();
+    // 音质增强(需求三.4/三.7):AGC 削高补低 + 换台淡入 + 软限幅,再分片喂 codec。
+    s_enhancer.Process(pcm.data(), pcm.size());
     size_t off = 0;
     while (off < pcm.size()) {
         const size_t n = std::min(kStageSamples, pcm.size() - off);
@@ -363,6 +409,12 @@ bool RunOneStream(const PlayReq& req, uint64_t seq) {
             break;
         }
 
+        // 未联网就直接失败,别去碰带 1s 超时的建连(省时间也省无效日志)。
+        if (!Board::GetInstance().IsNetworkReady()) {
+            SetSnapState(RADIO_ERROR, "未联网");
+            break;
+        }
+
         SetSnapState(RADIO_CONNECTING, nullptr);
         // 已知同时提供 http 明文源的台系,优先走明文:
         // 本机内部 RAM 实测仅剩 ~30KB、最大连续块 ~10KB,而一次 TLS 握手要
@@ -385,6 +437,22 @@ bool RunOneStream(const PlayReq& req, uint64_t seq) {
                 }
             }
         }
+        // 一.6 底层配合(防"连接出错死机"):https(TLS)握手峰值需 mbedtls in-content
+        // 16KB 连续内部块 + 若干工作区,还得给 lwIP/WiFi 留余量;不足时硬开 TLS 会把
+        // 网络栈饿死 -> 整机软死(CPU 在跑但 ping/TCP 全断)。进收音机虽已停语音管线
+        // 腾内存,仍可能不够。内存不足时把 https 降级为 http 明文再试:该台若有明文源
+        // 则照样能播,若无明文源 appfw 会干净报错(连接失败),而不是把整机拖死。
+        if (play_url.rfind("https://", 0) == 0) {
+            const size_t free_b = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+            constexpr size_t kTlsMinLargest = 20 * 1024;  // in-content 16KB 连续块 + 余量
+            constexpr size_t kTlsMinFree    = 28 * 1024;  // 握手峰值 + lwIP/WiFi 余量
+            if (largest < kTlsMinLargest || free_b < kTlsMinFree) {
+                ESP_LOGW(TAG, "内部内存不足(余%uB/最大块%uB),TLS 有风险,降级 http 明文",
+                         (unsigned)free_b, (unsigned)largest);
+                play_url = "http://" + play_url.substr(8);
+            }
+        }
         const appfw_stream_cfg_t scfg = {
             .url = play_url.c_str(),
             .playlist = playlist,
@@ -403,6 +471,7 @@ bool RunOneStream(const PlayReq& req, uint64_t seq) {
             break;
         }
         SetSnapState(RADIO_PLAYING, nullptr);
+        s_enhancer.OnStreamStart();   // 换台/开播/重连:淡入重置,避免音量突变(需求三.4)
         ESP_LOGI(TAG, "开播: %s (%s)", req.name.c_str(), appfw_stream_url(stream));
 
         int err_streak = 0;
@@ -477,6 +546,22 @@ void RadioTask(void*) {
         if (!have) {
             retry = 0;
             NetHold(false);   // 空闲:释放保网需求,让电源策略正常进待机省电
+            // 上一轮若是出错收尾(重连 3 次全败/建连失败),保留 RADIO_ERROR 给用户看,
+            // 别立刻刷成"已停止" —— 底部 footer 靠 RADIO_ERROR 显示失败原因(需求三.2
+            // "错误状态")。下次播放/切台时 RunOneStream 会置 CONNECTING 覆盖它。
+            // 锁外判定、锁外延时:持 s_snap_mutex 睡 150ms 会周期性堵死 LVGL 的
+            // radio_player_snapshot 与 MCP 状态查询(持锁睡眠反模式)。
+            {
+                bool keep_error = false;
+                {
+                    std::lock_guard<std::mutex> lock(s_snap_mutex);
+                    keep_error = (s_snap.state == RADIO_ERROR);
+                }
+                if (keep_error) {
+                    vTaskDelay(pdMS_TO_TICKS(150));
+                    continue;
+                }
+            }
             SetSnapState(RADIO_STOPPED, nullptr);
             vTaskDelay(pdMS_TO_TICKS(150));
             continue;
