@@ -123,10 +123,13 @@ void WifiBoard::StartNetwork() {
     wifi_station.Start();
 
     // 有已存 WiFi：等保网时长拿 IP；失败不自动 SoftAP，Pause STA（停扫），下次 EnsureNetworkReady 再拉
-    const int wait_ms = PowerPolicy::GetInstance().GetNetGraceSec() * 1000;
+    // 永久档(-1)此处仍按默认 30s：开机等待必须有界，AP 不在时不能 hang 住开机;
+    // "永久"只管开机后的空闲断网策略。
+    const int grace_s = PowerPolicy::GetInstance().GetNetGraceSec();
+    const int wait_ms = (grace_s > 0 ? grace_s : 30) * 1000;
     if (!wifi_station.WaitForConnected(wait_ms)) {
         ESP_LOGW(TAG, "WiFi not connected within net_grace %d s; skip auto SoftAP, pause STA",
-                 PowerPolicy::GetInstance().GetNetGraceSec());
+                 wait_ms / 1000);
         wifi_station.PauseForLp();
         return;
     }

@@ -185,7 +185,12 @@ bool ProvisioningStandbyGraceHoldsLocked()
     if (!UserInactiveLongEnoughLocked()) {
         return false;
     }
-    return InactiveUsLocked() < pwr::UserIdleToStandbyUs() + pwr::NetGraceUs();
+    // 永久档在配网/激活态按默认暂留计：此处暂留与待机是串行的，永久会让
+    // 配网页永远进不了待机（且 INT64_MAX 相加溢出）。正常空闲路径才是真永久。
+    const int64_t grace_us = pwr::net_grace_sec == pwr::kNetGraceSecForever
+        ? static_cast<int64_t>(pwr::kNetGraceSecDefault) * 1000000LL
+        : pwr::NetGraceUs();
+    return InactiveUsLocked() < pwr::UserIdleToStandbyUs() + grace_us;
 }
 
 bool ShouldStayInStandbyUiLocked()
@@ -325,7 +330,7 @@ int NormalizeStandbyToShutdownSec(int sec)
 
 int NormalizeNetGraceSec(int sec)
 {
-    if (sec == 30 || sec == 60 || sec == 120) {
+    if (sec == pwr::kNetGraceSecForever || sec == 30 || sec == 60 || sec == 120) {
         return sec;
     }
     return pwr::kNetGraceSecDefault;
