@@ -340,7 +340,11 @@ lv_obj_t* CreateInternal() {
     lv_obj_set_flex_flow(tab_col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(tab_col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(tab_col, kSettingsTabGap, 0);
-    lv_obj_clear_flag(tab_col, LV_OBJ_FLAG_SCROLLABLE);
+    // Tab 数超屏(12 个约 768px > 可视约 735px):开竖向滑动。
+    // 滑动与点按由 LVGL 原生区分——拖动超过 scroll limit 后会给被按下的
+    // 按钮发 LV_EVENT_PRESS_LOST,CLICKED 不再触发,滑动不会误切 Tab。
+    lv_obj_add_flag(tab_col, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(tab_col, LV_DIR_VER);
     lv_obj_clear_flag(tab_col, LV_OBJ_FLAG_CLICKABLE);
 
     for (int i = 0; i < kTabCount; ++i) {
