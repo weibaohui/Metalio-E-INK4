@@ -7,6 +7,7 @@
 #include "power_policy.h"
 #include "screen_common.h"
 #include "settings_about_tab.h"
+#include "settings_apps_tab.h"
 #include "settings_bluetooth_tab.h"
 #include "settings_common.h"
 #include "settings_conversation_tab.h"
@@ -39,7 +40,8 @@ enum class SettingsTab : int {
     kStorage = 6,
     kBluetooth = 7,
     kTest = 8,
-    kAbout = 9,  // 关于始终放最后
+    kApps = 9,
+    kAbout = 10,  // 关于始终放最后
 };
 
 struct TabEntry {
@@ -56,6 +58,7 @@ const char* TabNameConversation() { return Lang::Strings::SETTINGS_TAB_CONVERSAT
 const char* TabNameStorage() { return Lang::Strings::SETTINGS_TAB_STORAGE; }
 const char* TabNameBluetooth() { return Lang::Strings::SETTINGS_TAB_BLUETOOTH; }
 const char* TabNameTest() { return Lang::Strings::SETTINGS_TAB_TEST; }
+const char* TabNameApps() { return "应用"; }  // 新 Tab 暂不走 i18n(避免重新生成语言表)
 const char* TabNameAbout() { return Lang::Strings::SETTINGS_TAB_ABOUT; }
 
 // 关于 Tab 必须保持为数组最后一项
@@ -69,6 +72,7 @@ constexpr TabEntry kTabs[] = {
     {SettingsTab::kStorage, TabNameStorage},
     {SettingsTab::kBluetooth, TabNameBluetooth},
     {SettingsTab::kTest, TabNameTest},
+    {SettingsTab::kApps, TabNameApps},
     {SettingsTab::kAbout, TabNameAbout},
 };
 constexpr int kTabCount = sizeof(kTabs) / sizeof(kTabs[0]);
@@ -135,6 +139,9 @@ void ResetTab(SettingsTab id) {
         case SettingsTab::kTest:
             SettingsTestTab_Reset();
             break;
+        case SettingsTab::kApps:
+            SettingsAppsTab_Reset();
+            break;
         case SettingsTab::kAbout:
             SettingsAboutTab_Reset();
             break;
@@ -173,6 +180,9 @@ void BuildTab(SettingsTab id) {
             break;
         case SettingsTab::kTest:
             SettingsTestTab_Build(page);
+            break;
+        case SettingsTab::kApps:
+            SettingsAppsTab_Build(page);
             break;
         case SettingsTab::kAbout:
             SettingsAboutTab_Build(page);
