@@ -10,6 +10,7 @@
 #include "services/glm_usage/glm_usage_service.h"
 #include "services/radio/radio_mcp.h"
 #include "services/local_mcp/local_mcp_server.h"
+#include "services/time_service.h"
 #include "assets.h"
 #include "assistant_screen/assistant_screen.h"
 #include "a2ui_img_cache.h"
@@ -1128,6 +1129,9 @@ void Application::Start() {
     // worker 由 GLM 用量屏 Create 时 Start、Unload 时 Stop,实现"不进屏不占内存"。
     GlmUsageService::GetInstance().Init();
     LocalMcpServer::GetInstance().Start();
+    // 网络对时服务(需求一.1):读时区偏移 + 起后台任务,网络就绪后 SNTP 自动对时。
+    // Init 在 main 任务(内部栈)读 NVS,安全。
+    TimeService_Init();
 
     boot_ready_.store(true, std::memory_order_release);
 
