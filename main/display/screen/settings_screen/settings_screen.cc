@@ -12,7 +12,9 @@
 #include "settings_conversation_tab.h"
 #include "settings_haptic_tab.h"
 #include "settings_language_tab.h"
+#include "settings_mcp_tab.h"
 #include "settings_network_tab.h"
+#include "settings_time_tab.h"
 #include "settings_power_tab.h"
 #include "settings_storage_tab.h"
 #include "settings_test_tab.h"
@@ -39,7 +41,9 @@ enum class SettingsTab : int {
     kStorage = 6,
     kBluetooth = 7,
     kTest = 8,
-    kAbout = 9,  // 关于始终放最后
+    kTime = 9,
+    kMcp = 10,
+    kAbout = 11,  // 关于始终放最后
 };
 
 struct TabEntry {
@@ -56,6 +60,8 @@ const char* TabNameConversation() { return Lang::Strings::SETTINGS_TAB_CONVERSAT
 const char* TabNameStorage() { return Lang::Strings::SETTINGS_TAB_STORAGE; }
 const char* TabNameBluetooth() { return Lang::Strings::SETTINGS_TAB_BLUETOOTH; }
 const char* TabNameTest() { return Lang::Strings::SETTINGS_TAB_TEST; }
+const char* TabNameTime() { return "时间"; }  // 新 Tab 暂不走 i18n(避免重新生成语言表)
+const char* TabNameMcp() { return "MCP"; }  // 新 Tab 暂不走 i18n(避免重新生成语言表)
 const char* TabNameAbout() { return Lang::Strings::SETTINGS_TAB_ABOUT; }
 
 // 关于 Tab 必须保持为数组最后一项
@@ -69,6 +75,8 @@ constexpr TabEntry kTabs[] = {
     {SettingsTab::kStorage, TabNameStorage},
     {SettingsTab::kBluetooth, TabNameBluetooth},
     {SettingsTab::kTest, TabNameTest},
+    {SettingsTab::kTime, TabNameTime},
+    {SettingsTab::kMcp, TabNameMcp},
     {SettingsTab::kAbout, TabNameAbout},
 };
 constexpr int kTabCount = sizeof(kTabs) / sizeof(kTabs[0]);
@@ -135,6 +143,12 @@ void ResetTab(SettingsTab id) {
         case SettingsTab::kTest:
             SettingsTestTab_Reset();
             break;
+        case SettingsTab::kTime:
+            SettingsTimeTab_Reset();
+            break;
+        case SettingsTab::kMcp:
+            SettingsMcpTab_Reset();
+            break;
         case SettingsTab::kAbout:
             SettingsAboutTab_Reset();
             break;
@@ -173,6 +187,12 @@ void BuildTab(SettingsTab id) {
             break;
         case SettingsTab::kTest:
             SettingsTestTab_Build(page);
+            break;
+        case SettingsTab::kTime:
+            SettingsTimeTab_Build(page);
+            break;
+        case SettingsTab::kMcp:
+            SettingsMcpTab_Build(page);
             break;
         case SettingsTab::kAbout:
             SettingsAboutTab_Build(page);
