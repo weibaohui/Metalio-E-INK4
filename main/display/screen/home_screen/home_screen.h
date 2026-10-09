@@ -25,4 +25,7 @@ public:
     static bool IsAppEnabledByIndex(int index);        // 是否开启
     static bool IsAppMandatoryByIndex(int index);      // 是否永驻("设置")
     static void SetAppEnabled(int index, bool enabled);// 更新缓存+落盘(main)+刷新首页
+    // 按稳定 id 查询("glm"/"radio"/"cal"/...);未知 id 或未载入缓存视为开启(不误隐藏)。
+    // 供 boot 期 MCP 工具注册按开关门控:关掉的 APP 不注册。
+    static bool IsAppEnabledById(const char* id);
 };
