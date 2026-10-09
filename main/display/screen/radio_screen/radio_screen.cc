@@ -181,6 +181,8 @@ void OnPlayStopClicked(lv_event_t*) {
     }
 }
 
+void SyncStateLabels();   // 前置声明:OnVolumeClicked 在定义之前就要刷新音量读数
+
 void OnVolumeClicked(lv_event_t* e) {
     const uintptr_t delta = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
     auto* codec = Board::GetInstance().GetAudioCodec();
@@ -365,7 +367,7 @@ void SyncStateLabels() {
     if (auto* codec = Board::GetInstance().GetAudioCodec()) {
         vol = codec->output_volume();
     }
-    char state_buf[64];
+    char state_buf[128];   // state 可能来自 snap.err(最长 95 字节),64 会截断触发 -Werror=format-truncation
     snprintf(state_buf, sizeof(state_buf), "%s · 音量 %d%%", state, vol);
     lv_label_set_text(s_ui.state_lbl, state_buf);
     lv_label_set_text(s_ui.play_btn_lbl,
