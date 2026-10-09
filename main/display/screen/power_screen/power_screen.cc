@@ -118,7 +118,10 @@ lv_obj_t* MakeBigButton(lv_obj_t* parent, const char* text, lv_event_cb_t cb, lv
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_t* lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
-    lv_obj_set_style_text_font(lbl, fontpack_lv_font_get(34, 2), 0);
+    // 字库若无 34 规格,get 返回 NULL;NULL 字体会让 lv_text 测量死循环卡死
+    // LVGL worker(实测整机假死)——必须空守卫回退 UI 字体。
+    const lv_font_t* big_font = fontpack_lv_font_get(34, 2);
+    lv_obj_set_style_text_font(lbl, big_font != nullptr ? big_font : UiFont(), 0);
     lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
     lv_obj_center(lbl);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
