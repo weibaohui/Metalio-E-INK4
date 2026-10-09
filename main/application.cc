@@ -9,6 +9,7 @@
 #include "mcp_server.h"
 #include "services/glm_usage/glm_usage_service.h"
 #include "services/radio/radio_mcp.h"
+#include "services/calendar/calendar_mcp.h"
 #include "services/local_mcp/local_mcp_server.h"
 #include "services/syslog_sender.h"
 #include "services/time_service.h"
@@ -1125,6 +1126,7 @@ void Application::Start() {
     mcp_server.AddCommonTools();
     mcp_server.AddUserOnlyTools();
     RadioRegisterMcpTools();
+    CalendarRegisterMcpTools();   // 日历:远端 MCP 推送/同步日程(self.calendar.*)
     SyslogRegisterMcpTools();   // 需求一.2:syslog 的 MCP 配置接口(self.syslog.*)
     // Built-in application services register their MCP tools and resident
     // workers here; UI screens later attach to their observable state.

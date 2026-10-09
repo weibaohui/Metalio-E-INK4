@@ -5,6 +5,7 @@
 #include "assistant_screen/assistant_screen.h"
 #include "assets/lang_config.h"
 #include "book_screen/book_screen.h"
+#include "calendar_screen/calendar_screen.h"
 #include "cloud_screen/cloud_screen.h"
 #include "glm_usage_screen/glm_usage_screen.h"
 #include "haptic_feedback.h"
@@ -150,6 +151,7 @@ namespace
     const char *AppNameWallpaper() { return Lang::Strings::HOME_APP_WALLPAPER; }
     const char *AppNameCloud() { return Lang::Strings::HOME_APP_CLOUD; }
     const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
+    const char *AppNameCalendar() { return "日历"; }   // 新 APP 暂不走 i18n
     const char *AppNameTimeSync() { return "校时"; }   // 新 APP 暂不走 i18n
 
     constexpr AppEntry kApps[] = {
@@ -160,6 +162,8 @@ namespace
         {"cloud", "A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
         {"radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
         {"time", "A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create},
+        // 日历:暂无专用图标,先复用 task 占位(见 PR13 描述)
+        {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create},
         {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
@@ -172,7 +176,8 @@ namespace
         {"cloud", "A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
         {"radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
         {"time", "A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create},
-        {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
+        {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create},
+        {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create}
     };
 
     // 随 kApps 自动变长；页数 = ceil(总数 / 每页 12)
