@@ -15,6 +15,7 @@
 #include "assets.h"
 #include "assistant_screen/assistant_screen.h"
 #include "a2ui_img_cache.h"
+#include "home_screen/home_screen.h"
 #include "assistant_screen/assistant_chat_store.h"
 #include "boot_key_handler.h"
 #include "fontpack_lvgl.h"
@@ -1136,6 +1137,9 @@ void Application::Start() {
     // 网络对时服务(SNTP,需求一.1):读时区偏移 + 起后台任务,网络就绪后自动对时。
     // Init 在 main 任务(内部栈)读 NVS,安全。
     TimeService_Init();
+    // APP 开关(需求一.3):开机把 NVS 开关载入 RAM 缓存(main 任务,内部栈)。
+    // 必须早于首页首次渲染。
+    HomeScreen::InitAppToggles();
 
     boot_ready_.store(true, std::memory_order_release);
 
