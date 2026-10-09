@@ -39,7 +39,7 @@ constexpr lv_coord_t kCardRadius = 18;
 constexpr lv_coord_t kButtonH = 44;
 constexpr lv_coord_t kListRowH = 32;
 constexpr lv_coord_t kListRowGap = 4;
-constexpr int kRowsPerPage = 6;
+constexpr int kRowsPerPage = 10;  // 电台列表每页 10 行(需求:电台列表 6→10)
 constexpr const char* kNvsNs = "radio";
 
 struct RadioUi {
