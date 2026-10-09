@@ -13,6 +13,7 @@
 #include "assets.h"
 #include "assistant_screen/assistant_screen.h"
 #include "a2ui_img_cache.h"
+#include "home_screen/home_screen.h"
 #include "assistant_screen/assistant_chat_store.h"
 #include "boot_key_handler.h"
 #include "fontpack_lvgl.h"
@@ -1121,6 +1122,9 @@ void Application::Start() {
     // worker 由 GLM 用量屏 Create 时 Start、Unload 时 Stop,实现"不进屏不占内存"。
     GlmUsageService::GetInstance().Init();
     LocalMcpServer::GetInstance().Start();
+    // APP 开关(需求一.3):开机把 NVS 开关载入 RAM 缓存(main 任务,内部栈)。
+    // 必须早于首页首次渲染。
+    HomeScreen::InitAppToggles();
 
     boot_ready_.store(true, std::memory_order_release);
 
