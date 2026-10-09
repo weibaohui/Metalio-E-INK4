@@ -12,6 +12,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/idf_additions.h>   // xTaskCreateWithCaps / vTaskDeleteWithCaps
 #include <freertos/semphr.h>
 #include <esp_log.h>
 #include <esp_mac.h>
@@ -29,7 +30,7 @@ constexpr const char* TAG = "Syslog";
 constexpr const char* kNvsNs = "syslog";
 
 constexpr size_t kFormatCap = 256;   // 钩子内格式化上限(只上栈,超长截断)
-constexpr size_t kRingCap = 8192;    // 字节环(静态,约几十行日志)
+constexpr size_t kRingCap = 4096;    // 字节环(静态,内部 RAM 预算紧张,4K 约二十行日志)
 constexpr size_t kLineCap = 384;     // 单条 syslog 消息上限
 constexpr int kIdlePollMs = 100;
 constexpr int kReopenRetryMs = 5000;
@@ -254,7 +255,7 @@ void SenderTask(void*) {
     }
     CloseSock(&sock);
     s_task = nullptr;
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);   // 配对 WithCaps 创建,防 PSRAM 栈泄漏
 }
 
 void LoadHostname() {
@@ -303,7 +304,10 @@ void StartLocked() {
 
     if (s_task == nullptr) {
         s_running.store(true);
-        if (xTaskCreate(SenderTask, "syslog", 4096, nullptr, 1, &s_task) != pdPASS) {
+        // 栈放 PSRAM:内部 RAM 预算紧张(承载 httpd/lwip/WiFi),本任务只做
+        // socket 收发,与 radio 任务同先例。WithCaps 任务须配对 WithCaps 删除。
+        if (xTaskCreateWithCaps(SenderTask, "syslog", 4096, nullptr, 1, &s_task,
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
             s_task = nullptr;
             s_running.store(false);
             ESP_LOGE(TAG, "syslog sender task create failed");
