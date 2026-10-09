@@ -9,6 +9,7 @@
 #include "mcp_server.h"
 #include "services/glm_usage/glm_usage_service.h"
 #include "services/radio/radio_mcp.h"
+#include "services/calendar/calendar_ics.h"
 #include "services/calendar/calendar_mcp.h"
 #include "services/local_mcp/local_mcp_server.h"
 #include "services/syslog_sender.h"
@@ -1139,6 +1140,9 @@ void Application::Start() {
     // 网络对时服务(SNTP,需求一.1):读时区偏移 + 起后台任务,网络就绪后自动对时。
     // Init 在 main 任务(内部栈)读 NVS,安全。
     TimeService_Init();
+    // ICS 日历订阅:读 NVS 订阅 URL/最近同步时间(main 任务,内部栈,安全)。
+    // 不联网下载——首次进日历屏时按过期策略自动同步。
+    CalendarIcs_Init();
     // APP 开关(需求一.3):开机把 NVS 开关载入 RAM 缓存(main 任务,内部栈)。
     // 必须早于首页首次渲染。
     HomeScreen::InitAppToggles();

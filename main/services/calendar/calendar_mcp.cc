@@ -4,11 +4,13 @@
 #include "calendar_mcp.h"
 
 #include <cstdio>
+#include <ctime>
 #include <string>
 
 #include <esp_log.h>
 
 #include "calendar_store.h"
+#include "calendar_ics.h"
 #include "mcp_server.h"
 
 namespace {
@@ -89,6 +91,56 @@ void CalendarRegisterMcpTools() {
         [](const PropertyList&) -> ReturnValue {
             const int n = Calendar_ClearAll();
             return std::string("已清空全部日程(") + std::to_string(n) + " 条)";
+        });
+
+    // ---- ICS 日历订阅(如苹果法定节假日 https://calendars.icloud.com/holidays/cn_zh.ics) ----
+
+    mcp.AddTool("self.calendar.subscribe_ics",
+        "Subscribe the device calendar to an iCalendar(.ics) URL, e.g. Apple holidays "
+        "https://calendars.icloud.com/holidays/cn_zh.ics. Events are fetched in background, "
+        "saved to SD card and shown in the calendar app. Arg: url.",
+        PropertyList({Property("url", kPropertyTypeString)}),
+        [](const PropertyList& p) -> ReturnValue {
+            return CalendarIcs_Subscribe(p["url"].value<std::string>());
+        });
+
+    mcp.AddTool("self.calendar.unsubscribe_ics",
+        "Unsubscribe the ICS calendar and remove its events (manually added events are kept).",
+        PropertyList(),
+        [](const PropertyList&) -> ReturnValue {
+            return CalendarIcs_Unsubscribe();
+        });
+
+    mcp.AddTool("self.calendar.refresh_ics",
+        "Re-fetch the subscribed ICS calendar now (background).",
+        PropertyList(),
+        [](const PropertyList&) -> ReturnValue {
+            std::string msg;
+            CalendarIcs_Refresh(&msg);
+            return msg;
+        });
+
+    mcp.AddTool("self.calendar.ics_status",
+        "Get ICS subscription status: url, syncing state, event count, last sync time, last error.",
+        PropertyList(),
+        [](const PropertyList&) -> ReturnValue {
+            const CalendarIcsStatus st = CalendarIcs_GetStatus();
+            if (st.url.empty()) return std::string("未订阅日历;用 self.calendar.subscribe_ics 设置 URL");
+            std::string out = "订阅:" + st.url;
+            out += std::string("\n状态:") + (st.fetching ? "同步中" : "空闲");
+            out += "\n订阅日程:" + std::to_string(st.event_count) + " 条";
+            if (st.last_fetched > 0) {
+                struct tm tmv = {};
+                localtime_r(&st.last_fetched, &tmv);
+                char b[40];
+                snprintf(b, sizeof(b), "%04d-%02d-%02d %02d:%02d",
+                         tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min);
+                out += std::string("\n最近同步:") + b;
+            } else {
+                out += "\n最近同步:从未";
+            }
+            if (!st.last_error.empty()) out += "\n最近错误:" + st.last_error;
+            return out;
         });
 
     ESP_LOGI(TAG, "calendar MCP tools registered");

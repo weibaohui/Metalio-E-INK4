@@ -13,6 +13,7 @@ struct CalendarEvent {
     std::string date;    // "YYYY-MM-DD"
     std::string time;    // "HH:MM" 或空(全天)
     std::string title;   // 日程/会议标题
+    bool from_ics = false;  // true=订阅日历(ics)导入;false=手动/MCP 添加
 };
 
 // 首次访问时自动 mkdir + 从 SD 载入 RAM 缓存(幂等,任意任务可调)。
@@ -23,7 +24,13 @@ bool Calendar_AddEvent(const std::string& date, const std::string& time, const s
 int  Calendar_ClearAll();                 // 返回清掉的条数
 int  Calendar_RemoveForDate(const std::string& date);  // 返回删掉的条数
 
-// 读操作(走 RAM 缓存)
+// 订阅日历(ics)分组:整体替换/清空,独立 SD 文件(ics_events.json),
+// 与手动日程互不干扰;读操作自动合并两个分组。返回替换后的条数。
+int  Calendar_ReplaceIcsEvents(std::vector<CalendarEvent>&& events);
+int  Calendar_ClearIcsEvents();
+int  Calendar_IcsCount();
+
+// 读操作(走 RAM 缓存;手动日程在前,订阅日程在后,各自按 date+time 有序)
 std::vector<CalendarEvent> Calendar_GetAll();
 std::vector<CalendarEvent> Calendar_GetForDate(const std::string& date);
 bool Calendar_HasEvent(const std::string& date);
