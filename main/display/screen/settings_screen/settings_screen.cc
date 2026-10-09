@@ -10,7 +10,6 @@
 #include "settings_apps_tab.h"
 #include "settings_bluetooth_tab.h"
 #include "settings_common.h"
-#include "settings_conversation_tab.h"
 #include "settings_haptic_tab.h"
 #include "settings_language_tab.h"
 #include "settings_mcp_tab.h"
@@ -37,7 +36,6 @@ enum class SettingsTab : int {
     kLanguage = 2,
     kHaptic = 3,
     kPower = 4,
-    kConversation = 5,
     kStorage = 6,
     kBluetooth = 7,
     kTest = 8,
@@ -56,7 +54,6 @@ const char* TabNameTheme() { return Lang::Strings::SETTINGS_TAB_THEME; }
 const char* TabNameLanguage() { return Lang::Strings::SETTINGS_TAB_LANGUAGE; }
 const char* TabNameHaptic() { return Lang::Strings::SETTINGS_TAB_HAPTIC; }
 const char* TabNamePower() { return Lang::Strings::SETTINGS_TAB_POWER; }
-const char* TabNameConversation() { return Lang::Strings::SETTINGS_TAB_CONVERSATION; }
 const char* TabNameStorage() { return Lang::Strings::SETTINGS_TAB_STORAGE; }
 const char* TabNameBluetooth() { return Lang::Strings::SETTINGS_TAB_BLUETOOTH; }
 const char* TabNameTest() { return Lang::Strings::SETTINGS_TAB_TEST; }
@@ -71,7 +68,6 @@ constexpr TabEntry kTabs[] = {
     {SettingsTab::kLanguage, TabNameLanguage},
     {SettingsTab::kHaptic, TabNameHaptic},
     {SettingsTab::kPower, TabNamePower},
-    {SettingsTab::kConversation, TabNameConversation},
     {SettingsTab::kStorage, TabNameStorage},
     {SettingsTab::kBluetooth, TabNameBluetooth},
     {SettingsTab::kTest, TabNameTest},
@@ -131,9 +127,6 @@ void ResetTab(SettingsTab id) {
         case SettingsTab::kPower:
             SettingsPowerTab_Reset();
             break;
-        case SettingsTab::kConversation:
-            SettingsConversationTab_Reset();
-            break;
         case SettingsTab::kStorage:
             SettingsStorageTab_Reset();
             break;
@@ -175,9 +168,6 @@ void BuildTab(SettingsTab id) {
             break;
         case SettingsTab::kPower:
             SettingsPowerTab_Build(page);
-            break;
-        case SettingsTab::kConversation:
-            SettingsConversationTab_Build(page);
             break;
         case SettingsTab::kStorage:
             SettingsStorageTab_Build(page);
@@ -240,9 +230,6 @@ void ShowTab(int index) {
     const SettingsTab id = kTabs[index].id;
     BuildTab(id);
 
-    if (id == SettingsTab::kConversation) {
-        SettingsConversationTab_OnActivated();
-    }
     if (id == SettingsTab::kBluetooth) {
         SettingsBluetoothTab_OnActivated();
     }
