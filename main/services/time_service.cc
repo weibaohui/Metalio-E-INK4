@@ -173,7 +173,7 @@ std::string TimeService_NowText() {
     if (local.tm_year + 1900 < 2025) {
         return "--";
     }
-    char buf[24];
+    char buf[40];   // 年份字段理论可达 11 字节,24 会被 -Werror=format-truncation 拦下
     snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d",
              local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
              local.tm_hour, local.tm_min);
