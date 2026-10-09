@@ -47,12 +47,14 @@ constexpr SecOption kNetGraceOptions[] = {
     {30},
     {60},
     {120},
+    {-1}, // 永久:空闲不断网(浅睡待机仍会断)
 };
 constexpr int kNetGraceCount = sizeof(kNetGraceOptions) / sizeof(kNetGraceOptions[0]);
 
 const char* SecOptionTitle(int sec) {
     switch (sec) {
         case 0:
+        case -1:   // 保网时长"永久":复用"永不"文案(永不主动断网)
             return Lang::Strings::SETTINGS_POWER_OFF_NEVER;
         case 30:
             return Lang::Strings::SETTINGS_POWER_30_SEC;
