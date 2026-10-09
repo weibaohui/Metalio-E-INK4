@@ -10,6 +10,7 @@
 #include "glm_usage_screen/glm_usage_screen.h"
 #include "haptic_feedback.h"
 #include "lv_adapter_display.h"
+#include "power_screen/power_screen.h"
 #include "radio_screen/radio_screen.h"
 #include "screen_common.h"
 #include "settings.h"
@@ -153,6 +154,7 @@ namespace
     const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
     const char *AppNameCalendar() { return "日历"; }   // 新 APP 暂不走 i18n
     const char *AppNameTimeSync() { return "校时"; }   // 新 APP 暂不走 i18n
+    const char *AppNamePower() { return "电源"; }   // 新 APP 暂不走 i18n
 
     constexpr AppEntry kApps[] = {
         {"glm", "A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
@@ -164,6 +166,7 @@ namespace
         {"time", "A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create},
         // 日历:暂无专用图标,先复用 task 占位(见 PR13 描述)
         {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create},
+        {"power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
         {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
@@ -177,6 +180,7 @@ namespace
         {"radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
         {"time", "A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create},
         {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create},
+        {"power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
         {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create}
     };
 
