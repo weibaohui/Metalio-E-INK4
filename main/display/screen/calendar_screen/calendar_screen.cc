@@ -60,7 +60,7 @@ time_t YmdToNoonEpoch(int y, int m, int d) {
     return mktime(&tmv);   // TZ=GMT+0:无 DST 边缘问题
 }
 std::string YmdToStr(int y, int m, int d) {
-    char b[12]; snprintf(b, sizeof(b), "%04d-%02d-%02d", y, m, d); return b;
+    char b[40]; snprintf(b, sizeof(b), "%04d-%02d-%02d", y, m, d); return b;   // 40:年份字段理论 11 字节,-Werror 防截断
 }
 int DaysInMonth(int y, int m) {
     static const int dm[] = {31,28,31,30,31,30,31,31,30,31,30,31};
@@ -208,7 +208,7 @@ void BuildMonthGrid(lv_coord_t cell_w) {
             const std::string dstr = YmdToStr(cy, cm, day);
             const bool is_today = (dstr == today);
             const bool has_ev = Calendar_HasEvent(dstr);
-            char txt[12]; snprintf(txt, sizeof(txt), "%d%s", day, has_ev ? "·" : "");
+            char txt[24]; snprintf(txt, sizeof(txt), "%d%s", day, has_ev ? "·" : "");   // 24:日号(理论 11)+·(3)+NUL,-Werror 防截断
             if (is_today) {
                 lv_obj_set_style_bg_color(cell, lv_color_black(), 0);
                 lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
