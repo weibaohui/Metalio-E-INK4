@@ -263,9 +263,9 @@ void OnScopeClicked(lv_event_t*) {
     s_fav_only = !s_fav_only;
     s_page = 0;
     if (s_ui.scope_btn_lbl != nullptr) {
-        // 按钮文字显示"点它将去哪"(动作),而非当前所在视图:
-        // 全部视图下显示"收藏"(点了进收藏夹);收藏夹里显示"全部"(点了返回)。
-        lv_label_set_text(s_ui.scope_btn_lbl, s_fav_only ? "全部" : "收藏");
+        // 按钮固定显示"收藏夹"(功能名):点了在 全部列表 ↔ 收藏夹 之间切换,
+        // 当前在哪个视图由列表内容与页码自明。
+        lv_label_set_text(s_ui.scope_btn_lbl, "收藏夹");
     }
     RefreshList();
 }
@@ -394,8 +394,8 @@ void OnTimer(lv_timer_t*) { SyncStateLabels(); }
 
 bool OnVkKey(const char* key) {
     if (key == nullptr || !s_alive) return false;
-    // 实体键(音量+/音量-,主板在收音机屏活跃时派发 vk_prev/vk_next)与触摸
-    // vk 区统一改为"切上一台/下一台",不再翻列表页(列表翻页用屏内 </> 按钮)。
+    // 盖板触摸 vk_prev/vk_next 在收音机屏=切上一台/下一台(实体音量键仍调音量,
+    // 不经此处);列表翻页用屏内 </> 按钮。
     // return true 消费掉,避免 vk_prev 落到 DispatchDefault 的"返回上级"。
     if (strcmp(key, "vk_prev") == 0) {
         StepStation(-1);
@@ -423,8 +423,6 @@ void OnScreenUnloaded(lv_event_t*) {
 }
 
 }  // namespace
-
-bool RadioScreen::IsActive() { return s_alive; }
 
 lv_obj_t* RadioScreen::Create() {
     s_ui = {};
@@ -506,8 +504,8 @@ lv_obj_t* RadioScreen::Create() {
     lv_obj_set_style_text_font(s_ui.page_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.page_lbl, lv_color_black(), 0);
     MakeButton(row3, ">", 90, OnPageClicked, (void*)1);
-    // 默认显示"全部"列表;按钮文字=动作目标(点了进收藏夹),故初始为"收藏"。
-    s_ui.scope_btn_lbl = MakeButton(row3, "收藏", 110, OnScopeClicked, nullptr);
+    // 默认显示"全部"列表;按钮固定叫"收藏夹",点了在 全部 ↔ 收藏夹 间切换。
+    s_ui.scope_btn_lbl = MakeButton(row3, "收藏夹", 110, OnScopeClicked, nullptr);
 
     // 电台列表(6 行整页重画,不滚动)
     s_ui.list = lv_obj_create(body);

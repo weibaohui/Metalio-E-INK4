@@ -23,7 +23,6 @@
 #include "SimpleUart.hpp"
 #include "display/screen/bluetooth_screen/bluetooth_screen.h"
 #include "display/screen/book_screen/book_screen.h"
-#include "display/screen/radio_screen/radio_screen.h"
 #include "cx25601n.h"
 #include "pcf8563.h"
 #include "sc7a20h.h"
@@ -684,11 +683,6 @@ private:
                     VkKey_Dispatch("vk_prev");
                     return;
                 }
-                // 收音机屏:音量+实体键切上一台(屏内"音量±"按钮仍调音量)
-                if (RadioScreen::IsActive()) {
-                    VkKey_Dispatch("vk_prev");
-                    return;
-                }
                 auto* codec = GetAudioCodec();
                 int volume = codec->output_volume() + 10;
                 if (volume > 100) {
@@ -737,11 +731,6 @@ private:
                 }
                 PowerPolicy::GetInstance().NotifyUserActivity();
                 if (BookScreen::IsReadingActive()) {
-                    VkKey_Dispatch("vk_next");
-                    return;
-                }
-                // 收音机屏:音量-实体键切下一台(屏内"音量±"按钮仍调音量)
-                if (RadioScreen::IsActive()) {
                     VkKey_Dispatch("vk_next");
                     return;
                 }
