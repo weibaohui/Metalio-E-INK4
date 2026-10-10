@@ -1,6 +1,8 @@
 #include "home_screen.h"
 
+#include "ai_voice_chat_screen/ai_voice_chat_screen.h"
 #include "application.h"
+#include "services/ai_chat/ai_chat_service.h"
 #include "home_screen/home_hero.h"
 #include "assistant_screen/assistant_screen.h"
 #include "assets/lang_config.h"
@@ -162,6 +164,7 @@ namespace
     const char *AppNameTimeSync() { return "校时"; }   // 新 APP 暂不走 i18n
     const char *AppNamePower() { return "电源"; }   // 新 APP 暂不走 i18n
     const char *AppNameSysInfo() { return "系统信息"; }   // 新 APP 暂不走 i18n
+    const char *AppNameAiChat() { return "AI 对话"; }   // 新 APP 暂不走 i18n
 
     constexpr AppEntry kApps[] = {
         {"glm", "A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
@@ -175,16 +178,17 @@ namespace
         {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create, CalendarRegisterMcpTools},
         {"power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
         {"info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create},
+        {"aichat", "A:ic_app_home_buddy.spng", AppNameAiChat, AiVoiceChatScreen::Create, AiChat_BootRegister},
         {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
     // 斜切主题的应用表(§3.1):与主表同一份数据,仅按设计稿重排;条目 constexpr
     // 引用主表,不再手抄第二份——此前"斜切丢系统信息"的合并事故就是两张表
     // 手抄失步造成的。新 APP 只要在 kApps 加一行,并在下方索引列表里插入即可。
-    // 索引对应 kApps:glm asst book wall cloud radio time cal power info set
+    // 索引对应 kApps:glm asst book wall cloud radio time cal power info aichat set
     constexpr AppEntry kSlashApps[] = {
         kApps[2], kApps[3], kApps[1], kApps[0], kApps[4], kApps[5],
-        kApps[6], kApps[7], kApps[8], kApps[9], kApps[10],
+        kApps[6], kApps[7], kApps[8], kApps[9], kApps[10], kApps[11],
     };
 
     // 防回归:斜切表必须恰好覆盖主表全部 id(static_assert 编译期拦截失步)
