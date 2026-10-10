@@ -262,3 +262,37 @@ Init（boot·main 任务·可读 NVS）/ Start（进屏·LVGL 任务·不碰 fla
 
 顺带发现:cloud_screen.cc 的 ShowDownloadDialog/ShowActionDialog 已无调用
 (编译警告既有,自开源初始提交就在),列入下轮死代码清理。
+
+## 跟进 5(2026-10-10 第四批落地,§2.3 + §2.2 收官)
+
+**§2.3 SafeSettings——落地**(feat/safe-settings → main@26da95b):
+- 守卫内置 Settings 类本身(含 ctor 的 nvs_open/dtor 的 commit),30 个调用文件
+  零改动自动受保护。内部栈(含 main)零开销直访;PSRAM 栈经 esp_ptr_external_ram
+  探测后转发 main 任务同步执行,超时 3s 按默认值返回。
+- 转发状态双方接力生命周期:超时方置 timed_out 脱手,迟到方收尾;正常路径双方
+  fetch_add 最后一个清理——超时/迟到执行之间无 UAF。main 卡死 3s 的病态下整体
+  泄漏换安全(注释写明)。
+- 验证:构建 + 刷机启动干净;转发路径待首个 PSRAM worker 实际写设置时在
+  D 级日志("PSRAM 栈 NVS ... 已转发")可见。
+
+**§2.2 HTTP helper——收官**(main@fc5ed5b):
+- ota CheckVersion/Activate 迁 helper(补上原缺失的超时;身份头改显式列表);
+  task_screen HttpJson 迁 helper(GET×2/POST×2/DELETE×1 五调用点);
+  删 SetupHttp 死代码。
+- **手写 HTTP 终态清单(不再收拢)**:http_download_file/ota Upgrade(流式落盘/
+  刷写)、mcp snapshot(multipart 上传)、mcp preview_image(二进制裸 buffer;
+  其无上限 Content-Length 分配是独立风险,待单独处理)、assistant 上传/uvc
+  Explain(multipart+chunked)、assets(flash 流式)、push_resources×2 与
+  book_cloud_library(DownloadGate 硬关断语义)、a2ui(原始 SPIRAM buffer +
+  区分错误码契约)。
+- 底层事实确认:http_client.cc 只在 content 非空时发 Content-Length,
+  空 SetContent("") 对 GET/DELETE 无副作用,对 POST/PUT 正是防挂死特判。
+
+**累计净删:** ~460 行重复样板;§2.2/§2.3/§3.2 三项机制化完成后,
+"忘配对自删/NVS 错任务栈/手写 HTTP 缺超时无上限"三类事故从机制上绝迹。
+
+**剩余待办(更新):** §2.8 boot 表驱动、§3.1 APP 注册表完整版、§3.4 服务生命周期、
+§3.3 补全(network_screen MakeBtn/MakeSection 等)、mcp preview_image 上限、
+cloud_screen 两个无调用 dialog 函数清理、§1.8 对话 Tab 文案(随语言表重生成);
+高风险 §1.1 唤醒词删除 + §1.7 boards/common 条件编译——前置百问通话 AEC 实测
+(设备已刷最新固件,等用户按 PTT 实测);§2.4 sys_mon 降频(发布准备期)。
