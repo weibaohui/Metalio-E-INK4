@@ -16,6 +16,7 @@
 #include "screen_common.h"
 #include "services/calendar/calendar_ics.h"
 #include "services/calendar/calendar_store.h"
+#include "services/date_utils.h"
 #include "vk_key_handler.h"
 
 namespace {
@@ -48,31 +49,12 @@ void DisableScroll(lv_obj_t* o) { lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE); 
 // ---- 日期工具 ----
 time_t NowEpoch() { return time(nullptr); }
 
-void EpochToYmd(time_t t, int& y, int& m, int& d) {
-    struct tm tmv = {};
-    localtime_r(&t, &tmv);
-    y = tmv.tm_year + 1900; m = tmv.tm_mon + 1; d = tmv.tm_mday;
-}
-time_t YmdToNoonEpoch(int y, int m, int d) {
-    struct tm tmv = {};
-    tmv.tm_year = y - 1900; tmv.tm_mon = m - 1; tmv.tm_mday = d; tmv.tm_hour = 12;
-    return mktime(&tmv);   // TZ=GMT+0:无 DST 边缘问题
-}
-std::string YmdToStr(int y, int m, int d) {
-    char b[40]; snprintf(b, sizeof(b), "%04d-%02d-%02d", y, m, d); return b;   // 40:年份字段理论 11 字节,-Werror 防截断
-}
-int DaysInMonth(int y, int m) {
-    static const int dm[] = {31,28,31,30,31,30,31,31,30,31,30,31};
-    if (m == 2) { const bool leap = (y%4==0 && y%100!=0) || (y%400==0); return leap ? 29 : 28; }
-    return dm[m-1];
-}
-// 0=周一 .. 6=周日
-int WeekdayMonFirst(int y, int m, int d) {
-    struct tm tmv = {};
-    tmv.tm_year = y-1900; tmv.tm_mon = m-1; tmv.tm_mday = d; tmv.tm_hour = 12;
-    mktime(&tmv);            // tm_wday 与时区无关
-    return (tmv.tm_wday + 6) % 7;
-}
+// 换算公共件见 services/date_utils.h(对拍固化 tools/calendar_grid_check)
+using date_utils::EpochToYmd;
+using date_utils::YmdToNoonEpoch;
+using date_utils::YmdToStr;
+using date_utils::DaysInMonth;
+using date_utils::WeekdayMonFirst;
 
 // ---- UI 元素 ----
 // 选中某天 → 底部日程区显示
