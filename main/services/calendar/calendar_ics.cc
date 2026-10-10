@@ -11,16 +11,18 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/idf_additions.h>   // xTaskCreatePinnedToCoreWithCaps / vTaskDeleteWithCaps
 #include <freertos/task.h>
 #include <zlib.h>   // espressif__zlib 已随 reader 链接;苹果日历服务器恒回 gzip,须解压
 
+#include "api_http.h"
 #include "application.h"
 #include "board.h"
 #include "calendar_store.h"
 #include "power_policy.h"
+#include "services/date_utils.h"
 #include "services/time_service.h"
 #include "settings.h"
+#include "utils/psr_worker.h"
 
 namespace {
 
@@ -51,22 +53,10 @@ bool s_fetching = false;
 bool s_inited = false;
 void (*s_changed_cb)() = nullptr;
 
-// ---- 时间工具(设备为"本地历元"模型:TZ=GMT+0,epoch 即本地民用时) ----
-void EpochToYmd(time_t t, int& y, int& m, int& d) {
-    struct tm tmv = {};
-    localtime_r(&t, &tmv);
-    y = tmv.tm_year + 1900; m = tmv.tm_mon + 1; d = tmv.tm_mday;
-}
-time_t YmdToNoonEpoch(int y, int m, int d) {
-    struct tm tmv = {};
-    tmv.tm_year = y - 1900; tmv.tm_mon = m - 1; tmv.tm_mday = d; tmv.tm_hour = 12;
-    return mktime(&tmv);
-}
-std::string YmdToStr(int y, int m, int d) {
-    char b[40];   // 年份字段理论 11 字节,-Werror 防截断
-    snprintf(b, sizeof(b), "%04d-%02d-%02d", y, m, d);
-    return b;
-}
+// 日期工具见 services/date_utils.h(本地历元模型;对拍固化 tools/calendar_grid_check)
+using date_utils::EpochToYmd;
+using date_utils::YmdToNoonEpoch;
+using date_utils::YmdToStr;
 
 // ---- ICS 解析 ----
 // 折行展开:以空格/制表符开头的行是上一行的续行(RFC5545 §3.1)。
@@ -459,9 +449,7 @@ void FetchWorker(void* /*arg*/) {
         SetLastError("网络未就绪");
         goto done;
     }
-    if (url.rfind("https://", 0) == 0 &&
-        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) <
-            kTlsMinInternalBlock) {
+    if (url.rfind("https://", 0) == 0 && !api::TlsPreflightOk(kTlsMinInternalBlock)) {
         SetLastError("内部 RAM 不足,HTTPS 握手无法完成;请关闭其他应用后重试");
         goto done;
     }
@@ -504,7 +492,7 @@ done:
         std::lock_guard<std::mutex> lock(s_mutex);
         s_fetching = false;
     }
-    vTaskDeleteWithCaps(nullptr);   // WithCaps 创建必须配对 WithCaps 自删
+    // return 即自动自删(SpawnPsrWorker 包装,勿再 vTaskDeleteWithCaps)
 }
 
 }  // namespace
@@ -585,12 +573,10 @@ bool CalendarIcs_Refresh(std::string* out_msg) {
         s_fetching = true;
     }
 
-    // PSRAM 栈:内部 RAM 精贵,https 在 PSRAM 栈任务上已有 GLM/radio 先例。
-    // 工作线程只碰 SD/RAM,不碰 NVS/flash;自删用 vTaskDeleteWithCaps。
-    const BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
-        FetchWorker, "cal_ics", 16384, nullptr, tskIDLE_PRIORITY + 1, nullptr, 0,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (ok != pdPASS) {
+    // PSRAM 栈(统一入口 SpawnPsrWorker):工作线程只碰 SD/RAM,不碰 NVS/flash;
+    // 返回即自动自删。
+    if (!SpawnPsrWorker("cal_ics", 16384, tskIDLE_PRIORITY + 1, FetchWorker,
+                        nullptr, nullptr, 0)) {
         std::lock_guard<std::mutex> lock(s_mutex);
         s_fetching = false;
         s_last_error = "同步任务启动失败(内存不足)";

@@ -12,7 +12,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
-#include <freertos/idf_additions.h>   // xTaskCreatePinnedToCoreWithCaps / vTaskDeleteWithCaps
+#include "utils/psr_worker.h"
 #include <mbedtls/base64.h>
 #include <mbedtls/md.h>
 
@@ -604,14 +604,13 @@ void GlmUsageService::Worker() {
         }
         FetchOnce();
     }
-    // 退出前自清 worker_ 句柄,随后 vTaskDelete 自删。Stop 靠轮询 worker_==nullptr
-    // 判断已收尾 —— 不能对已自删任务调 eTaskGetState(其 TCB 可能已被 idle 任务
-    // 回收,读悬空句柄即读已释放内存,会崩)。
+    // 退出前自清 worker_ 句柄;Stop 靠轮询 worker_==nullptr 判断已收尾 —— 不能对
+    // 已自删任务调 eTaskGetState(其 TCB 可能已被 idle 任务回收,读悬空句柄即读
+    // 已释放内存,会崩)。return 后由 SpawnPsrWorker 包装层 vTaskDeleteWithCaps 自删。
     {
         std::lock_guard<std::mutex> lock(mutex_);
         worker_ = nullptr;
     }
-    vTaskDeleteWithCaps(nullptr);   // WithCaps(PSRAM 栈)任务必须配对删除,纯 vTaskDelete 泄漏栈
 }
 
 void GlmUsageService::RegisterMcpTools() {
@@ -805,18 +804,14 @@ void GlmUsageService::Start() {
     xEventGroupClearBits(event_group_, kStopBit);
 
     auto* service = this;
-    // 栈放 PSRAM:16KB 连续内部 RAM 在 syslog 环(8KB)+time_svc(4KB)加入后
-    // 常态分配失败(实测 "resident worker start failed"),GLM 屏整屏不可用。
-    // 先例:radio 任务同为 PSRAM 栈且跑完整 https 流。WithCaps 任务自删必须
-    // 配对 vTaskDeleteWithCaps(见 Worker 末尾)。
-    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
-        [](void* context) {
-            static_cast<GlmUsageService*>(context)->Worker();
-        },
-        "glm_usage", 16384, service, tskIDLE_PRIORITY + 2, &worker_, 0,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (ok != pdPASS) {
-        worker_ = nullptr;
+    // 栈放 PSRAM(统一入口 SpawnPsrWorker):16KB 连续内部 RAM 在 syslog 环(8KB)
+    // +time_svc(4KB)加入后常态分配失败(实测 "resident worker start failed")。
+    // 先例:radio 任务同为 PSRAM 栈且跑完整 https 流。Worker return 即自动自删。
+    if (!SpawnPsrWorker("glm_usage", 16384, tskIDLE_PRIORITY + 2,
+                        [](void* context) {
+                            static_cast<GlmUsageService*>(context)->Worker();
+                        },
+                        service, &worker_, 0)) {
         // 创建失败(内部 RAM 不足/碎片化)要落进状态,否则 UI 只显示默认的
         // "尚未查询",用户看不出是任务没起来。已在 mutex_ 内,可直接写 status_。
         status_.last_ok = false;
