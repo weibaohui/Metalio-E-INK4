@@ -230,6 +230,21 @@ inline HttpReply HttpGetString(const std::string& url, const HttpFetchOptions& o
     return HttpFetch("GET", url, std::string(), opts, extra_headers);
 }
 
+// 二进制版:图片等非文本响应用这个。注意大分配随 CONFIG_SPIRAM_USE_MALLOC 落
+// PSRAM;body→vector 有一次拷贝,2MB 级峰值可接受。硬关断式取消(另一线程
+// CloseHttp)请保留手写 DownloadGate 路径,这里只有逐块协作式取消。
+inline bool HttpGetBytes(const std::string& url, std::vector<uint8_t>& out,
+                         const HttpFetchOptions& opts = {},
+                         const HeaderList& extra_headers = {}) {
+    out.clear();
+    HttpReply rep = HttpGetString(url, opts, extra_headers);
+    if (!rep.ok) {
+        return false;
+    }
+    out.assign(rep.body.begin(), rep.body.end());
+    return !out.empty();
+}
+
 inline HttpReply HttpPostJson(const std::string& url, std::string json_body,
                               const HttpFetchOptions& opts = {},
                               const HeaderList& extra_headers = {}) {
