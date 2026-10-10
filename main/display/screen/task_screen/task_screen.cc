@@ -814,37 +814,18 @@ bool HttpJson(const char* method, const std::string& url, std::string& body_out,
         err_out = Lang::Strings::TASK_NET_NOT_READY;
         return false;
     }
-    auto network = Board::GetInstance().GetNetwork();
-    if (network == nullptr) {
-        err_out = Lang::Strings::TASK_NO_NETWORK;
+    api::HttpFetchOptions opts;
+    opts.timeout_ms = kHttpTimeoutMs;
+    // helper 内置了"空 body 也 SetContent"特判(POST/PUT 防 chunked 挂死)和
+    // 公共头;GET/DELETE 不受影响。5 个调用点(GET×2/POST×2/DELETE×1)都走这里。
+    const api::HttpReply rep = api::HttpFetch(method != nullptr ? method : "GET", url,
+                                              std::string(), opts);
+    if (!rep.ok) {
+        err_out = rep.status == 0 ? std::string(Lang::Strings::TASK_CONN_FAIL)
+                                  : std::string(Lang::Strings::TASK_REQUEST_FAIL);
         return false;
     }
-    auto http = network->CreateHttp(0);
-    if (http == nullptr) {
-        err_out = Lang::Strings::TASK_CONN_FAIL;
-        return false;
-    }
-    http->SetTimeout(kHttpTimeoutMs);
-    api::ApplyCommonHeaders(http);
-    // 空 POST/PUT 必须 SetContent("")，否则 HttpClient 走 chunked 且不发结束块，服务端一直等 body
-    if (method != nullptr &&
-        (std::strcmp(method, "POST") == 0 || std::strcmp(method, "PUT") == 0)) {
-        http->SetContent(std::string());
-    }
-    api::LogHttpRequest(TAG, method, url);
-    if (!http->Open(method, url)) {
-        err_out = Lang::Strings::TASK_REQUEST_FAIL;
-        api::LogHttpResponse(TAG, -1, err_out);
-        return false;
-    }
-    const int status = http->GetStatusCode();
-    body_out = http->ReadAll();
-    http->Close();
-    api::LogHttpResponse(TAG, status, api::RedactClawUrlsForLog(body_out));
-    if (status < 200 || status >= 300) {
-        err_out = body_out.empty() ? ("HTTP " + std::to_string(status)) : Lang::Strings::TASK_REQUEST_FAIL;
-        return false;
-    }
+    body_out = std::move(rep.body);
     return true;
 }
 
