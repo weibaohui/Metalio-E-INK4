@@ -23,6 +23,7 @@
 #include "haptic_feedback.h"
 #include "power_policy.h"
 #include "screen_common.h"
+#include "utils/psr_worker.h"
 #include "vk_key_handler.h"
 #include "vk_page_repeat.h"
 #include "assets/lang_config.h"
@@ -1191,7 +1192,7 @@ void BatchTask(void* arg) {
         strlcpy(msg->err, work->op == BatchOp::kComplete ? Lang::Strings::TASK_NO_COMPLETABLE : Lang::Strings::TASK_SELECT_FIRST,
                 sizeof(msg->err));
     } else {
-        // 整批保网（须在 vTaskDelete 前 Release，勿跨 delete 用 RAII）
+        // 整批保网（须在任务 return 自删前 Release，勿跨 delete 用 RAII）
         {
             PowerNeedHold hold_net(PowerNeed::OtaDownload);
             if (!Board::GetInstance().EnsureNetworkReady()) {
@@ -1232,7 +1233,6 @@ void BatchTask(void* arg) {
         delete msg;
         s_busy.store(false);
     }
-    vTaskDelete(nullptr);
 }
 
 void ScheduleBatch(BatchOp op) {
@@ -1266,9 +1266,8 @@ void ScheduleBatch(BatchOp op) {
     }
     s_busy.store(true);
     SetStatusText(op == BatchOp::kDelete ? Lang::Strings::TASK_BATCH_REMOVING : Lang::Strings::TASK_BATCH_COMPLETING);
-    if (xTaskCreatePinnedToCoreWithCaps(BatchTask, "task_batch", kBatchWorkerStack, work,
-                                        tskIDLE_PRIORITY + 2, &s_batch_task, 0,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+    if (!SpawnPsrWorker("task_batch", kBatchWorkerStack, tskIDLE_PRIORITY + 2, BatchTask, work,
+                        &s_batch_task, 0)) {
         delete work;
         s_batch_task = nullptr;
         s_busy.store(false);
