@@ -175,3 +175,18 @@ Init（boot·main 任务·可读 NVS）/ Start（进屏·LVGL 任务·不碰 fla
 剩余待办优先级不变:§3.3 屏幕骨架共享件(MakeLabel/MakeBtn 各屏重定义)、
 §3.1 APP 注册表、§3.5 设置 Tab 表驱动 → 中风险框架项;§1.1 唤醒词删除 →
 高风险,先真机验证百问通话 AEC。
+
+## 跟进 2(2026-10-10 第二批,PR #33~#36)
+
+- **§1.2-1.6 零风险删除** → PR #33:7 个死图标、esp_debug_cloud(379 行)、
+  esp32_camera、#if 0 拍照工具、bread 板 Kconfig 壳,净删 1546 行。
+- **§3.3 屏幕骨架共享件** → PR #34:ScreenMakeLabel/ScreenMakeBtn 收拢
+  calendar/power/time_sync/sysinfo/glm/radio 六屏,净删 56 行重复。
+- **§3.5 设置 Tab 表驱动** → PR #35:TabEntry 带钩子,三个 switch + if 链收拢,
+  净删 60 行;新增 Tab 一行注册。
+- **§3.1 APP 注册表** → PR #36(最小风险版):AppEntry 加 register_mcp 钩子,
+  MCP 门控遍历表执行;顺手修复斜切主题丢"系统信息"的合并事故。
+
+剩余:§2.2 HTTP helper(18 处)、§2.3 SafeSettings、§2.4 sys_mon 降频、
+§2.6 语言表裁剪、§2.8 boot 表驱动、§3.4 服务生命周期框架 → 低/中风险;
+§1.1 唤醒词删除、§1.7 boards/common 条件编译 → 高风险,先真机验证。
