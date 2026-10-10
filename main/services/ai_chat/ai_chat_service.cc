@@ -15,6 +15,7 @@
 #include <cJSON.h>
 
 #include "application.h"
+#include "utils/psr_worker.h"
 #include "audio_codec.h"
 #include "board.h"
 #include "mcp_server.h"
@@ -227,8 +228,7 @@ void PipelineTask(void*) {
     }
 
 done:
-    s_task = nullptr;
-    vTaskDelete(nullptr);
+    s_task = nullptr;   // SpawnPsrWorker 包装层 return 即配对自删
 }
 
 Cfg LoadCfgFromNvs() {
@@ -291,7 +291,9 @@ void AiChat_BeginRecord() {
     SetState(AiChatState::Recording);
     // 按下即起管线任务开录(内部栈;HTTPS/TLS 读 CA 证书碰 flash,禁 PSRAM 栈)。
     // 原设计在松手才建任务,而松手已清录音标志 → 循环瞬退,永远"录音太短"。
-    if (xTaskCreate(PipelineTask, "aichat_pipe", 8192, nullptr, 5, &s_task) != pdPASS) {
+    // 栈放 PSRAM:8KB 内部栈在当前内 RAM 余量(~40KB 且碎片化)下常拿不到。
+    // 管线自身不写 NVS/flash,与收音机/ICS 的 PSRAM 栈 TLS 同模式。
+    if (!SpawnPsrWorker("aichat_pipe", 12288, 5, PipelineTask, nullptr, &s_task, 0)) {
         s_record_flag.store(false);
         SetState(AiChatState::Error, "任务创建失败(内存不足)");
     }
