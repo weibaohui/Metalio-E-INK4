@@ -181,25 +181,17 @@ bool PostProgressReport(const std::string& body, std::string& err_out) {
         ESP_LOGI(TAG, "skip library sync: cloud endpoints blank");
         return true;
     }
-    http->SetTimeout(kHttpTimeoutMs);
-    api::ApplyJsonHeaders(http);
-    api::LogHttpRequest(TAG, "POST", url, body);
-    http->SetContent(std::string(body));
-    if (!http->Open("POST", url)) {
-        err_out = Lang::Strings::CLOUD_REQUEST_FAIL;
-        api::LogHttpResponse(TAG, -1, err_out);
+    api::HttpFetchOptions opts;
+    opts.timeout_ms = kHttpTimeoutMs;
+    api::HeaderList headers;
+    headers.emplace_back("Content-Type", "application/json");
+    const api::HttpReply rep = api::HttpFetch("POST", url, body, opts, headers);
+    if (!rep.ok) {
+        err_out = rep.status == 0 ? std::string(Lang::Strings::CLOUD_REQUEST_FAIL)
+                                  : "HTTP " + std::to_string(rep.status);
         return false;
     }
-
-    const int status = http->GetStatusCode();
-    const std::string resp = http->ReadAll();
-    http->Close();
-    api::LogHttpResponse(TAG, status, api::RedactClawUrlsForLog(resp));
-
-    if (status < 200 || status >= 300) {
-        err_out = "HTTP " + std::to_string(status);
-        return false;
-    }
+    const std::string& resp = rep.body;
 
     cJSON* root = cJSON_Parse(resp.c_str());
     if (root == nullptr) {

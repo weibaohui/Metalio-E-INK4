@@ -643,38 +643,15 @@ bool ParseWeatherJson(const std::string& body, WeatherSnap& out, std::string& er
 
 bool HttpGetWeather(std::string& body_out, std::string& err_out) {
     body_out.clear();
-    auto network = Board::GetInstance().GetNetwork();
-    if (network == nullptr) {
-        err_out = Lang::Strings::STANDBY_NO_NETWORK;
-        return false;
-    }
-    auto http = network->CreateHttp(0);
-    if (http == nullptr) {
-        err_out = Lang::Strings::STANDBY_CONN_FAIL;
-        return false;
-    }
-    const std::string url = api::WeatherLatestUrl();
-    if (url.empty()) {
-        err_out = "weather api not configured";
-        ESP_LOGI(TAG, "skip weather: cloud endpoints blank");
-        return false;
-    }
-    http->SetTimeout(kHttpTimeoutMs);
-    api::ApplyCommonHeaders(http);
-    api::LogHttpRequest(TAG, "GET", url);
-    if (!http->Open("GET", url)) {
-        err_out = Lang::Strings::STANDBY_REQUEST_FAIL;
-        api::LogHttpResponse(TAG, -1, err_out);
-        return false;
-    }
-    const int status = http->GetStatusCode();
-    body_out = http->ReadAll();
-    http->Close();
-    api::LogHttpResponse(TAG, status, api::RedactClawUrlsForLog(body_out));
-    if (status < 200 || status >= 300) {
+    api::HttpFetchOptions opts;
+    opts.timeout_ms = kHttpTimeoutMs;
+    const api::HttpReply rep = api::HttpGetString(api::WeatherLatestUrl(), opts);
+    if (!rep.ok) {
+        // 无网络/连接失败/HTTP 错误统一按请求失败提示;细节在 W 级日志里
         err_out = Lang::Strings::STANDBY_REQUEST_FAIL;
         return false;
     }
+    body_out = std::move(rep.body);
     return true;
 }
 

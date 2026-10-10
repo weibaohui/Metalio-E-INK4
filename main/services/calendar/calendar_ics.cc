@@ -42,7 +42,7 @@ constexpr int kHttpTimeoutMs = 20000;
 // 握手工作集,实测 12KB 起可成。30KB 的保守预检在开机碎片化下永远拦截
 // (44KB 空闲但最大块 <30KB),导致 ICS 永远无法同步。失败路径安全:
 // esp-tls 干净报错,不会把网络栈饿崩(收音机 TLS 守卫同因,失败不致命)。
-constexpr size_t kTlsMinInternalBlock = 12 * 1024;
+// TLS 预检已收拢进 api::HttpFetch(阈值取本文件当年实测的 12KB)。
 constexpr int64_t kAutoRefreshIntervalSec = 12 * 3600;   // 进日历屏时数据超 12h 自动同步
 
 std::mutex s_mutex;
@@ -355,58 +355,22 @@ bool Gunzip(const std::string& in, std::string& out, std::string& err) {
 // ---- 下载 ----
 // 一次性 GET(含 1 跳手动重定向);成功返回解压后的纯文本,失败置 err。
 std::string HttpGet(const std::string& url, std::string& err) {
-    auto network = Board::GetInstance().GetNetwork();
-    if (network == nullptr) { err = "无网络接口"; return ""; }
-    auto http = network->CreateHttp(0);
-    if (http == nullptr) { err = "创建 HTTP 客户端失败"; return ""; }
-    http->SetTimeout(kHttpTimeoutMs);
-
-    std::string real_url = url;
-    for (int hop = 0; hop < 2; ++hop) {
-        // 注意:不要 ApplyCommonHeaders/ApplyJsonHeaders —— 订阅地址是第三方服务器,
-        // 携带云端鉴权头会把 token 泄给外部。headers 在每次发送后被实现清空,须逐跳重设。
-        http->SetHeader("User-Agent", "Metalio-EInk/1.0");
-        http->SetHeader("Accept", "text/calendar, */*");
-        if (!http->Open("GET", real_url)) {
-            err = "连接失败(请检查网络/URL)";
-            http->Close();
-            return "";
-        }
-        const int status = http->GetStatusCode();
-        if (status >= 200 && status < 300) break;
-        if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
-            const std::string loc = http->GetResponseHeader("Location");
-            http->Close();
-            if (loc.empty()) { err = "重定向无 Location"; return ""; }
-            if (hop == 1) { err = "重定向过多"; return ""; }
-            real_url = loc;
-            continue;
-        }
-        err = "HTTP " + std::to_string(status);
-        http->Close();
+    // 订阅地址是第三方服务器:不带 Device-Id 公共头,防云端鉴权信息外泄;
+    // User-Agent/Accept 走显式头。重定向/体积上限(384KB)/TLS 预检由 helper 统一做。
+    api::HttpFetchOptions opts;
+    opts.timeout_ms = kHttpTimeoutMs;
+    opts.max_bytes = kMaxIcsBytes;
+    opts.send_common_headers = false;
+    api::HeaderList headers;
+    headers.emplace_back("User-Agent", "Metalio-EInk/1.0");
+    headers.emplace_back("Accept", "text/calendar, */*");
+    const api::HttpReply rep = api::HttpGetString(url, opts, headers);
+    if (!rep.ok) {
+        err = rep.error.empty() ? "连接失败(请检查网络/URL)" : rep.error;
         return "";
     }
 
-    std::string body;
-    body.reserve(64 * 1024);
-    char chunk[2048];
-    while (true) {
-        const int r = http->Read(chunk, sizeof(chunk));
-        if (r < 0) {
-            err = "读取中断";
-            http->Close();
-            return "";
-        }
-        if (r == 0) break;
-        if (body.size() + (size_t)r > kMaxIcsBytes) {
-            err = "文件过大(>" + std::to_string(kMaxIcsBytes / 1024) + "KB)";
-            http->Close();
-            return "";
-        }
-        body.append(chunk, (size_t)r);
-    }
-    http->Close();
-
+    std::string body = std::move(rep.body);
     // gzip 魔数 1F 8B:解压后再校验
     if (body.size() >= 2 && (uint8_t)body[0] == 0x1F && (uint8_t)body[1] == 0x8B) {
         std::string plain;
@@ -447,10 +411,6 @@ void FetchWorker(void* /*arg*/) {
     if (!Board::GetInstance().IsNetworkReady() &&
         !Board::GetInstance().EnsureNetworkReady(15000)) {
         SetLastError("网络未就绪");
-        goto done;
-    }
-    if (url.rfind("https://", 0) == 0 && !api::TlsPreflightOk(kTlsMinInternalBlock)) {
-        SetLastError("内部 RAM 不足,HTTPS 握手无法完成;请关闭其他应用后重试");
         goto done;
     }
 
