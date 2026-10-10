@@ -155,3 +155,23 @@ Init（boot·main 任务·可读 NVS）/ Start（进屏·LVGL 任务·不碰 fla
 
 每条仍按"一类需求一个 PR"拆开做。1/2/3 可以马上做；4 建议等现有 open PR
 落地后做；5 需要先真机验证百问通话（AEC）再动手。
+
+---
+
+## 跟进(2026-10-10,PR #32 落地)
+
+§3.2 / §2.5 / §2.1 三项已在 PR #32 完成(纯提取不改行为):
+
+- **§3.2 PSRAM 工作线程** → `utils/psr_worker.h` 的 `SpawnPsrWorker`,任务函数
+  return 即自动配对自删;已迁移 glm_usage / calendar_ics / syslog / time_svc 4 处。
+- **§2.5 日期工具** → `services/date_utils.h`;calendar_screen / calendar_ics 已迁移。
+- **§2.1 TLS 预检** → `api::TlsPreflightOk`(api_http.h);ICS 与收音机已收敛。
+- 新增 `tools/calendar_grid_check`:用固件真实 date_utils.h 对拍 2000~2200 全 2412 个月,
+  零偏差,日历格子算法从此有一键回归。
+
+期间上游另行完成:PR #25(系统信息 APP)/#26(删对话 Tab)/#27(MCP 跟随开关)/
+#24(日历选中态)/#31(圆点页码+斜切分页)均已合入,首页布局另有两处时钟遮挡修复。
+
+剩余待办优先级不变:§3.3 屏幕骨架共享件(MakeLabel/MakeBtn 各屏重定义)、
+§3.1 APP 注册表、§3.5 设置 Tab 表驱动 → 中风险框架项;§1.1 唤醒词删除 →
+高风险,先真机验证百问通话 AEC。
