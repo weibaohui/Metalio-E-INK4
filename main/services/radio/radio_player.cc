@@ -20,6 +20,7 @@
 #include <freertos/task.h>
 #include <freertos/idf_additions.h>
 
+#include "api_http.h"
 #include "appfw_stream.h"
 #include "application.h"
 #include "audio_codec.h"
@@ -443,13 +444,14 @@ bool RunOneStream(const PlayReq& req, uint64_t seq) {
         // 腾内存,仍可能不够。内存不足时把 https 降级为 http 明文再试:该台若有明文源
         // 则照样能播,若无明文源 appfw 会干净报错(连接失败),而不是把整机拖死。
         if (play_url.rfind("https://", 0) == 0) {
-            const size_t free_b = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-            const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+            // 预检公共件 api::TlsPreflightOk(阈值为本台实测,勿与 ICS 的 12KB 混:
+            // 收音机是长连接流,要更保守的余量)
             constexpr size_t kTlsMinLargest = 20 * 1024;  // in-content 16KB 连续块 + 余量
             constexpr size_t kTlsMinFree    = 28 * 1024;  // 握手峰值 + lwIP/WiFi 余量
-            if (largest < kTlsMinLargest || free_b < kTlsMinFree) {
+            if (!api::TlsPreflightOk(kTlsMinLargest, kTlsMinFree)) {
                 ESP_LOGW(TAG, "内部内存不足(余%uB/最大块%uB),TLS 有风险,降级 http 明文",
-                         (unsigned)free_b, (unsigned)largest);
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
                 play_url = "http://" + play_url.substr(8);
             }
         }
