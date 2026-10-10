@@ -170,7 +170,6 @@ namespace
         {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create},
         {"power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
         {"info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create},
-        {"info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create},
         {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 

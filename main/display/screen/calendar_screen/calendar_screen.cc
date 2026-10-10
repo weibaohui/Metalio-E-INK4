@@ -127,6 +127,8 @@ void ShowDayPanel(const std::string& date) {
     lv_label_set_text(s_ui.panel_lbl, text.c_str());
 }
 
+void RebuildGrid();  // 前向声明
+
 void OnDayClicked(lv_event_t* e) {
     const uintptr_t packed = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
     // packed = (y-2000)<<16 | m<<8 | d  (天数>0 才有点击回调)
@@ -134,11 +136,13 @@ void OnDayClicked(lv_event_t* e) {
     const int m = (int)((packed >> 8) & 0xff);
     const int d = (int)(packed & 0xff);
     s_selected = YmdToStr(y, m, d);
-    ShowDayPanel(s_selected);
     HapticPulseIfEnabled();
+    // 选中态要重画格子 = lv_obj_clean(grid) 会删掉被点击的 cell 自身;
+    // 正在派发它的 CLICKED,就地删不安全 → 排队到事件派发完再整页重画。
+    ScreenLvAsync([](void*) {
+        if (s_alive) RebuildGrid();
+    }, nullptr);
 }
-
-void RebuildGrid();  // 前向声明
 
 void OnPrevNext(lv_event_t* e) {
     const bool next = reinterpret_cast<intptr_t>(lv_event_get_user_data(e)) != 0;
@@ -208,16 +212,23 @@ void BuildMonthGrid(lv_coord_t cell_w) {
             }
             const std::string dstr = YmdToStr(cy, cm, day);
             const bool is_today = (dstr == today);
+            const bool is_sel = (dstr == s_selected);   // 点选日:底部日程区显示的那天
             const bool has_ev = Calendar_HasEvent(dstr);
             char txt[24]; snprintf(txt, sizeof(txt), "%d%s", day, has_ev ? "·" : "");   // 24:日号(理论 11)+·(3)+NUL,-Werror 防截断
+            // 墨水屏 1-bit 四态区分:普通=白底细框;有日程=框加粗;选中=3px 粗黑框;
+            // 今天=黑底白字;今天且选中=黑底里再压 2px 白内框。
             if (is_today) {
                 lv_obj_set_style_bg_color(cell, lv_color_black(), 0);
                 lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
+                if (is_sel) {
+                    lv_obj_set_style_border_color(cell, lv_color_white(), 0);
+                    lv_obj_set_style_border_width(cell, 2, 0);
+                }
             } else {
                 lv_obj_set_style_bg_color(cell, lv_color_white(), 0);
                 lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
                 lv_obj_set_style_border_color(cell, lv_color_black(), 0);
-                lv_obj_set_style_border_width(cell, has_ev ? 2 : 1, 0);
+                lv_obj_set_style_border_width(cell, is_sel ? 3 : (has_ev ? 2 : 1), 0);
             }
             lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_add_event_cb(cell, OnDayClicked, LV_EVENT_CLICKED,
@@ -257,12 +268,14 @@ void BuildWeekGrid(lv_coord_t cell_w) {
         int y, m, d; EpochToYmd(t, y, m, d);
         const std::string dstr = YmdToStr(y, m, d);
         const bool is_today = (dstr == today);
+        const bool is_sel = (dstr == s_selected);
 
         lv_obj_t* cell = lv_obj_create(row);
         lv_obj_remove_style_all(cell);
         lv_obj_set_size(cell, cell_w, LV_SIZE_CONTENT);
+        // 选中=3px 粗黑框;今天=黑底白字;今天且选中=黑底压 2px 白内框
         lv_obj_set_style_border_color(cell, lv_color_black(), 0);
-        lv_obj_set_style_border_width(cell, 1, 0);
+        lv_obj_set_style_border_width(cell, is_sel ? 3 : 1, 0);
         lv_obj_set_style_radius(cell, 6, 0);
         lv_obj_set_style_pad_all(cell, 4, 0);
         lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
@@ -274,6 +287,10 @@ void BuildWeekGrid(lv_coord_t cell_w) {
         if (is_today) {
             lv_obj_set_style_bg_color(cell, lv_color_black(), 0);
             lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
+            if (is_sel) {
+                lv_obj_set_style_border_color(cell, lv_color_white(), 0);
+                lv_obj_set_style_border_width(cell, 2, 0);
+            }
         }
         lv_obj_t* dl = MakeLabel(cell, (std::string(kWdayNames[c]) + " " + std::to_string(d)).c_str());
         lv_obj_set_style_text_color(dl, is_today ? lv_color_white() : lv_color_black(), 0);
