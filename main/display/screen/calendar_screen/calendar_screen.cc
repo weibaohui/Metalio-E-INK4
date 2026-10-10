@@ -34,13 +34,11 @@ struct CalUi {
     lv_obj_t* month_lbl = nullptr;   // 月视图:"2026年10月"
     lv_obj_t* grid = nullptr;        // 网格容器
     lv_obj_t* panel_lbl = nullptr;   // 底部日程区
-    lv_obj_t* view_btn_lbl = nullptr;
     lv_obj_t* footer_lbl = nullptr;
 };
 CalUi s_ui;
 bool s_alive = false;
 
-bool s_week_view = false;   // false=月视图 true=周视图
 time_t s_cursor = 0;        // 当前浏览锚点(某天正午);月视图用其年月,周视图用其所在周
 std::string s_selected;     // 选中日 "YYYY-MM-DD"(默认今天);底部日程区显示它
 
@@ -127,6 +125,8 @@ void ShowDayPanel(const std::string& date) {
     lv_label_set_text(s_ui.panel_lbl, text.c_str());
 }
 
+void RebuildGrid();  // 前向声明
+
 void OnDayClicked(lv_event_t* e) {
     const uintptr_t packed = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
     // packed = (y-2000)<<16 | m<<8 | d  (天数>0 才有点击回调)
@@ -134,33 +134,22 @@ void OnDayClicked(lv_event_t* e) {
     const int m = (int)((packed >> 8) & 0xff);
     const int d = (int)(packed & 0xff);
     s_selected = YmdToStr(y, m, d);
-    ShowDayPanel(s_selected);
     HapticPulseIfEnabled();
+    // 选中态要重画格子 = lv_obj_clean(grid) 会删掉被点击的 cell 自身;
+    // 正在派发它的 CLICKED,就地删不安全 → 排队到事件派发完再整页重画。
+    ScreenLvAsync([](void*) {
+        if (s_alive) RebuildGrid();
+    }, nullptr);
 }
-
-void RebuildGrid();  // 前向声明
 
 void OnPrevNext(lv_event_t* e) {
     const bool next = reinterpret_cast<intptr_t>(lv_event_get_user_data(e)) != 0;
     HapticPulseIfEnabled();
-    if (s_week_view) {
-        s_cursor += (next ? 7 : -7) * 86400;   // 周视图:±一周
-    } else {
-        int y, m, d; EpochToYmd(s_cursor, y, m, d);
-        m += next ? 1 : -1;                    // 月视图:±一月
-        if (m > 12) { m = 1; y++; }
-        if (m < 1) { m = 12; y--; }
-        s_cursor = YmdToNoonEpoch(y, m, 1);
-    }
-    RebuildGrid();
-}
-
-void OnToggleView(lv_event_t*) {
-    HapticPulseIfEnabled();
-    s_week_view = !s_week_view;
-    if (s_ui.view_btn_lbl != nullptr) {
-        lv_label_set_text(s_ui.view_btn_lbl, s_week_view ? "月" : "周");
-    }
+    int y, m, d; EpochToYmd(s_cursor, y, m, d);
+    m += next ? 1 : -1;                        // 月视图:±一月
+    if (m > 12) { m = 1; y++; }
+    if (m < 1) { m = 12; y--; }
+    s_cursor = YmdToNoonEpoch(y, m, 1);
     RebuildGrid();
 }
 
@@ -168,7 +157,7 @@ void OnToggleView(lv_event_t*) {
 void BuildMonthGrid(lv_coord_t cell_w) {
     int cy, cm, cd; EpochToYmd(s_cursor, cy, cm, cd);
     if (s_ui.month_lbl != nullptr) {
-        char buf[24]; snprintf(buf, sizeof(buf), "%04d年%02d月", cy, cm);
+        char buf[40]; snprintf(buf, sizeof(buf), "%04d年%02d月", cy, cm);   // 40:年份理论 11 字节,-Werror 防截断
         lv_label_set_text(s_ui.month_lbl, buf);
     }
     const int first_wd = WeekdayMonFirst(cy, cm, 1);
@@ -208,16 +197,23 @@ void BuildMonthGrid(lv_coord_t cell_w) {
             }
             const std::string dstr = YmdToStr(cy, cm, day);
             const bool is_today = (dstr == today);
+            const bool is_sel = (dstr == s_selected);   // 点选日:底部日程区显示的那天
             const bool has_ev = Calendar_HasEvent(dstr);
             char txt[24]; snprintf(txt, sizeof(txt), "%d%s", day, has_ev ? "·" : "");   // 24:日号(理论 11)+·(3)+NUL,-Werror 防截断
+            // 墨水屏 1-bit 四态区分:普通=白底细框;有日程=框加粗;选中=3px 粗黑框;
+            // 今天=黑底白字;今天且选中=黑底里再压 2px 白内框。
             if (is_today) {
                 lv_obj_set_style_bg_color(cell, lv_color_black(), 0);
                 lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
+                if (is_sel) {
+                    lv_obj_set_style_border_color(cell, lv_color_white(), 0);
+                    lv_obj_set_style_border_width(cell, 2, 0);
+                }
             } else {
                 lv_obj_set_style_bg_color(cell, lv_color_white(), 0);
                 lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
                 lv_obj_set_style_border_color(cell, lv_color_black(), 0);
-                lv_obj_set_style_border_width(cell, has_ev ? 2 : 1, 0);
+                lv_obj_set_style_border_width(cell, is_sel ? 3 : (has_ev ? 2 : 1), 0);
             }
             lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_add_event_cb(cell, OnDayClicked, LV_EVENT_CLICKED,
@@ -233,69 +229,11 @@ void BuildMonthGrid(lv_coord_t cell_w) {
     }
 }
 
-// 周视图:本周(周一起)7 列,各列显示日期 + 最多 2 条日程
-void BuildWeekGrid(lv_coord_t cell_w) {
-    int cy, cm, cd; EpochToYmd(s_cursor, cy, cm, cd);
-    const int wd = WeekdayMonFirst(cy, cm, cd);
-    const time_t monday = YmdToNoonEpoch(cy, cm, cd) - (time_t)wd * 86400;
-    if (s_ui.month_lbl != nullptr) {
-        int y2, m2, d2; EpochToYmd(monday, y2, m2, d2);
-        char buf[28]; snprintf(buf, sizeof(buf), "%02d月%02d日 起一周", m2, d2);
-        lv_label_set_text(s_ui.month_lbl, buf);
-    }
-    const std::string today = Calendar_Today();
-
-    lv_obj_t* row = lv_obj_create(s_ui.grid);
-    lv_obj_remove_style_all(row);
-    lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    DisableScroll(row); lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
-
-    for (int c = 0; c < kCols; ++c) {
-        const time_t t = monday + (time_t)c * 86400;
-        int y, m, d; EpochToYmd(t, y, m, d);
-        const std::string dstr = YmdToStr(y, m, d);
-        const bool is_today = (dstr == today);
-
-        lv_obj_t* cell = lv_obj_create(row);
-        lv_obj_remove_style_all(cell);
-        lv_obj_set_size(cell, cell_w, LV_SIZE_CONTENT);
-        lv_obj_set_style_border_color(cell, lv_color_black(), 0);
-        lv_obj_set_style_border_width(cell, 1, 0);
-        lv_obj_set_style_radius(cell, 6, 0);
-        lv_obj_set_style_pad_all(cell, 4, 0);
-        lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_style_pad_row(cell, 2, 0);
-        DisableScroll(cell);
-        lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(cell, OnDayClicked, LV_EVENT_CLICKED,
-            reinterpret_cast<void*>((uintptr_t)(((y-2000)<<16) | (m<<8) | d)));
-        if (is_today) {
-            lv_obj_set_style_bg_color(cell, lv_color_black(), 0);
-            lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
-        }
-        lv_obj_t* dl = MakeLabel(cell, (std::string(kWdayNames[c]) + " " + std::to_string(d)).c_str());
-        lv_obj_set_style_text_color(dl, is_today ? lv_color_white() : lv_color_black(), 0);
-        const auto events = Calendar_GetForDate(dstr);
-        int shown = 0;
-        for (const auto& e : events) {
-            if (shown >= 2) break;
-            std::string line = (e.time.empty() ? std::string("·") : e.time + " ") + e.title;
-            lv_obj_t* el = MakeLabel(cell, line.c_str());
-            lv_label_set_long_mode(el, LV_LABEL_LONG_DOT);
-            lv_obj_set_width(el, cell_w - 8);
-            lv_obj_set_style_text_color(el, is_today ? lv_color_white() : lv_color_black(), 0);
-            ++shown;
-        }
-    }
-}
-
 void RebuildGrid() {
     if (s_ui.grid == nullptr) return;
     lv_obj_clean(s_ui.grid);
     const lv_coord_t cell_w = (LV_HOR_RES - 2 * kPad) / kCols - 4;
-    if (s_week_view) BuildWeekGrid(cell_w); else BuildMonthGrid(cell_w);
+    BuildMonthGrid(cell_w);
     if (s_selected.empty()) s_selected = Calendar_Today();
     ShowDayPanel(s_selected);
 }
@@ -318,7 +256,6 @@ void OnIcsChanged() {
 lv_obj_t* CalendarScreen::Create() {
     s_ui = {};
     s_alive = true;
-    s_week_view = false;
     // 浏览锚点 = 今天正午(月视图取其年月,周视图取其所在周)
     {
         int y, m, d; EpochToYmd(NowEpoch(), y, m, d);
@@ -353,7 +290,7 @@ lv_obj_t* CalendarScreen::Create() {
     DisableScroll(body);
     lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
 
-    // 头部:翻页 + 月份/周标签 + 视图切换
+    // 头部:翻页 + 月份标签
     lv_obj_t* head = lv_obj_create(body);
     lv_obj_remove_style_all(head);
     lv_obj_set_size(head, lv_pct(100), 48);
@@ -364,7 +301,6 @@ lv_obj_t* CalendarScreen::Create() {
     s_ui.month_lbl = MakeLabel(head, "日历", 28);
     lv_obj_set_flex_grow(s_ui.month_lbl, 1);
     lv_obj_set_style_text_align(s_ui.month_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    s_ui.view_btn_lbl = MakeBtn(head, "周", 70, OnToggleView, nullptr);
     MakeBtn(head, "›", 70, OnPrevNext, (void*)1);
 
     // 网格
