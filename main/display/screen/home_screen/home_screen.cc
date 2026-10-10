@@ -854,6 +854,8 @@ bool HomeScreen::IsAppEnabledByIndex(int index)
 
 bool HomeScreen::IsAppMandatoryByIndex(int index) { return index == kSettingsAppIndex; }
 
+bool HomeScreen::IsAppEnabledById(const char *id) { return AppIsEnabledId(id); }
+
 void HomeScreen::SetAppEnabled(int index, bool enabled)
 {
     if (index < 0 || index >= kTotalApps) return;
