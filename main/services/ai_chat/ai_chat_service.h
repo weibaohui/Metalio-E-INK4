@@ -27,6 +27,7 @@ void AiChat_Init();
 // 录音控制(屏的按住/松手调用)。内部调度到管线任务,立即返回。
 void AiChat_BeginRecord();     // 按住:开始录音
 void AiChat_ReleaseRecord();   // 松手:停录并跑 STT+对话
+void AiChat_AbortRecord();     // 取消:不跑 STT,直接结束(离屏用)
 
 // 状态/结果快照(纯读,任意任务可调)
 AiChatState AiChat_GetState();
