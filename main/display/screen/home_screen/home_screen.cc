@@ -12,6 +12,8 @@
 #include "lv_adapter_display.h"
 #include "power_screen/power_screen.h"
 #include "radio_screen/radio_screen.h"
+#include "services/radio/radio_mcp.h"
+#include "services/calendar/calendar_mcp.h"
 #include "screen_common.h"
 #include "settings.h"
 #include "settings_screen/settings_screen.h"
@@ -144,6 +146,9 @@ namespace
         const char *icon_path;
         const char *(*name)();
         lv_obj_t *(*create)();
+        // boot 期 MCP 注册入口(仅开着的 APP 会被调,见 RegisterEnabledAppMcpTools)。
+        // GLM 例外:它的 Init 有时序要求,在 StartNetwork 前按开关单独做,这里留空。
+        void (*register_mcp)() = nullptr;
     };
 
     const char *AppNameGlm() { return "GLM 用量"; }
@@ -164,10 +169,10 @@ namespace
         {"book", "A:ic_app_home_book.spng", AppNameBook, BookScreen::Create},
         {"wall", "A:ic_app_home_wallpaper.spng", AppNameWallpaper, WallpaperScreen::Create},
         {"cloud", "A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
-        {"radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
+        {"radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create, RadioRegisterMcpTools},
         {"time", "A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create},
         // 日历:暂无专用图标,先复用 task 占位(见 PR13 描述)
-        {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create},
+        {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create, CalendarRegisterMcpTools},
         {"power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
         {"info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create},
         {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
@@ -184,6 +189,7 @@ namespace
         {"time", "A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create},
         {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create},
         {"power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
+        {"info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create},
         {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create}
     };
 
@@ -858,6 +864,23 @@ bool HomeScreen::IsAppEnabledByIndex(int index)
 bool HomeScreen::IsAppMandatoryByIndex(int index) { return index == kSettingsAppIndex; }
 
 bool HomeScreen::IsAppEnabledById(const char *id) { return AppIsEnabledId(id); }
+
+void HomeScreen::RegisterEnabledAppMcpTools()
+{
+    // 表驱动(分析文档 §3.1):APP 的 MCP 入口收进 AppEntry.register_mcp,
+    // 新 APP 不再需要在 application.cc 手写 if。
+    for (int i = 0; i < kTotalApps; ++i)
+    {
+        if (kApps[i].register_mcp == nullptr) continue;
+        if (!AppIsEnabledId(kApps[i].id))
+        {
+            ESP_LOGI(TAG, "app %s off: skip MCP tools", kApps[i].id);
+            continue;
+        }
+        kApps[i].register_mcp();
+        ESP_LOGI(TAG, "app mcp tools registered: %s", kApps[i].id);
+    }
+}
 
 void HomeScreen::SetAppEnabled(int index, bool enabled)
 {
