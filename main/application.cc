@@ -8,9 +8,7 @@
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 #include "services/glm_usage/glm_usage_service.h"
-#include "services/radio/radio_mcp.h"
 #include "services/calendar/calendar_ics.h"
-#include "services/calendar/calendar_mcp.h"
 #include "services/local_mcp/local_mcp_server.h"
 #include "services/syslog_sender.h"
 #include "services/time_service.h"
@@ -1132,15 +1130,10 @@ void Application::Start() {
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddCommonTools();
     mcp_server.AddUserOnlyTools();
-    // MCP 注册跟随应用开关:关掉的 APP 连 MCP 工具都不注册(改开关重启后生效)。
+    // MCP 注册跟随应用开关,表驱动(关掉的 APP 连 MCP 工具都不注册,重启后生效)。
     // syslog/MCP 自身是系统服务非 APP,常注册;GLM 的 Init(含 MCP 注册)
     // 已按开关在 StartNetwork 前完成(见上)。
-    if (HomeScreen::IsAppEnabledById("radio")) {
-        RadioRegisterMcpTools();
-    }
-    if (HomeScreen::IsAppEnabledById("cal")) {
-        CalendarRegisterMcpTools();   // 日历:远端 MCP 推送/同步日程(self.calendar.*)
-    }
+    HomeScreen::RegisterEnabledAppMcpTools();
     SyslogRegisterMcpTools();   // 需求一.2:syslog 的 MCP 配置接口(self.syslog.*)
     LocalMcpServer::GetInstance().Start();
     // syslog 日志上报(需求一.2):读 NVS 配置,已启用且配了 IP 则启动发送任务。
