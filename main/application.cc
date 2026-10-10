@@ -1190,13 +1190,15 @@ void Application::Start() {
         const int64_t t0 = esp_timer_get_time();
         step.fn();
         const int64_t cost_ms = (esp_timer_get_time() - t0) / 1000;
-        ESP_LOGI(TAG, "boot[%s] %lld ms", step.name, (long long)cost_ms);
+        // 本机 newlib 是 nano 格式,%lld 不支持,用 %lu
+        ESP_LOGI(TAG, "boot[%s] %lu ms", step.name, static_cast<unsigned long>(cost_ms));
         if (cost_ms >= 1000) {
             // 慢步单独立 W 级,开机慢时一眼定位
-            ESP_LOGW(TAG, "boot[%s] slow: %lld ms", step.name, (long long)cost_ms);
+            ESP_LOGW(TAG, "boot[%s] slow: %lu ms", step.name, static_cast<unsigned long>(cost_ms));
         }
     }
-    ESP_LOGI(TAG, "boot total %lld ms", (long long)((esp_timer_get_time() - boot_t0) / 1000));
+    ESP_LOGI(TAG, "boot total %lu ms",
+             static_cast<unsigned long>((esp_timer_get_time() - boot_t0) / 1000));
 }
 
 // Add a async task to MainLoop
