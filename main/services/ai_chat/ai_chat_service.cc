@@ -85,16 +85,24 @@ std::string BuildWav(const std::vector<int16_t>& pcm) {
 int HttpPost(const std::string& url, const std::string& bearer,
              const std::string& content_type, const std::string& body, std::string& resp) {
     if (url.empty()) return -1;
+    ESP_LOGI(TAG, "http: create (%u bytes body)", (unsigned)body.size());
     auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
-    if (!http) return -1;
-    http->SetTimeout(60000);
+    if (!http) { ESP_LOGE(TAG, "http: create failed"); return -1; }
+    http->SetTimeout(20000);
     if (!bearer.empty()) http->SetHeader("Authorization", "Bearer " + bearer);
     http->SetHeader("Content-Type", content_type);
     http->SetContent(std::string(body));   // 整段 Content-Length POST
-    if (!http->Open("POST", url)) { http->Close(); return -2; }
+    ESP_LOGI(TAG, "http: open...");
+    if (!http->Open("POST", url)) {
+        ESP_LOGE(TAG, "http: open failed err=0x%x", http->GetLastError());
+        http->Close();
+        return -2;
+    }
     const int status = http->GetStatusCode();
+    ESP_LOGI(TAG, "http: status %d, reading", status);
     resp = http->ReadAll();
     http->Close();
+    ESP_LOGI(TAG, "http: done %u bytes", (unsigned)resp.size());
     return status;
 }
 
