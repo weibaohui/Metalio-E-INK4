@@ -43,7 +43,7 @@
 #define HOME_APP_CARD_ICON_PAD_TOP 10 // 卡片内图标距卡片顶部 (px)，水平居中
 #define HOME_APP_CARD_NAME_PAD_BOT 10 // 卡片内名称距卡片底部 (px)，水平居中
 #define HOME_APP_CARD_BORDER_W 4      // 描边样式时黑色描边宽度 (px)
-#define HOME_PAGE_INDICATOR_H 36      // 多页时底部页码高度 (px)
+#define HOME_PAGE_INDICATOR_H 18      // 多页时底部圆点指示高度 (px);圆点取代"1/2"文字,压矮抽屉
 #define HOME_SLASH_ROWS 3             // 斜切主题：3 行 × 2 列
 #define HOME_SLASH_SIDE_PAD 16        // 宫格左右边距（防右卡图标贴屏边）
 #define HOME_SLASH_ROW_GAP 10         // 行间距；左右斜边平行缝同此宽度
@@ -187,6 +187,7 @@ namespace
     // 随 kApps 自动变长；页数 = ceil(总数 / 每页 12)
     constexpr int kTotalApps = static_cast<int>(sizeof(kApps) / sizeof(kApps[0]));
     constexpr int kSlashAppCount = static_cast<int>(sizeof(kSlashApps) / sizeof(kSlashApps[0]));
+    constexpr int kSlashAppsPerPage = HOME_SLASH_ROWS * 2;   // 斜切每页 6 个(3 行 × 2 列)
 
     // ---- APP 开关(需求一.3):只显示开启的 APP ----
     // NVS "apps/en_<id>"(bool,默认开)。"set"(设置)永驻不可关(否则无法再进设置打开别的)。
@@ -233,7 +234,7 @@ namespace
     }
 
     lv_obj_t *s_apps = nullptr;
-    lv_obj_t *s_page_lbl = nullptr;
+    lv_obj_t *s_page_dots = nullptr;
     lv_obj_t *s_home_scr = nullptr;
     int s_home_page = 0; // 离开子页再回首页时保持页码
     bool s_slash_layout = false;
@@ -245,13 +246,56 @@ namespace
 
     int PageCount()
     {
+        // 动态显示(需求一.3):页数按"开启的 APP 数"算,而不是固定总数
         if (s_slash_layout)
         {
-            return 1;
+            // 斜切主题同样分页:3 行 × 2 列 = 每页 6 个;不分页的话排在后面的
+            // APP(含"设置")永远够不着
+            const AppEntry *tmp[kSlashAppCount];
+            const int cnt = CollectEnabled(kSlashApps, kSlashAppCount, tmp, kSlashAppCount);
+            return (cnt + kSlashAppsPerPage - 1) / kSlashAppsPerPage;
         }
-        // 动态显示(需求一.3):页数按"开启的 APP 数"算,而不是固定总数
         const int enabled = EnabledAppCount();
         return (enabled + kAppsPerPage - 1) / kAppsPerPage;
+    }
+
+    // 圆点页码指示刷新:pages>1 时按页数重建小圆点(当前页实心,其余空心)。
+    // FillAppsPage 每次翻页都会调;圆点不可点,此处重建无"删被点对象"问题。
+    void UpdatePageDots()
+    {
+        if (s_page_dots == nullptr)
+        {
+            return;
+        }
+        const int pages = PageCount();
+        if (pages <= 1)
+        {
+            lv_obj_add_flag(s_page_dots, LV_OBJ_FLAG_HIDDEN);
+            return;
+        }
+        lv_obj_clear_flag(s_page_dots, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clean(s_page_dots);
+        for (int i = 0; i < pages; ++i)
+        {
+            lv_obj_t *dot = lv_obj_create(s_page_dots);
+            lv_obj_remove_style_all(dot);
+            lv_obj_set_size(dot, 10, 10);
+            lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+            if (i == s_home_page)
+            {
+                lv_obj_set_style_bg_color(dot, lv_color_black(), 0);
+                lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+            }
+            else
+            {
+                lv_obj_set_style_bg_color(dot, lv_color_white(), 0);
+                lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+                lv_obj_set_style_border_color(dot, lv_color_black(), 0);
+                lv_obj_set_style_border_width(dot, 1, 0);
+            }
+            lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+        }
     }
 
     void FillSlashAppsPage()
@@ -261,10 +305,17 @@ namespace
             ESP_LOGW(TAG, "slash apps skip h=%d", static_cast<int>(s_slash_apps_h));
             return;
         }
+        // 分页:页码钳制到合法范围(开关变化可能让页数变少)
+        const int pages = PageCount();
+        if (s_home_page < 0) s_home_page = 0;
+        if (s_home_page >= pages) s_home_page = pages - 1;
+
         lv_obj_clean(s_apps);
         // 动态显示(需求一.3):斜切布局同样只渲染开启的 APP(空槽位不渲染)。
         const AppEntry *en[kSlashAppCount];
         const int en_cnt = CollectEnabled(kSlashApps, kSlashAppCount, en, kSlashAppCount);
+        // 当前页起始序号:每页 6 个(3 行 × 2 列)
+        const int page_start = s_home_page * kSlashAppsPerPage;
         const lv_coord_t inner_h =
             s_slash_apps_h - HOME_SLASH_ROW_GAP * (HOME_SLASH_ROWS - 1);
         const lv_coord_t row_h = inner_h / HOME_SLASH_ROWS;
@@ -281,7 +332,7 @@ namespace
             lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
 
-            const int base = r * 2;
+            const int base = page_start + r * 2;
             if (base < en_cnt)
             {
                 CreateSlashAppCell(row, *en[base], r, 0, row_h, cell_w);
@@ -291,11 +342,9 @@ namespace
                 CreateSlashAppCell(row, *en[base + 1], r, 1, row_h, cell_w);
             }
         }
-        if (s_page_lbl != nullptr)
-        {
-            lv_obj_add_flag(s_page_lbl, LV_OBJ_FLAG_HIDDEN);
-        }
-        ESP_LOGI(TAG, "slash apps %d row_h=%d cell_w=%d", en_cnt, static_cast<int>(row_h),
+        UpdatePageDots();   // 圆点指示(斜切同样生效,单页自动隐藏)
+        ESP_LOGI(TAG, "slash apps page %d/%d cnt=%d row_h=%d cell_w=%d", s_home_page + 1, pages,
+                 en_cnt, static_cast<int>(row_h),
                  static_cast<int>(cell_w));
     }
 
@@ -340,20 +389,7 @@ namespace
             CreateAppCell(s_apps, *enabled[i], card_style);
         }
 
-        if (s_page_lbl != nullptr)
-        {
-            if (pages > 1)
-            {
-                char buf[16];
-                std::snprintf(buf, sizeof(buf), "%d / %d", s_home_page + 1, pages);
-                lv_label_set_text(s_page_lbl, buf);
-                lv_obj_clear_flag(s_page_lbl, LV_OBJ_FLAG_HIDDEN);
-            }
-            else
-            {
-                lv_obj_add_flag(s_page_lbl, LV_OBJ_FLAG_HIDDEN);
-            }
-        }
+        UpdatePageDots();
         ESP_LOGI(TAG, "home page %d/%d apps %d..%d of %d", s_home_page + 1, pages, start, end - 1,
                  enabled_cnt);
     }
@@ -477,7 +513,7 @@ namespace
         home_hero::Teardown();
         s_home_scr = nullptr;
         s_apps = nullptr;
-        s_page_lbl = nullptr;
+        s_page_dots = nullptr;
         s_slash_layout = false;
         s_slash_apps_h = 0;
     }
@@ -674,6 +710,8 @@ namespace
         lv_obj_set_style_pad_bottom(cell, HOME_SLASH_PAD_V, 0);
         lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+        // 手势冒泡:在斜切卡片上起手的左右滑动冒泡到屏翻页(与经典宫格卡片一致)
+        lv_obj_add_flag(cell, LV_OBJ_FLAG_GESTURE_BUBBLE);
         HapticAttachClick(cell);
         lv_obj_set_user_data(cell, const_cast<AppEntry *>(&entry));
         lv_obj_add_event_cb(cell, OnAppClicked, LV_EVENT_CLICKED, const_cast<AppEntry *>(&entry));
@@ -884,9 +922,27 @@ lv_obj_t *HomeScreen::Create()
         lv_obj_add_flag(s_apps, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
         lv_obj_clear_flag(s_apps, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(s_apps, LV_OBJ_FLAG_CLICKABLE);
+        // 手势冒泡:斜切宫格空白处起手的滑动冒泡到屏,统一翻页(与经典宫格一致)
+        lv_obj_add_flag(s_apps, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-        s_page_lbl = nullptr;
+        // 圆点页码指示(与经典宫格同款)放在斜切宫格上沿(宫格上方 4px),多页才显示
+        s_page_dots = lv_obj_create(scr);
+        lv_obj_remove_style_all(s_page_dots);
+        lv_obj_set_size(s_page_dots, LV_SIZE_CONTENT, HOME_PAGE_INDICATOR_H);
+        lv_obj_align(s_page_dots, LV_ALIGN_BOTTOM_MID, 0,
+                     -(HOME_SLASH_BOTTOM_PAD + s_slash_apps_h + 4));
+        lv_obj_set_flex_flow(s_page_dots, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(s_page_dots, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(s_page_dots, 8, 0);
+        lv_obj_clear_flag(s_page_dots, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(s_page_dots, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_page_dots, LV_OBJ_FLAG_HIDDEN);
+
         FillAppsPage();
+
+        // 原生 LVGL 滑动手势:左右滑切页(与经典宫格同一处理器)
+        lv_obj_add_event_cb(scr, OnHomeGesture, LV_EVENT_GESTURE, nullptr);
 
         lv_obj_add_event_cb(scr, OnHomeDeleted, LV_EVENT_DELETE, nullptr);
         ScreenSetIsHome(true);
@@ -932,15 +988,21 @@ lv_obj_t *HomeScreen::Create()
     // 手势冒泡:宫格空白处起手的滑动冒泡到屏;卡片上的滑动由卡片自身的冒泡上来
     lv_obj_add_flag(s_apps, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    s_page_lbl = lv_label_create(scr);
-    lv_label_set_text(s_page_lbl, "");
-    lv_obj_set_style_text_font(s_page_lbl, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(s_page_lbl, lv_color_black(), 0);
-    lv_obj_align(s_page_lbl, LV_ALIGN_BOTTOM_MID, 0, -4);
-    lv_obj_clear_flag(s_page_lbl, LV_OBJ_FLAG_CLICKABLE);
+    // 圆点页码指示(替换"1/2"文字):一排小圆点,当前页实心黑,其余空心描边。
+    // 高度 18px(原 36px),多页时少占底部,不再遮挡大字时钟。
+    s_page_dots = lv_obj_create(scr);
+    lv_obj_remove_style_all(s_page_dots);
+    lv_obj_set_size(s_page_dots, LV_SIZE_CONTENT, HOME_PAGE_INDICATOR_H);
+    lv_obj_align(s_page_dots, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_obj_set_flex_flow(s_page_dots, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_page_dots, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(s_page_dots, 8, 0);
+    lv_obj_clear_flag(s_page_dots, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_page_dots, LV_OBJ_FLAG_CLICKABLE);
     if (pages <= 1)
     {
-        lv_obj_add_flag(s_page_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_page_dots, LV_OBJ_FLAG_HIDDEN);
     }
 
     FillAppsPage();
