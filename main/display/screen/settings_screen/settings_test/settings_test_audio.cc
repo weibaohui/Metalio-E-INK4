@@ -32,7 +32,6 @@ enum class State {
 };
 
 State s_state = State::Idle;
-bool s_wake_disabled = false;
 bool s_holding_testing_state = false;
 DeviceState s_saved_device_state = kDeviceStateIdle;
 int64_t s_record_start_us = 0;
@@ -204,23 +203,6 @@ void SchedulePlaybackUiReset() {
     lv_timer_set_repeat_count(s_playback_timer, 1);
 }
 
-void RestoreWakeWord() {
-    if (!s_wake_disabled) {
-        return;
-    }
-    Application::GetInstance().GetAudioService().EnableWakeWordDetection(true);
-    s_wake_disabled = false;
-}
-
-void DisableWakeWordIfNeeded() {
-    auto& as = Application::GetInstance().GetAudioService();
-    if (!as.IsWakeWordRunning()) {
-        return;
-    }
-    as.EnableWakeWordDetection(false);
-    s_wake_disabled = true;
-}
-
 // PowerPolicy 仅在 Speaking / AudioTesting 时开 PA；自检只走 EnableAudioTesting，需同步 DeviceState。
 void EnterAudioTestingState() {
     if (s_holding_testing_state) {
@@ -287,7 +269,6 @@ void StopRecordingAndPlay() {
     StopMaxRecordTimer();
     auto& as = Application::GetInstance().GetAudioService();
     as.EnableAudioTesting(false);
-    RestoreWakeWord();
     s_state = State::Playing;
     UpdateButtonUi();
     SchedulePlaybackUiReset();
@@ -318,7 +299,6 @@ void StartRecording() {
         return;
     }
 
-    DisableWakeWordIfNeeded();
     EnterAudioTestingState();
     as.ResetDecoder();
     as.EnableAudioTesting(true);
@@ -361,7 +341,6 @@ void ForceStopWithoutPlayback() {
         as.ResetDecoder();
     }
     LeaveAudioTestingState();
-    RestoreWakeWord();
     s_state = State::Idle;
 }
 

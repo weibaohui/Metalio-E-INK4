@@ -15,7 +15,6 @@
 
 #define TAG "AudioService"
 
-
 AudioService::AudioService() {
     event_group_ = xEventGroupCreate();
 }
@@ -37,7 +36,6 @@ AudioService::~AudioService() {
         event_group_ = nullptr;
     }
 }
-
 
 void AudioService::Initialize(AudioCodec* codec) {
     codec_ = codec;
@@ -94,7 +92,7 @@ void AudioService::Start() {
     }
 
     service_stopped_ = false;
-    xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+    xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING);
 
     // opus 编解码器随管线起停:Start 创建,Stop 释放。OpusCodecTask 派生前必就位。
     if (!opus_decoder_) {
@@ -142,7 +140,7 @@ void AudioService::Start() {
         ESP_LOGE(TAG, "Failed to create audio_output");
         audio_output_task_handle_ = nullptr;
         service_stopped_ = true;
-        xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING |
+        xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
                            AS_EVENT_AUDIO_PROCESSOR_RUNNING);
         return;
     }
@@ -174,13 +172,13 @@ void AudioService::Start() {
         ESP_LOGE(TAG, "Failed to create audio_output");
         audio_output_task_handle_ = nullptr;
         service_stopped_ = true;
-        xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING |
+        xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
                            AS_EVENT_AUDIO_PROCESSOR_RUNNING);
         return;
     }
 #endif
 
-    /* opus_codec: stack in PSRAM (large), TCB in INTERNAL — mirrors wake_word encode */
+    /* opus_codec: stack in PSRAM (large), TCB in INTERNAL */
     if (opus_codec_stack_ == nullptr) {
         opus_codec_stack_ = static_cast<StackType_t*>(heap_caps_malloc(
             kOpusCodecStackWords * sizeof(StackType_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
@@ -193,7 +191,7 @@ void AudioService::Start() {
         ESP_LOGE(TAG, "Failed to alloc opus_codec stack/tcb (stack=%p tcb=%p)",
                  opus_codec_stack_, opus_codec_tcb_);
         service_stopped_ = true;
-        xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING |
+        xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
                            AS_EVENT_AUDIO_PROCESSOR_RUNNING);
         return;
     }
@@ -208,7 +206,7 @@ void AudioService::Start() {
     if (opus_codec_task_handle_ == nullptr) {
         ESP_LOGE(TAG, "Failed to create opus_codec static task");
         service_stopped_ = true;
-        xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING |
+        xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
                            AS_EVENT_AUDIO_PROCESSOR_RUNNING);
         return;
     }
@@ -226,7 +224,6 @@ void AudioService::Stop() {
         audio_processor_->Stop();
     }
     xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
-        AS_EVENT_WAKE_WORD_RUNNING |
         AS_EVENT_AUDIO_PROCESSOR_RUNNING);
 
     {
@@ -343,8 +340,7 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
 void AudioService::AudioInputTask() {
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
-            AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING,
-            pdFALSE, pdFALSE, portMAX_DELAY);
+            AS_EVENT_AUDIO_PROCESSOR_RUNNING, pdFALSE, pdFALSE, portMAX_DELAY);
 
         if (service_stopped_) {
             break;
@@ -375,18 +371,6 @@ void AudioService::AudioInputTask() {
                 }
                 PushTaskToEncodeQueue(kAudioTaskTypeEncodeToTestingQueue, std::move(data));
                 continue;
-            }
-        }
-
-        /* Feed the wake word */
-        if (bits & AS_EVENT_WAKE_WORD_RUNNING) {
-            std::vector<int16_t> data;
-            int samples = wake_word_->GetFeedSize();
-            if (samples > 0) {
-                if (ReadAudioData(data, 16000, samples)) {
-                    wake_word_->Feed(data);
-                    continue;
-                }
             }
         }
 
@@ -599,51 +583,11 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
     return packet;
 }
 
-void AudioService::EncodeWakeWord() {
-    if (wake_word_) {
-        wake_word_->EncodeWakeWordData();
-    }
-}
-
-const std::string& AudioService::GetLastWakeWord() const {
-    return wake_word_->GetLastDetectedWakeWord();
-}
-
-std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
-    auto packet = std::make_unique<AudioStreamPacket>();
-    if (wake_word_->GetWakeWordOpus(packet->payload)) {
-        return packet;
-    }
-    return nullptr;
-}
-
-void AudioService::EnableWakeWordDetection(bool enable) {
-    if (!wake_word_) {
-        return;
-    }
-
-    ESP_LOGD(TAG, "%s wake word detection", enable ? "Enabling" : "Disabling");
-    if (enable) {
-        if (!wake_word_initialized_) {
-            if (!wake_word_->Initialize(codec_, models_list_)) {
-                ESP_LOGE(TAG, "Failed to initialize wake word");
-                return;
-            }
-            wake_word_initialized_ = true;
-        }
-        wake_word_->Start();
-        xEventGroupSetBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
-    } else {
-        wake_word_->Stop();
-        xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
-    }
-}
-
 void AudioService::EnableVoiceProcessing(bool enable) {
     ESP_LOGD(TAG, "%s voice processing", enable ? "Enabling" : "Disabling");
     if (enable) {
         if (!audio_processor_initialized_) {
-            audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS, models_list_);
+            audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS, nullptr);
             audio_processor_initialized_ = true;
         }
 
@@ -674,7 +618,7 @@ void AudioService::EnableAudioTesting(bool enable) {
 void AudioService::EnableDeviceAec(bool enable) {
     ESP_LOGI(TAG, "%s device AEC", enable ? "Enabling" : "Disabling");
     if (!audio_processor_initialized_) {
-        audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS, models_list_);
+        audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS, nullptr);
         audio_processor_initialized_ = true;
     }
 
@@ -841,13 +785,3 @@ void AudioService::KeepOutputAlive() {
     }
 }
 
-void AudioService::SetModelsList(srmodel_list_t* models_list) {
-    // 仅供 AFE/语音处理；本产品不建唤醒词对象，避免 audio_detection 等常驻任务
-    models_list_ = models_list;
-    wake_word_.reset();
-    wake_word_initialized_ = false;
-}
-
-bool AudioService::IsAfeWakeWord() {
-    return false;
-}
