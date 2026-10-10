@@ -577,3 +577,43 @@ void ScreenApplyDotBackdrop(lv_obj_t* obj) {
     lv_obj_set_style_bg_image_src(obj, DotBackdropImg(), 0);
     lv_obj_set_style_bg_image_tiled(obj, true, 0);
 }
+
+lv_obj_t* ScreenMakeLabel(lv_obj_t* parent, const char* text, int font_size, bool wrap) {
+    lv_obj_t* lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, text != nullptr ? text : "");
+    const lv_font_t* ui_font = fontpack_lv_font_ui();
+    const lv_font_t* font = font_size > 25 ? fontpack_lv_font_get(font_size, 2) : ui_font;
+    lv_obj_set_style_text_font(lbl, font != nullptr ? font : ui_font, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
+    if (wrap) {
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(lbl, lv_pct(100));
+    }
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    return lbl;
+}
+
+lv_obj_t* ScreenMakeBtn(lv_obj_t* parent, const char* text, lv_coord_t w, lv_coord_t h,
+                        lv_event_cb_t cb, void* user_data, lv_obj_t** lbl_out) {
+    lv_obj_t* btn = lv_obj_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, w, h);
+    lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(btn, lv_color_black(), 0);
+    lv_obj_set_style_border_width(btn, 2, 0);
+    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    HapticAttachClick(btn);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
+    lv_obj_t* lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
+    lv_obj_center(lbl);
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    if (lbl_out != nullptr) {
+        *lbl_out = lbl;
+    }
+    return lbl;
+}

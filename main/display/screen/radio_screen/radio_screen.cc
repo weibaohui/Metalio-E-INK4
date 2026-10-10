@@ -285,16 +285,6 @@ void OnRandomClicked(lv_event_t*) { RandomStation(); }
 
 // ---- UI 构建 ----
 
-lv_obj_t* MakeLabel(lv_obj_t* parent, const char* text, int font_size = 25) {
-    lv_obj_t* lbl = lv_label_create(parent);
-    lv_label_set_text(lbl, text);
-    const lv_font_t* font = font_size > 25 ? fontpack_lv_font_get(font_size, 2) : UiFont();
-    lv_obj_set_style_text_font(lbl, font != nullptr ? font : UiFont(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-    return lbl;
-}
-
 lv_obj_t* MakeButton(lv_obj_t* parent, const char* text, lv_coord_t width,
                      lv_event_cb_t cb, void* user_data) {
     lv_obj_t* btn = lv_obj_create(parent);
@@ -471,9 +461,9 @@ lv_obj_t* RadioScreen::Create() {
     DisableScroll(card);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_CLICKABLE);
 
-    s_ui.station_lbl = MakeLabel(card, "收音机", 30);
-    s_ui.title_lbl = MakeLabel(card, " ");
-    s_ui.state_lbl = MakeLabel(card, "已停止");
+    s_ui.station_lbl = ScreenMakeLabel(card, "收音机", 30, false);
+    s_ui.title_lbl = ScreenMakeLabel(card, " ", 25, false);
+    s_ui.state_lbl = ScreenMakeLabel(card, "已停止", 25, false);
 
     // 换台行
     constexpr lv_coord_t kBtnW3 = 136;
