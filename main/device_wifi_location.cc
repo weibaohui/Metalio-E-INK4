@@ -363,39 +363,19 @@ void PostLocation(const std::string& body) {
     // 不调 EnsureNetworkReady：开机门闩已确认在线；避免 4G/WiFi 失败路径硬占网续扫
     PowerNeedHold hold_net(PowerNeed::OtaDownload);
 
-    auto network = Board::GetInstance().GetNetwork();
-    if (network == nullptr) {
-        ESP_LOGW(TAG, "skip POST: no network iface");
+    api::HttpFetchOptions opts;
+    opts.timeout_ms = kHttpTimeoutMs;
+    // 按需求：不做业务解析，结果整段打日志即可
+    api::HeaderList headers;
+    headers.emplace_back("Content-Type", "application/json");
+    const api::HttpReply rep =
+        api::HttpFetch("POST", api::DeviceLocationWifiUrl(), body, opts, headers);
+    if (!rep.ok) {
+        ESP_LOGW(TAG, "skip POST: %s", rep.error.c_str());
         return;
     }
-    auto http = network->CreateHttp(0);
-    if (http == nullptr) {
-        ESP_LOGW(TAG, "skip POST: CreateHttp failed");
-        return;
-    }
-
-    const std::string url = api::DeviceLocationWifiUrl();
-    if (url.empty()) {
-        ESP_LOGI(TAG, "skip POST: cloud endpoints blank");
-        return;
-    }
-    http->SetTimeout(kHttpTimeoutMs);
-    api::ApplyJsonHeaders(http);
-    api::LogHttpRequest(TAG, "POST", url, body);
-    http->SetContent(std::string(body));
-    if (!http->Open("POST", url)) {
-        api::LogHttpResponse(TAG, -1, "open failed");
-        ESP_LOGW(TAG, "POST open failed");
-        return;
-    }
-
-    const int status = http->GetStatusCode();
-    const std::string resp = http->ReadAll();
-    http->Close();
-    api::LogHttpResponse(TAG, status, api::RedactClawUrlsForLog(resp));
-
-    // 按需求：不做业务解析，整段 JSON 打出来即可
-    ESP_LOGI(TAG, "location status=%d json=%s", status, resp.empty() ? "(empty)" : resp.c_str());
+    ESP_LOGI(TAG, "location status=%d json=%s", rep.status,
+             rep.body.empty() ? "(empty)" : api::RedactClawUrlsForLog(rep.body).c_str());
 }
 
 void WorkerTask(void* /*arg*/) {

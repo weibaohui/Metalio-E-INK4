@@ -18,6 +18,7 @@
 
 #include <cJSON.h>
 
+#include "api_http.h"
 #include "board.h"
 #include "http.h"
 #include "mcp_server.h"
@@ -163,34 +164,20 @@ bool HttpRequest(const std::string& url,
         result.error = "网络未就绪";
         return false;
     }
-    NetworkInterface* network = Board::GetInstance().GetNetwork();
-    if (network == nullptr) {
-        result.error = "网络不可用";
-        return false;
-    }
-    std::unique_ptr<Http> http = network->CreateHttp(0);
-    if (http == nullptr) {
-        result.error = "创建请求失败";
-        return false;
-    }
-
-    http->SetTimeout(kHttpTimeoutMs);
-    http->SetHeader("Accept", "application/json");
+    // bigmodel 是第三方接口:不带 Device-Id 公共头,Authorization 走显式头。
+    api::HttpFetchOptions opts;
+    opts.timeout_ms = kHttpTimeoutMs;
+    opts.send_common_headers = false;
+    api::HeaderList all_headers;
+    all_headers.emplace_back("Accept", "application/json");
     for (const auto& header : headers) {
-        http->SetHeader(header.first, header.second);
+        all_headers.push_back(header);
     }
-    ESP_LOGD(TAG, "request: %s", url.c_str());
-    if (!http->Open("GET", url)) {
-        result.error = "请求失败";
-        return false;
-    }
-    result.status = http->GetStatusCode();
-    result.body = http->ReadAll();
-    http->Close();
-    result.ok = result.status >= 200 && result.status < 300;
-    if (!result.ok && result.error.empty()) {
-        result.error = "HTTP " + std::to_string(result.status);
-    }
+    api::HttpReply rep = api::HttpFetch("GET", url, std::string(), opts, all_headers);
+    result.status = rep.status;
+    result.body = std::move(rep.body);
+    result.ok = rep.ok;
+    result.error = rep.ok ? std::string() : rep.error;
     return result.ok;
 }
 
