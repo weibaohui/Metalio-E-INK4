@@ -178,20 +178,33 @@ namespace
         {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
-    // 仅对外展示用户可见的应用，保持首页与设计稿一致。
+    // 斜切主题的应用表(§3.1):与主表同一份数据,仅按设计稿重排;条目 constexpr
+    // 引用主表,不再手抄第二份——此前"斜切丢系统信息"的合并事故就是两张表
+    // 手抄失步造成的。新 APP 只要在 kApps 加一行,并在下方索引列表里插入即可。
+    // 索引对应 kApps:glm asst book wall cloud radio time cal power info set
     constexpr AppEntry kSlashApps[] = {
-        {"book", "A:ic_app_home_book.spng", AppNameBook, BookScreen::Create},
-        {"wall", "A:ic_app_home_wallpaper.spng", AppNameWallpaper, WallpaperScreen::Create},
-        {"asst", "A:ic_app_home_teacher.spng", AppNameAssistant, AssistantScreen::Create},
-        {"glm", "A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
-        {"cloud", "A:ic_app_home_cloud.spng", AppNameCloud, CloudScreen::Create},
-        {"radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create},
-        {"time", "A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create},
-        {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create},
-        {"power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
-        {"info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create},
-        {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create}
+        kApps[2], kApps[3], kApps[1], kApps[0], kApps[4], kApps[5],
+        kApps[6], kApps[7], kApps[8], kApps[9], kApps[10],
     };
+
+    // 防回归:斜切表必须恰好覆盖主表全部 id(static_assert 编译期拦截失步)
+    constexpr bool CStrEq(const char *a, const char *b) {
+        for (int i = 0; a[i] != '\0' || b[i] != '\0'; ++i) {
+            if (a[i] != b[i]) return false;
+        }
+        return true;
+    }
+    constexpr bool SlashTableCoversApps() {
+        for (const auto &s : kSlashApps) {
+            bool found = false;
+            for (const auto &a : kApps) {
+                if (CStrEq(s.id, a.id)) { found = true; break; }
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
+    static_assert(SlashTableCoversApps(), "kSlashApps must cover every kApps id (sync check)");
 
     // 随 kApps 自动变长；页数 = ceil(总数 / 每页 12)
     constexpr int kTotalApps = static_cast<int>(sizeof(kApps) / sizeof(kApps[0]));
