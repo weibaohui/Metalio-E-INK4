@@ -15,6 +15,7 @@
 #include "screen_common.h"
 #include "settings.h"
 #include "settings_screen/settings_screen.h"
+#include "system_info_screen/system_info_screen.h"
 #include "time_sync_screen/time_sync_screen.h"
 #include "vk_key_handler.h"
 #include "vk_page_repeat.h"
@@ -155,6 +156,7 @@ namespace
     const char *AppNameCalendar() { return "日历"; }   // 新 APP 暂不走 i18n
     const char *AppNameTimeSync() { return "校时"; }   // 新 APP 暂不走 i18n
     const char *AppNamePower() { return "电源"; }   // 新 APP 暂不走 i18n
+    const char *AppNameSysInfo() { return "系统信息"; }   // 新 APP 暂不走 i18n
 
     constexpr AppEntry kApps[] = {
         {"glm", "A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
@@ -167,6 +169,8 @@ namespace
         // 日历:暂无专用图标,先复用 task 占位(见 PR13 描述)
         {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create},
         {"power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
+        {"info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create},
+        {"info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create},
         {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
