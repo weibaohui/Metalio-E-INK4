@@ -2,6 +2,7 @@
 #include "ai_chat_service.h"
 
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -209,9 +210,17 @@ std::vector<int16_t> RecordWhileHeld() {
             pcm.insert(pcm.end(), raw.begin(), raw.end());
         }
     }
-    ESP_LOGI(TAG, "record done: %ums %u samples (%d iters)",
-             (unsigned)((esp_timer_get_time() - deadline + (int64_t)kMaxRecordSec * 1000000LL) / 1000),
-             (unsigned)pcm.size(), iters);
+    // 能量统计:全零/极低 RMS = 录到静音(声道/增益问题),与"服务端说没有语音"区分
+    int64_t sum_sq = 0;
+    int16_t peak = 0;
+    for (int16_t v : pcm) {
+        sum_sq += (int64_t)v * v;
+        int16_t a = v < 0 ? (int16_t)-v : v;
+        if (a > peak) peak = a;
+    }
+    const unsigned rms = pcm.empty() ? 0 : (unsigned)sqrt((double)sum_sq / pcm.size());
+    ESP_LOGI(TAG, "record done: %u samples (%d iters) rms=%u peak=%d",
+             (unsigned)pcm.size(), iters, rms, peak);
     return pcm;
 }
 
