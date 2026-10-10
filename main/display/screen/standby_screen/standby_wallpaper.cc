@@ -15,6 +15,7 @@
 #include <freertos/task.h>
 #include <lvgl.h>
 #include "assets/lang_config.h"
+#include "utils/psr_worker.h"
 
 namespace standby_wallpaper {
 namespace {
@@ -129,7 +130,6 @@ void LoadTask(void* arg) {
         s_load_busy.store(false, std::memory_order_release);
         MarkLoadDone(LoadState::Failed);
     }
-    vTaskDelete(nullptr);
 }
 
 }  // namespace
@@ -165,8 +165,7 @@ void StartLoad() {
     MarkLoadDone(LoadState::Loading);
     auto* work = new LoadWork{s_epoch};
     // 栈放 SPIRAM：解码峰值与壁纸缩略图任务同级
-    if (xTaskCreatePinnedToCoreWithCaps(LoadTask, "stb_wp_load", kLoadStack, work, 5, nullptr, 0,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+    if (!SpawnPsrWorker("stb_wp_load", kLoadStack, 5, LoadTask, work, nullptr, 0)) {
         delete work;
         s_load_busy.store(false, std::memory_order_release);
         MarkLoadDone(LoadState::Failed);
