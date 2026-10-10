@@ -36,37 +36,6 @@ int s_hour = 12, s_min = 0, s_year = 2026, s_mon = 1, s_day = 1;  // 手动校�
 const lv_font_t* UiFont() { return fontpack_lv_font_ui(); }
 void DisableScroll(lv_obj_t* o) { lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE); }
 
-lv_obj_t* MakeLabel(lv_obj_t* parent, const char* text, int font_size = 25) {
-    lv_obj_t* lbl = lv_label_create(parent);
-    lv_label_set_text(lbl, text != nullptr ? text : "");
-    const lv_font_t* font = font_size > 25 ? fontpack_lv_font_get(font_size, 2) : UiFont();
-    lv_obj_set_style_text_font(lbl, font != nullptr ? font : UiFont(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-    return lbl;
-}
-
-lv_obj_t* MakeBtn(lv_obj_t* parent, const char* text, lv_coord_t w, lv_event_cb_t cb, void* ud) {
-    lv_obj_t* btn = lv_obj_create(parent);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, w, 46);
-    lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(btn, lv_color_black(), 0);
-    lv_obj_set_style_border_width(btn, 2, 0);
-    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-    HapticAttachClick(btn);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
-    lv_obj_t* lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, text);
-    lv_obj_set_style_text_font(lbl, UiFont(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_obj_center(lbl);
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-    return lbl;
-}
-
 lv_obj_t* MakeRow(lv_obj_t* parent, lv_coord_t h) {
     lv_obj_t* row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
@@ -189,42 +158,42 @@ lv_obj_t* TimeSyncScreen::Create() {
     lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
 
     // 大字时钟
-    s_ui.clock_lbl = MakeLabel(body, "--:--:--", 64);
+    s_ui.clock_lbl = ScreenMakeLabel(body, "--:--:--", 64, false);
     lv_obj_set_width(s_ui.clock_lbl, lv_pct(100));
     lv_obj_set_style_text_align(s_ui.clock_lbl, LV_TEXT_ALIGN_CENTER, 0);
     // 日期
-    s_ui.date_lbl = MakeLabel(body, "未对时", 28);
+    s_ui.date_lbl = ScreenMakeLabel(body, "未对时", 28, false);
     lv_obj_set_width(s_ui.date_lbl, lv_pct(100));
     lv_obj_set_style_text_align(s_ui.date_lbl, LV_TEXT_ALIGN_CENTER, 0);
     // 对时状态
-    s_ui.status_lbl = MakeLabel(body, "对时中…(SNTP)", 25);
+    s_ui.status_lbl = ScreenMakeLabel(body, "对时中…(SNTP)", 25, false);
     lv_obj_set_width(s_ui.status_lbl, lv_pct(100));
     lv_obj_set_style_text_align(s_ui.status_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
     // 时区
     lv_obj_t* tzrow = MakeRow(body, 46);
-    lv_obj_t* tztitle = MakeLabel(tzrow, "时区");
+    lv_obj_t* tztitle = ScreenMakeLabel(tzrow, "时区", 25, false);
     lv_obj_set_flex_grow(tztitle, 1);
-    MakeBtn(tzrow, "-", 60, OnTzStep, (void*)0);
-    s_ui.tz_lbl = MakeLabel(tzrow, "UTC+8:00");
+    ScreenMakeBtn(tzrow, "-", 60, 46, OnTzStep, (void*)0);
+    s_ui.tz_lbl = ScreenMakeLabel(tzrow, "UTC+8:00", 25, false);
     lv_obj_set_width(s_ui.tz_lbl, 110);
     lv_obj_set_style_text_align(s_ui.tz_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    MakeBtn(tzrow, "+", 60, OnTzStep, (void*)1);
+    ScreenMakeBtn(tzrow, "+", 60, 46, OnTzStep, (void*)1);
 
     // 手动校准(时:分)
     lv_obj_t* manrow = MakeRow(body, 46);
-    lv_obj_t* mantitle = MakeLabel(manrow, "手动校准");
+    lv_obj_t* mantitle = ScreenMakeLabel(manrow, "手动校准", 25, false);
     lv_obj_set_flex_grow(mantitle, 1);
-    MakeBtn(manrow, "-", 60, OnManualStep, (void*)0);
-    s_ui.man_lbl = MakeLabel(manrow, "12:00");
+    ScreenMakeBtn(manrow, "-", 60, 46, OnManualStep, (void*)0);
+    s_ui.man_lbl = ScreenMakeLabel(manrow, "12:00", 25, false);
     lv_obj_set_width(s_ui.man_lbl, 80);
     lv_obj_set_style_text_align(s_ui.man_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    MakeBtn(manrow, "+", 60, OnManualStep, (void*)1);
+    ScreenMakeBtn(manrow, "+", 60, 46, OnManualStep, (void*)1);
 
     // 操作行
     lv_obj_t* actrow = MakeRow(body, 46);
-    MakeBtn(actrow, "立即对时", 150, OnSyncNow, nullptr);
-    MakeBtn(actrow, "保存校准", 150, OnManualSave, nullptr);
+    ScreenMakeBtn(actrow, "立即对时", 150, 46, OnSyncNow, nullptr);
+    ScreenMakeBtn(actrow, "保存校准", 150, 46, OnManualSave, nullptr);
 
     // 初始化手动校准暂存为当前时间
     {

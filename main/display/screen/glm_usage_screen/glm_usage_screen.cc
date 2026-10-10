@@ -84,18 +84,6 @@ lv_obj_t* MakeCard(lv_obj_t* parent) {
     return card;
 }
 
-lv_obj_t* MakeLabel(lv_obj_t* parent, const char* text, int font_size = 25) {
-    lv_obj_t* label = lv_label_create(parent);
-    lv_label_set_text(label, text != nullptr ? text : "");
-    const lv_font_t* font = font_size > 25 ? fontpack_lv_font_get(font_size, 2) : UiFont();
-    lv_obj_set_style_text_font(label, font != nullptr ? font : UiFont(), 0);
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(label, lv_pct(100));
-    lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
-    return label;
-}
-
 lv_obj_t* MakeButton(lv_obj_t* parent, const char* text, lv_coord_t width,
                      lv_event_cb_t callback, void* user_data = nullptr) {
     lv_obj_t* button = lv_obj_create(parent);
@@ -382,7 +370,7 @@ lv_obj_t* CreateBody(lv_obj_t* parent) {
     DisableScroll(title_row);
     lv_obj_clear_flag(title_row, LV_OBJ_FLAG_CLICKABLE);
 
-    s_ui.title_lbl = MakeLabel(title_row, "GLM 用量", 30);
+    s_ui.title_lbl = ScreenMakeLabel(title_row, "GLM 用量", 30, true);
     lv_obj_set_width(s_ui.title_lbl, LV_SIZE_CONTENT);
     lv_obj_set_flex_grow(s_ui.title_lbl, 1);
     s_ui.refresh_btn = MakeButton(title_row, "刷新", 110,
@@ -390,10 +378,10 @@ lv_obj_t* CreateBody(lv_obj_t* parent) {
             GlmUsageService::GetInstance().RequestRefresh();
         });
 
-    s_ui.plan_lbl = MakeLabel(page, "尚未更新");
+    s_ui.plan_lbl = ScreenMakeLabel(page, "尚未更新", 25, true);
 
     lv_obj_t* five_card = MakeCard(page);
-    s_ui.five_pct_lbl = MakeLabel(five_card, "5 小时窗口  --", 30);
+    s_ui.five_pct_lbl = ScreenMakeLabel(five_card, "5 小时窗口  --", 30, true);
     s_ui.five_bar = lv_bar_create(five_card);
     lv_obj_set_size(s_ui.five_bar, lv_pct(100), 18);
     lv_obj_set_style_bg_color(s_ui.five_bar, lv_color_white(), LV_PART_MAIN);
@@ -404,10 +392,10 @@ lv_obj_t* CreateBody(lv_obj_t* parent) {
     lv_obj_set_style_bg_color(s_ui.five_bar, lv_color_black(), LV_PART_INDICATOR);
     lv_obj_set_style_radius(s_ui.five_bar, 9, LV_PART_INDICATOR);
     lv_bar_set_range(s_ui.five_bar, 0, 100);
-    s_ui.five_detail_lbl = MakeLabel(five_card, "重置 --", 30);
+    s_ui.five_detail_lbl = ScreenMakeLabel(five_card, "重置 --", 30, true);
 
     lv_obj_t* week_card = MakeCard(page);
-    s_ui.week_pct_lbl = MakeLabel(week_card, "本周额度  --", 30);
+    s_ui.week_pct_lbl = ScreenMakeLabel(week_card, "本周额度  --", 30, true);
     s_ui.week_bar = lv_bar_create(week_card);
     lv_obj_set_size(s_ui.week_bar, lv_pct(100), 18);
     lv_obj_set_style_bg_color(s_ui.week_bar, lv_color_white(), LV_PART_MAIN);
@@ -418,11 +406,11 @@ lv_obj_t* CreateBody(lv_obj_t* parent) {
     lv_obj_set_style_bg_color(s_ui.week_bar, lv_color_black(), LV_PART_INDICATOR);
     lv_obj_set_style_radius(s_ui.week_bar, 9, LV_PART_INDICATOR);
     lv_bar_set_range(s_ui.week_bar, 0, 100);
-    s_ui.week_detail_lbl = MakeLabel(week_card, "重置 --", 30);
+    s_ui.week_detail_lbl = ScreenMakeLabel(week_card, "重置 --", 30, true);
 
     lv_obj_t* extra_card = MakeCard(page);
-    s_ui.five_reset_lbl = MakeLabel(extra_card, "5小时重置次数 --", 30);
-    s_ui.week_reset_lbl = MakeLabel(extra_card, "周重置次数 --", 30);
+    s_ui.five_reset_lbl = ScreenMakeLabel(extra_card, "5小时重置次数 --", 30, true);
+    s_ui.week_reset_lbl = ScreenMakeLabel(extra_card, "周重置次数 --", 30, true);
     return page;
 }
 
