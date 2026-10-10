@@ -149,7 +149,7 @@ void FillNvs(lv_obj_t* parent) {
         ScreenMakeLabel(parent, line, 25, true);
     }
 
-    ScreenMakeLabel(parent, "键名清单(仅键名,不含值):", true);
+    ScreenMakeLabel(parent, "键名清单(仅键名,不含值):", 25, true);
     nvs_iterator_t it = nullptr;
     esp_err_t res = nvs_entry_find(nullptr, nullptr, NVS_TYPE_ANY, &it);
     int shown = 0;
@@ -167,7 +167,7 @@ void FillNvs(lv_obj_t* parent) {
     if (shown == 0) {
         ScreenMakeLabel(parent, "  (空)", 25, true);
     } else if (shown >= kMaxNvsLines) {
-        ScreenMakeLabel(parent, "  …(过多,截断)", true);
+        ScreenMakeLabel(parent, "  …(过多,截断)", 25, true);
     }
 }
 
