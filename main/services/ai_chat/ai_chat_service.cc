@@ -289,18 +289,21 @@ void AiChat_BeginRecord() {
     s_cancel.store(false);
     s_record_flag.store(true);
     SetState(AiChatState::Recording);
+    // 按下即起管线任务开录(内部栈;HTTPS/TLS 读 CA 证书碰 flash,禁 PSRAM 栈)。
+    // 原设计在松手才建任务,而松手已清录音标志 → 循环瞬退,永远"录音太短"。
+    if (xTaskCreate(PipelineTask, "aichat_pipe", 8192, nullptr, 5, &s_task) != pdPASS) {
+        s_record_flag.store(false);
+        SetState(AiChatState::Error, "任务创建失败(内存不足)");
+    }
 }
 
 void AiChat_ReleaseRecord() {
-    if (!s_record_flag.load()) return;
-    s_record_flag.store(false);   // 让录音循环停下
-    // 起管线任务跑 STT+对话(内部栈;HTTPS/TLS 读 CA 证书碰 flash)
-    if (s_task == nullptr) {
-        if (xTaskCreate(PipelineTask, "aichat_pipe", 8192, nullptr, 5, &s_task) != pdPASS) {
-            ESP_LOGE(TAG, "pipeline task alloc failed");
-            SetState(AiChatState::Error, "任务创建失败(内存不足)");
-        }
-    }
+    s_record_flag.store(false);   // 录音循环停下 → 管线转 STT+对话
+}
+
+void AiChat_AbortRecord() {
+    s_cancel.store(true);
+    s_record_flag.store(false);   // 管线在下一个检查点直接结束,不跑 STT
 }
 
 AiChatState AiChat_GetState() { std::lock_guard<std::mutex> l(s_state_mutex); return s_state; }

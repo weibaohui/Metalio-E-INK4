@@ -81,8 +81,8 @@ void OnTimer(lv_timer_t*) { RefreshState(); }
 
 void OnScreenUnloaded(lv_event_t*) {
     s_alive = false;
-    // 若还在录音就松手,让管线停下(不跑 STT,直接结束)
-    if (AiChat_GetState() == AiChatState::Recording) AiChat_ReleaseRecord();
+    // 若还在录音就取消(不跑 STT,直接结束)
+    if (AiChat_GetState() == AiChatState::Recording) AiChat_AbortRecord();
     if (s_timer != nullptr) { lv_timer_delete(s_timer); s_timer = nullptr; }
     s_ui = {};
 }
