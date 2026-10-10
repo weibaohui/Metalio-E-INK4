@@ -164,10 +164,6 @@ void Application::EnsureAudioServiceRunning() {
         callbacks.on_send_queue_available = [this]() {
             xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);
         };
-        callbacks.on_wake_word_detected = [this](const std::string& wake_word) {
-            (void)wake_word;
-            xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
-        };
         callbacks.on_vad_change = [this](bool speaking) {
             (void)speaking;
             xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
@@ -191,20 +187,10 @@ void Application::StopAudioServiceIfRunning() {
     if (!audio_running_) {
         return;
     }
-    audio_service_.EnableWakeWordDetection(false);
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.Stop();
     audio_running_ = false;
     ESP_LOGI(TAG, "Audio service stopped");
-}
-
-void Application::EnsureVoiceModelsReady() {
-    if (voice_models_ready_) {
-        return;
-    }
-    // Assets::Apply 可能已注入 srmodels；此处与原先开机路径一致，再用 model 分区覆盖/补齐
-    audio_service_.SetModelsList(esp_srmodel_init("model"));
-    voice_models_ready_ = true;
 }
 
 void Application::EnsureProtocolReady() {
@@ -361,40 +347,6 @@ void Application::TeardownProtocol() {
     protocol_ready_ = false;
 }
 
-bool Application::EnterContinuousListening() {
-    if (!xiaozhi_voice_active_ || !protocol_) {
-        ESP_LOGW(TAG, "EnterContinuousListening ignored: session or protocol not ready");
-        return false;
-    }
-
-    // 会话内永不启用唤醒词（与 Idle/Speaking 状态机策略一致）
-    if (audio_running_) {
-        audio_service_.EnableWakeWordDetection(false);
-    }
-
-    if (!protocol_->IsAudioChannelOpened()) {
-        SetDeviceState(kDeviceStateConnecting);
-        if (!EnsureAssistantNetworkReady()) {
-            ESP_LOGE(TAG, "EnterContinuousListening: network not ready");
-            SetDeviceState(kDeviceStateIdle);
-            if (!StandbyScreen::IsActive()) {
-                Alert(Lang::Strings::SERVER_NOT_CONNECTED, Lang::Strings::SERVER_NOT_CONNECTED, "cloud_slash",
-                      Lang::Sounds::OGG_EXCLAMATION);
-            }
-            return false;
-        }
-        if (!protocol_->OpenAudioChannel()) {
-            // OpenAudioChannel 内 SetError → MAIN_EVENT_ERROR，勿再 Alert
-            ESP_LOGE(TAG, "EnterContinuousListening: OpenAudioChannel failed");
-            SetDeviceState(kDeviceStateIdle);
-            return false;
-        }
-    }
-
-    SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-    return true;
-}
-
 void Application::StartXiaozhiVoice(bool enter_listening) {
     if (!api::HasHost()) {
         ESP_LOGI(TAG, "StartXiaozhiVoice skipped: blank cloud endpoints");
@@ -467,7 +419,6 @@ void Application::StartXiaozhiVoice(bool enter_listening) {
                  enter_listening ? "hold-through listen" : "PTT: prepare only");
 
         EnsureAudioServiceRunning();
-        EnsureVoiceModelsReady();
         EnsureProtocolReady();
 
         // Ensure* 可能较慢；期间离页则拆协议并停音频，与 StopXiaozhiVoice 一致归还占用
@@ -486,9 +437,8 @@ void Application::StartXiaozhiVoice(bool enter_listening) {
 
         xiaozhi_voice_active_ = true;
 
-        // 会话内永不启用唤醒词；非 hold-through 时等 BOOT 按下再开语音处理
+        // 非 hold-through 时等 BOOT 按下再开语音处理
         if (audio_running_) {
-            audio_service_.EnableWakeWordDetection(false);
             audio_service_.EnableVoiceProcessing(false);
         }
     }
@@ -1231,7 +1181,6 @@ void Application::MainEventLoop() {
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, MAIN_EVENT_SCHEDULE |
             MAIN_EVENT_SEND_AUDIO |
-            MAIN_EVENT_WAKE_WORD_DETECTED |
             MAIN_EVENT_VAD_CHANGE |
             MAIN_EVENT_CLOCK_TICK |
             MAIN_EVENT_ERROR, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -1248,12 +1197,6 @@ void Application::MainEventLoop() {
                 if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
                     break;
                 }
-            }
-        }
-
-        if (bits & MAIN_EVENT_WAKE_WORD_DETECTED) {
-            if (xiaozhi_voice_active_) {
-                OnWakeWordDetected();
             }
         }
 
@@ -1285,44 +1228,6 @@ void Application::MainEventLoop() {
                 // SystemInfo::PrintHeapStats();
             }
         }
-    }
-}
-
-void Application::OnWakeWordDetected() {
-    if (!xiaozhi_voice_active_ || !protocol_) {
-        return;
-    }
-
-    if (device_state_ == kDeviceStateIdle) {
-        audio_service_.EncodeWakeWord();
-
-        if (!protocol_->IsAudioChannelOpened()) {
-            SetDeviceState(kDeviceStateConnecting);
-            if (!Board::GetInstance().EnsureNetworkReady() || !protocol_->OpenAudioChannel()) {
-                audio_service_.EnableWakeWordDetection(true);
-                return;
-            }
-        }
-
-        auto wake_word = audio_service_.GetLastWakeWord();
-        ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
-#if CONFIG_SEND_WAKE_WORD_DATA
-        // Encode and send the wake word data to the server
-        while (auto packet = audio_service_.PopWakeWordPacket()) {
-            protocol_->SendAudio(std::move(packet));
-        }
-        // Set the chat state to wake word detected
-        protocol_->SendWakeWordDetected("Hi 钛灵");
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-#else
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-        // Play the pop up sound to indicate the wake word is detected
-        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
-#endif
-    } else if (device_state_ == kDeviceStateSpeaking) {
-        AbortSpeaking(kAbortReasonWakeWordDetected);
-    } else if (device_state_ == kDeviceStateActivating) {
-        SetDeviceState(kDeviceStateIdle);
     }
 }
 
@@ -1361,10 +1266,9 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateIdle:
             ApplyIdleStatusBar();
             display->SetEmotion("neutral");
-            // 屏级会话：Idle 回落只停语音处理，不重新打开唤醒词
+            // 屏级会话：Idle 回落只停语音处理
             if (xiaozhi_voice_active_ && audio_running_) {
                 audio_service_.EnableVoiceProcessing(false);
-                audio_service_.EnableWakeWordDetection(false);
             }
             break;
         case kDeviceStateConnecting:
@@ -1385,7 +1289,6 @@ void Application::SetDeviceState(DeviceState state) {
                 // Send the start listening command
                 protocol_->SendStartListening(listening_mode_);
                 audio_service_.EnableVoiceProcessing(true);
-                audio_service_.EnableWakeWordDetection(false);
             }
             break;
         case kDeviceStateSpeaking:
@@ -1395,8 +1298,6 @@ void Application::SetDeviceState(DeviceState state) {
                 if (listening_mode_ != kListeningModeRealtime) {
                     audio_service_.EnableVoiceProcessing(false);
                 }
-                // 会话内不启用唤醒词打断；Realtime 模式靠 AEC 全双工
-                audio_service_.EnableWakeWordDetection(false);
                 audio_service_.ResetDecoder();
             }
             break;
@@ -1512,66 +1413,6 @@ bool Application::UpgradeFirmwareUrl(const std::string& url, const std::string& 
     vTaskDelay(pdMS_TO_TICKS(1200));  // 让 100% 有机会上屏
     // 成功路径直接重启，无需 Dismiss（复位后自然清空）
     Reboot();
-    return true;
-}
-
-void Application::WakeWordInvoke(const std::string& wake_word) {
-    if (!xiaozhi_voice_active_ || !protocol_) {
-        return;
-    }
-
-    if (device_state_ == kDeviceStateIdle) {
-        audio_service_.EncodeWakeWord();
-
-        if (!protocol_->IsAudioChannelOpened()) {
-            SetDeviceState(kDeviceStateConnecting);
-            if (!Board::GetInstance().EnsureNetworkReady() || !protocol_->OpenAudioChannel()) {
-                audio_service_.EnableWakeWordDetection(true);
-                return;
-            }
-        }
-
-        ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
-#if CONFIG_USE_AFE_WAKE_WORD || CONFIG_USE_CUSTOM_WAKE_WORD
-        // Encode and send the wake word data to the server
-        while (auto packet = audio_service_.PopWakeWordPacket()) {
-            protocol_->SendAudio(std::move(packet));
-        }
-        // Set the chat state to wake word detected
-        protocol_->SendWakeWordDetected(wake_word);
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-#else
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-        // Play the pop up sound to indicate the wake word is detected
-        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
-#endif
-    } else if (device_state_ == kDeviceStateSpeaking) {
-        Schedule([this]() {
-            AbortSpeaking(kAbortReasonNone);
-        });
-    } else if (device_state_ == kDeviceStateListening) {   
-        Schedule([this]() {
-            if (protocol_) {
-                protocol_->CloseAudioChannel();
-            }
-        });
-    }
-}
-
-bool Application::CanEnterSleepMode() {
-    if (device_state_ != kDeviceStateIdle) {
-        return false;
-    }
-
-    if (protocol_ && protocol_->IsAudioChannelOpened()) {
-        return false;
-    }
-
-    if (xiaozhi_voice_active_ && !audio_service_.IsIdle()) {
-        return false;
-    }
-
-    // Now it is safe to enter sleep mode
     return true;
 }
 

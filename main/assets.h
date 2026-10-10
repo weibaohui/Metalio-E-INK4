@@ -45,7 +45,6 @@ private:
     bool partition_valid_ = false;
     bool checksum_valid_ = false;
     std::string default_assets_url_;
-    srmodel_list_t* models_list_ = nullptr;
     std::map<std::string, Asset> assets_;
 };
 
