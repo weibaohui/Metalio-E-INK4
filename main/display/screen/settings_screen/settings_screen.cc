@@ -44,9 +44,15 @@ enum class SettingsTab : int {
     kAbout = 12,  // 关于始终放最后
 };
 
+// Tab 描述表驱动(分析文档 §3.5):新增 Tab 只加一行,不再改三个 switch。
+// reset/build 必填;on_activated/on_deactivated 可为空。
 struct TabEntry {
     SettingsTab id;
     const char* (*name)();
+    void (*build)(lv_obj_t*);
+    void (*reset)();
+    void (*on_activated)();
+    void (*on_deactivated)();
 };
 
 const char* TabNameNetwork() { return Lang::Strings::SETTINGS_TAB_NETWORK; }
@@ -63,17 +69,19 @@ const char* TabNameAbout() { return Lang::Strings::SETTINGS_TAB_ABOUT; }
 
 // 关于 Tab 必须保持为数组最后一项
 constexpr TabEntry kTabs[] = {
-    {SettingsTab::kNetwork, TabNameNetwork},
-    {SettingsTab::kTheme, TabNameTheme},
-    {SettingsTab::kLanguage, TabNameLanguage},
-    {SettingsTab::kHaptic, TabNameHaptic},
-    {SettingsTab::kPower, TabNamePower},
-    {SettingsTab::kStorage, TabNameStorage},
-    {SettingsTab::kBluetooth, TabNameBluetooth},
-    {SettingsTab::kTest, TabNameTest},
-    {SettingsTab::kApps, TabNameApps},
-    {SettingsTab::kMcp, TabNameMcp},
-    {SettingsTab::kAbout, TabNameAbout},
+    {SettingsTab::kNetwork, TabNameNetwork, SettingsNetworkTab_Build, SettingsNetworkTab_Reset, nullptr, nullptr},
+    {SettingsTab::kTheme, TabNameTheme, SettingsThemeTab_Build, SettingsThemeTab_Reset, nullptr, nullptr},
+    {SettingsTab::kLanguage, TabNameLanguage, SettingsLanguageTab_Build, SettingsLanguageTab_Reset, nullptr, nullptr},
+    {SettingsTab::kHaptic, TabNameHaptic, SettingsHapticTab_Build, SettingsHapticTab_Reset, nullptr, nullptr},
+    {SettingsTab::kPower, TabNamePower, SettingsPowerTab_Build, SettingsPowerTab_Reset, nullptr, nullptr},
+    {SettingsTab::kStorage, TabNameStorage, SettingsStorageTab_Build, SettingsStorageTab_Reset, nullptr, nullptr},
+    {SettingsTab::kBluetooth, TabNameBluetooth, SettingsBluetoothTab_Build, SettingsBluetoothTab_Reset,
+     SettingsBluetoothTab_OnActivated, SettingsBluetoothTab_OnDeactivated},
+    {SettingsTab::kTest, TabNameTest, SettingsTestTab_Build, SettingsTestTab_Reset,
+     SettingsTestTab_OnActivated, SettingsTestTab_OnDeactivated},
+    {SettingsTab::kApps, TabNameApps, SettingsAppsTab_Build, SettingsAppsTab_Reset, nullptr, nullptr},
+    {SettingsTab::kMcp, TabNameMcp, SettingsMcpTab_Build, SettingsMcpTab_Reset, nullptr, nullptr},
+    {SettingsTab::kAbout, TabNameAbout, SettingsAboutTab_Build, SettingsAboutTab_Reset, nullptr, nullptr},
 };
 constexpr int kTabCount = sizeof(kTabs) / sizeof(kTabs[0]);
 static_assert(kTabs[kTabCount - 1].id == SettingsTab::kAbout, "about tab must be last");
@@ -111,40 +119,9 @@ void RefreshBackFactory(SettingsTab id) {
 }
 
 void ResetTab(SettingsTab id) {
-    switch (id) {
-        case SettingsTab::kNetwork:
-            SettingsNetworkTab_Reset();
-            break;
-        case SettingsTab::kTheme:
-            SettingsThemeTab_Reset();
-            break;
-        case SettingsTab::kLanguage:
-            SettingsLanguageTab_Reset();
-            break;
-        case SettingsTab::kHaptic:
-            SettingsHapticTab_Reset();
-            break;
-        case SettingsTab::kPower:
-            SettingsPowerTab_Reset();
-            break;
-        case SettingsTab::kStorage:
-            SettingsStorageTab_Reset();
-            break;
-        case SettingsTab::kBluetooth:
-            SettingsBluetoothTab_Reset();
-            break;
-        case SettingsTab::kTest:
-            SettingsTestTab_Reset();
-            break;
-        case SettingsTab::kApps:
-            SettingsAppsTab_Reset();
-            break;
-        case SettingsTab::kMcp:
-            SettingsMcpTab_Reset();
-            break;
-        case SettingsTab::kAbout:
-            SettingsAboutTab_Reset();
-            break;
+    const TabEntry& t = kTabs[TabIndexOf(id)];
+    if (t.reset != nullptr) {
+        t.reset();
     }
 }
 
@@ -153,40 +130,9 @@ void BuildTab(SettingsTab id) {
     if (page == nullptr) {
         return;
     }
-    switch (id) {
-        case SettingsTab::kNetwork:
-            SettingsNetworkTab_Build(page);
-            break;
-        case SettingsTab::kTheme:
-            SettingsThemeTab_Build(page);
-            break;
-        case SettingsTab::kLanguage:
-            SettingsLanguageTab_Build(page);
-            break;
-        case SettingsTab::kHaptic:
-            SettingsHapticTab_Build(page);
-            break;
-        case SettingsTab::kPower:
-            SettingsPowerTab_Build(page);
-            break;
-        case SettingsTab::kStorage:
-            SettingsStorageTab_Build(page);
-            break;
-        case SettingsTab::kBluetooth:
-            SettingsBluetoothTab_Build(page);
-            break;
-        case SettingsTab::kTest:
-            SettingsTestTab_Build(page);
-            break;
-        case SettingsTab::kApps:
-            SettingsAppsTab_Build(page);
-            break;
-        case SettingsTab::kMcp:
-            SettingsMcpTab_Build(page);
-            break;
-        case SettingsTab::kAbout:
-            SettingsAboutTab_Build(page);
-            break;
+    const TabEntry& t = kTabs[TabIndexOf(id)];
+    if (t.build != nullptr) {
+        t.build(page);
     }
     s_ui.content_built = true;
 }
@@ -196,15 +142,12 @@ void TearDownActiveTab() {
         s_ui.active_tab >= kTabCount) {
         return;
     }
-    const SettingsTab id = kTabs[s_ui.active_tab].id;
-    if (id == SettingsTab::kBluetooth) {
-        SettingsBluetoothTab_OnDeactivated();
-    }
-    if (id == SettingsTab::kTest) {
-        SettingsTestTab_OnDeactivated();
+    const TabEntry& tab = kTabs[s_ui.active_tab];
+    if (tab.on_deactivated != nullptr) {
+        tab.on_deactivated();
     }
     // Reset 先清 alive/指针，异步回调不再碰已删控件
-    ResetTab(id);
+    ResetTab(tab.id);
     lv_obj_clean(s_ui.content_page);
     s_ui.content_built = false;
 }
@@ -227,16 +170,13 @@ void ShowTab(int index) {
         }
     }
 
-    const SettingsTab id = kTabs[index].id;
-    BuildTab(id);
+    const TabEntry& tab = kTabs[index];
+    BuildTab(tab.id);
 
-    if (id == SettingsTab::kBluetooth) {
-        SettingsBluetoothTab_OnActivated();
+    if (tab.on_activated != nullptr) {
+        tab.on_activated();
     }
-    if (id == SettingsTab::kTest) {
-        SettingsTestTab_OnActivated();
-    }
-    RefreshBackFactory(id);
+    RefreshBackFactory(tab.id);
 }
 
 void OnTabClicked(lv_event_t* e) {
