@@ -4,6 +4,8 @@
 #include <string>
 #include <nvs_flash.h>
 
+// NVS 键值读写(§2.3 SafeSettings):所有访问自带栈位置守卫——PSRAM 栈任务调用
+// 会自动转发 main 任务同步执行,防 flash 写窗口 cache 断言崩机;内部栈零开销直访。
 class Settings {
 public:
     Settings(const std::string& ns, bool read_write = false);
