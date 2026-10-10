@@ -333,3 +333,27 @@ cloud_screen 两个无调用 dialog 函数清理、§1.8 对话 Tab 文案(随�
 开机优化候选:network 步 ~8s(等网策略,产品行为变更,单独立项)。
 高风险 §1.1 唤醒词删除 + §1.7 boards/common 条件编译——**唯一硬前置**是
 百问通话 AEC 实测,等用户按一次 PTT;这是把 42KB 空闲内 RAM 抬起来的大头。
+
+## 跟进 8(2026-10-10 第七批:§1.7 + §1.1,含重大前提修正)
+
+- **§1.7 落地**:boards/common 6 个死源(knob/axp2101/sy6970/adc_battery_monitor/
+  press_to_talk_mcp_tool/afsk_demod)不进编译。ml307_board(dual_network_board 在用)/
+  uart_eth_modem(nt26 依赖)/backlight(mcp_server 链接)/nt26_board(4G 路径)经查保留。
+  收益在编译时间与可读性;链接器本就 GC 了死代码,flash 几乎不变。
+- **§1.1 落地,但文档原前提不成立,特此修正**:调用图谱证实本 fork 的 wake_word_
+  对象**从未被实例化**(SetModelsList 显式 reset:"本产品不建唤醒词对象"),
+  "Hi 钛灵"伪造唤醒不可达,PTT 今天就经 StartListening 直连。故删除是零行为
+  变化的死代码清除(净 -389 行+整删文件,flash -2.1KB),**并不释放内部 RAM**——
+  正文"AFE 唤醒词实例化占 RAM,删掉后内部 RAM 宽裕"针对上游行为,本 fork 早已
+  绕过。42KB 空闲内 RAM 的真实大头是 WiFi/TLS/LVGL/opus 等在用组件,继续压榨
+  属产品级调优(缓存尺寸/碎片治理),不在死代码范畴。
+- 唤醒词删除后的真机验收点:百问按住说话/松手停(BOOT 长按路径)、home/standby
+  hold-through 进聆听、工厂自检录音。用户侧反馈:**百问功能一直未能正常使用,
+  根因是开源版云端点为空串(cloudzao_host/ota_url 均 ""),无服务端可连**,非固件
+  缺陷;启用需部署 xiaozhi 协议服务端或接入商业云后填 ota_url。
+- **语音功能新方向**:feat/ai-voice-chat 分支(按住说话→MiniMax STT→OpenAI 兼容
+  LLM→屏幕文字回复,自足不依赖自建服务)待正式审查后由用户决定合入;唤醒词
+  删除与该路线完全兼容。
+
+**§1.x 至此全部闭环。剩余:§3.4(缓,等可交互验证的会话)、开机 network 步
+~8s(产品决策)、ai-voice-chat 审查合入(新)。
