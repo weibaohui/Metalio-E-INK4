@@ -35,18 +35,6 @@ int64_t s_armed_at = 0;
 const lv_font_t* UiFont() { return fontpack_lv_font_ui(); }
 void DisableScroll(lv_obj_t* o) { lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE); }
 
-lv_obj_t* MakeLabel(lv_obj_t* parent, const char* text, int font_size = 25) {
-    lv_obj_t* lbl = lv_label_create(parent);
-    lv_label_set_text(lbl, text != nullptr ? text : "");
-    const lv_font_t* font = font_size > 25 ? fontpack_lv_font_get(font_size, 2) : UiFont();
-    lv_obj_set_style_text_font(lbl, font != nullptr ? font : UiFont(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(lbl, lv_pct(100));
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-    return lbl;
-}
-
 void SetFooter(const char* text) {
     if (s_ui.footer_lbl != nullptr) lv_label_set_text(s_ui.footer_lbl, text);
 }
@@ -165,12 +153,12 @@ lv_obj_t* PowerScreen::Create() {
     DisableScroll(body);
     lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
 
-    MakeLabel(body, "电源管理", 30);
+    ScreenMakeLabel(body, "电源管理", 30, true);
     MakeBigButton(body, "息屏", OnSleepClicked, nullptr);
     MakeBigButton(body, "重启", OnRebootClicked, &s_ui.reboot_lbl);
     MakeBigButton(body, "关机", OnShutdownClicked, &s_ui.shutdown_lbl);
 
-    s_ui.footer_lbl = MakeLabel(body, "息屏后按 BOOT/POWER 键唤醒;重启/关机需二次确认");
+    s_ui.footer_lbl = ScreenMakeLabel(body, "息屏后按 BOOT/POWER 键唤醒;重启/关机需二次确认", 25, true);
     lv_obj_set_style_text_align(s_ui.footer_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
     VkKey_AttachScreen(screen, kScreenId, VkKeyScreenDesc{PowerScreen::Create, nullptr});

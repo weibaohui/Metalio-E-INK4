@@ -75,37 +75,6 @@ int WeekdayMonFirst(int y, int m, int d) {
 }
 
 // ---- UI 元素 ----
-lv_obj_t* MakeLabel(lv_obj_t* parent, const char* text, int font_size = 25) {
-    lv_obj_t* lbl = lv_label_create(parent);
-    lv_label_set_text(lbl, text != nullptr ? text : "");
-    const lv_font_t* font = font_size > 25 ? fontpack_lv_font_get(font_size, 2) : UiFont();
-    lv_obj_set_style_text_font(lbl, font != nullptr ? font : UiFont(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-    return lbl;
-}
-
-lv_obj_t* MakeBtn(lv_obj_t* parent, const char* text, lv_coord_t w, lv_event_cb_t cb, void* ud) {
-    lv_obj_t* btn = lv_obj_create(parent);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, w, 44);
-    lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(btn, lv_color_black(), 0);
-    lv_obj_set_style_border_width(btn, 2, 0);
-    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-    HapticAttachClick(btn);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
-    lv_obj_t* lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, text);
-    lv_obj_set_style_text_font(lbl, UiFont(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_obj_center(lbl);
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-    return lbl;
-}
-
 // 选中某天 → 底部日程区显示
 void ShowDayPanel(const std::string& date) {
     if (s_ui.panel_lbl == nullptr) return;
@@ -171,7 +140,7 @@ void BuildMonthGrid(lv_coord_t cell_w) {
     lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
     DisableScroll(head); lv_obj_clear_flag(head, LV_OBJ_FLAG_CLICKABLE);
     for (int c = 0; c < kCols; ++c) {
-        lv_obj_t* w = MakeLabel(head, kWdayNames[c]);
+        lv_obj_t* w = ScreenMakeLabel(head, kWdayNames[c], 25, false);
         lv_obj_set_width(w, cell_w);
         lv_obj_set_style_text_align(w, LV_TEXT_ALIGN_CENTER, 0);
     }
@@ -297,11 +266,11 @@ lv_obj_t* CalendarScreen::Create() {
     lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     DisableScroll(head); lv_obj_clear_flag(head, LV_OBJ_FLAG_CLICKABLE);
-    MakeBtn(head, "‹", 70, OnPrevNext, (void*)0);
-    s_ui.month_lbl = MakeLabel(head, "日历", 28);
+    ScreenMakeBtn(head, "‹", 70, 44, OnPrevNext, (void*)0);
+    s_ui.month_lbl = ScreenMakeLabel(head, "日历", 28, false);
     lv_obj_set_flex_grow(s_ui.month_lbl, 1);
     lv_obj_set_style_text_align(s_ui.month_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    MakeBtn(head, "›", 70, OnPrevNext, (void*)1);
+    ScreenMakeBtn(head, "›", 70, 44, OnPrevNext, (void*)1);
 
     // 网格
     s_ui.grid = lv_obj_create(body);
@@ -322,7 +291,7 @@ lv_obj_t* CalendarScreen::Create() {
     lv_obj_set_style_pad_all(panel, 10, 0);
     lv_obj_set_flex_grow(panel, 1);
     DisableScroll(panel); lv_obj_clear_flag(panel, LV_OBJ_FLAG_CLICKABLE);
-    s_ui.panel_lbl = MakeLabel(panel, "");
+    s_ui.panel_lbl = ScreenMakeLabel(panel, "", 25, false);
     lv_obj_set_width(s_ui.panel_lbl, lv_pct(100));
     lv_label_set_long_mode(s_ui.panel_lbl, LV_LABEL_LONG_WRAP);
 
