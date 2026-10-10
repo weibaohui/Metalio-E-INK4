@@ -232,3 +232,33 @@ Init（boot·main 任务·可读 NVS）/ Start（进屏·LVGL 任务·不碰 fla
 ② §3.2 剩余 ~12 处一次性任务迁移(机械,逐个核对 book_screen) →
 ③ §2.3 SafeSettings → ④ §3.3 补全 + §2.8 + §3.1 完整版 + §3.4(中风险框架批) →
 ⑤ §1.1 + §1.7(高风险,先真机 AEC)。§2.4 挪到发布准备期。
+
+## 跟进 4(2026-10-10 第三批落地,§3.2 全部 + §2.2 首批)
+
+**§3.2 PSRAM 工作线程——收尾完成**(refactor/psr-worker-migration → main@5c9ef54):
+- 迁移 11 处:book_screen×6、standby_wallpaper、task_screen BatchTask、
+  assistant_boot_photo、wallpaper_screen×2。**其中 3 处是真 bug**:
+  book_screen 6 处 + standby/task_batch 以裸 vTaskDelete(nullptr) 收尾,违反 IDF
+  契约(WithCaps 创建必须 vTaskDeleteWithCaps 删),每次翻页/开书/批量操作泄漏
+  一个 PSRAM 栈——此前收音机案之后又一个"配对"类事故源,已机制化消灭。
+- 刻意不迁(终态):audio_service×4/afe×1(常驻任务)、standby_lp/cloud_download/
+  book_home_snapshot(MALLOC_CAP_INTERNAL,内 RAM 栈是刻意的)、ttf_convert
+  (配对正确,5 出口改写 churn>收益)、radio_player(常驻流任务,注释齐全)。
+
+**§2.2 HTTP helper——首批落地**(feat/http-helper → main@cbe9d0e):
+- `api::HttpFetch/HttpGetString/HttpPostJson`(api_http.h,header-only):
+  超时/1 跳重定向(跨 host 剥鉴权头)/体积上限/TLS 预检(12KB)/空 body
+  SetContent("") 特判/鉴权头永不自动携带,失败 W 级成功 D 级日志。
+- 已迁 5 站:device_wifi_location、standby 天气、book_progress_sync、
+  glm_usage(内部 helper,3 调用点)、calendar_ics(删手写重定向+预检)。
+- **剩余迁移面**:push_resources×2(需取消钩子 DownloadGate)、ota×2(条件
+  GET/POST + 身份头)、task_screen(DELETE/信封);另有字节缓冲变体待做——
+  cloud_screen/book_cloud_library 的 DownloadUrlToBuffer 是明显复制粘贴,a2ui_image
+  同构,需要 GetBytes(取消回调 + 调用方 buffer)再收。
+- 明确不收(流式/multipart/刷写):http_download_file、ota Upgrade、mcp_server×2、
+  assistant_boot_photo 上传、uvc Explain、assets Download。
+- 真机基线(本批刷机后):空闲内 RAM 剩 42KB/历史最低 26KB——预检阈值 12KB
+  与现状的余量很小,§1.1 删唤醒词(运行时堆分配)仍是内存大头。
+
+顺带发现:cloud_screen.cc 的 ShowDownloadDialog/ShowActionDialog 已无调用
+(编译警告既有,自开源初始提交就在),列入下轮死代码清理。
