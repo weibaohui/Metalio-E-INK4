@@ -49,3 +49,15 @@ void ScreenPaintCoalesceReset(ScreenPaintCoalesce* c);
 
 // 页面外层的点状装饰底纹。
 void ScreenApplyDotBackdrop(lv_obj_t* obj);
+
+// ---- 屏幕骨架共享件(公共功能沉淀,docs/code-review-optimization-2026-10.md §3.3) ----
+// 各业务屏原先各自 static 重定义同形 MakeLabel/MakeBtn,统一收拢到这里。
+
+// 黑字标签:UI 字体;font_size>25 时取大字体(字库缺该规格会回退 UI 字体,
+// NULL 字体会让 lv_text 测量死循环,必须空守卫)。wrap=true:宽 100% + 长文折行。
+lv_obj_t* ScreenMakeLabel(lv_obj_t* parent, const char* text, int font_size = 25, bool wrap = false);
+
+// 白底黑框圆角按钮(带触觉反馈),cb 挂 LV_EVENT_CLICKED;返回内部 label 指针
+// (可用于改字),不需要时传 nullptr。
+lv_obj_t* ScreenMakeBtn(lv_obj_t* parent, const char* text, lv_coord_t w, lv_coord_t h,
+                        lv_event_cb_t cb, void* user_data = nullptr, lv_obj_t** lbl_out = nullptr);

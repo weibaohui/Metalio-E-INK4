@@ -35,18 +35,6 @@ bool s_alive = false;
 
 const lv_font_t* UiFont() { return fontpack_lv_font_ui(); }
 
-lv_obj_t* MakeLabel(lv_obj_t* parent, const char* text, int font_size = 25) {
-    lv_obj_t* lbl = lv_label_create(parent);
-    lv_label_set_text(lbl, text != nullptr ? text : "");
-    const lv_font_t* font = font_size > 25 ? fontpack_lv_font_get(font_size, 2) : UiFont();
-    lv_obj_set_style_text_font(lbl, font != nullptr ? font : UiFont(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(lbl, lv_pct(100));
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-    return lbl;
-}
-
 // 分节标题:黑底白字横条,墨水屏上分节最醒目
 void MakeSection(lv_obj_t* parent, const char* title) {
     lv_obj_t* bar = lv_obj_create(parent);
@@ -85,9 +73,9 @@ void AddHeapLines(lv_obj_t* parent, const char* name, uint32_t caps) {
     char line[160];
     const int used_pct = total_b > 0 ? (int)((total_b - free_b) * 100 / total_b) : 0;
     snprintf(line, sizeof(line), "%s:空闲 %s / 共 %s(已用 %d%%)", name, a, b, used_pct);
-    MakeLabel(parent, line);
+    ScreenMakeLabel(parent, line, 25, true);
     snprintf(line, sizeof(line), "  最大连续块 %s;历史最低空闲 %s", c, d);
-    MakeLabel(parent, line);
+    ScreenMakeLabel(parent, line, 25, true);
 }
 
 void FillMemory(lv_obj_t* parent) {
@@ -110,7 +98,7 @@ void FillStorage(lv_obj_t* parent) {
     } else {
         snprintf(line, sizeof(line), "Flash:%s", flash_a);
     }
-    MakeLabel(parent, line);
+    ScreenMakeLabel(parent, line, 25, true);
 
     auto& sd = SdCardManager::GetInstance();
     if (sd.IsMounted()) {
@@ -130,7 +118,7 @@ void FillStorage(lv_obj_t* parent) {
     } else {
         snprintf(line, sizeof(line), "SD 卡:未挂载/未插入");
     }
-    MakeLabel(parent, line);
+    ScreenMakeLabel(parent, line, 25, true);
 }
 
 const char* NvsTypeName(nvs_type_t t) {
@@ -158,10 +146,10 @@ void FillNvs(lv_obj_t* parent) {
         snprintf(line, sizeof(line), "条目:已用 %u / 共 %u(命名空间 %u 个)",
                  (unsigned)stats.used_entries, (unsigned)stats.total_entries,
                  (unsigned)stats.namespace_count);
-        MakeLabel(parent, line);
+        ScreenMakeLabel(parent, line, 25, true);
     }
 
-    MakeLabel(parent, "键名清单(仅键名,不含值):");
+    ScreenMakeLabel(parent, "键名清单(仅键名,不含值):", true);
     nvs_iterator_t it = nullptr;
     esp_err_t res = nvs_entry_find(nullptr, nullptr, NVS_TYPE_ANY, &it);
     int shown = 0;
@@ -170,16 +158,16 @@ void FillNvs(lv_obj_t* parent) {
         if (nvs_entry_info(it, &info) == ESP_OK) {
             snprintf(line, sizeof(line), "  %s / %s (%s)",
                      info.namespace_name, info.key, NvsTypeName(info.type));
-            MakeLabel(parent, line);
+            ScreenMakeLabel(parent, line, 25, true);
             ++shown;
         }
         res = nvs_entry_next(&it);
     }
     nvs_release_iterator(it);
     if (shown == 0) {
-        MakeLabel(parent, "  (空)");
+        ScreenMakeLabel(parent, "  (空)", 25, true);
     } else if (shown >= kMaxNvsLines) {
-        MakeLabel(parent, "  …(过多,截断)");
+        ScreenMakeLabel(parent, "  …(过多,截断)", true);
     }
 }
 
@@ -188,13 +176,13 @@ void FillSystem(lv_obj_t* parent) {
     char line[160];
     snprintf(line, sizeof(line), "芯片:%s  IDF:v%s",
              SystemInfo::GetChipModelName().c_str(), esp_get_idf_version());
-    MakeLabel(parent, line);
+    ScreenMakeLabel(parent, line, 25, true);
     snprintf(line, sizeof(line), "MAC:%s", SystemInfo::GetMacAddress().c_str());
-    MakeLabel(parent, line);
+    ScreenMakeLabel(parent, line, 25, true);
     const int64_t up_s = esp_timer_get_time() / 1000000;
     snprintf(line, sizeof(line), "本次开机运行:%" PRId64 " 天 %02" PRId64 ":%02" PRId64 ":%02" PRId64,
              up_s / 86400, (up_s / 3600) % 24, (up_s / 60) % 60, up_s % 60);
-    MakeLabel(parent, line);
+    ScreenMakeLabel(parent, line, 25, true);
 }
 
 void FillBody() {
