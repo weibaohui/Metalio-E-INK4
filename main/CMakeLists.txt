@@ -145,6 +145,22 @@ set(INCLUDE_DIRS "." "display" "display/LUT" "display/a2ui" "display/font" "disp
 
 # Add board common files（GLOB 缓存：新增 boards/common/*.cc 后需 idf.py reconfigure）
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
+# §1.7:本板(metalio-e-ink-4)与保留公共件都不引用的死源,不进编译。
+# 全仓 grep 零引用(头与符号);哪天加新板用到,从下面移回即可:
+# - knob: 旋转编码器,本板无此硬件
+# - axp2101/sy6970/adc_battery_monitor: 别的板的电源方案(本板用 BQ27220+CX25601N)
+# - press_to_talk_mcp_tool: 本板 PTT 走按键 VkKey 分发,不用该 MCP 工具
+# - afsk_demod: 音频配网解调,本板 SoftAP 配网用不到
+# 注:ml307_board/uart_eth_modem/backlight/nt26_board 虽疑似边缘,但分别被
+# dual_network_board(在用)/nt26_board(在用)/mcp_server(链接需要)/本板引用,保留。
+list(REMOVE_ITEM BOARD_COMMON_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/knob.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/axp2101.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/sy6970.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/adc_battery_monitor.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/press_to_talk_mcp_tool.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/afsk_demod.cc
+)
 list(APPEND SOURCES ${BOARD_COMMON_SOURCES})
 # 显式纳入，避免仅依赖 GLOB 缓存漏编
 list(APPEND SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/uvc_still_camera.cc)
