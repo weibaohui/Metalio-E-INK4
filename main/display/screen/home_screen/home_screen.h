@@ -28,4 +28,7 @@ public:
     // 按稳定 id 查询("glm"/"radio"/"cal"/...);未知 id 或未载入缓存视为开启(不误隐藏)。
     // 供 boot 期 MCP 工具注册按开关门控:关掉的 APP 不注册。
     static bool IsAppEnabledById(const char* id);
+    // boot 期表驱动 MCP 注册:遍历 APP 表,开着的 APP 调其 register_mcp 钩子
+    // (关掉的 APP 连 MCP 工具都不注册)。须晚于 InitAppToggles。
+    static void RegisterEnabledAppMcpTools();
 };
