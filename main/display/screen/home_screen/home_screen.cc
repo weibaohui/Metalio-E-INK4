@@ -961,7 +961,6 @@ lv_obj_t *HomeScreen::Create()
     home_hero::Mount(scr, status.height);
     home_hero::Start();
 
-    const int indicator_h = pages > 1 ? HOME_PAGE_INDICATOR_H : 0;
     // 多屏分页(需求:触摸手势+多屏):宫格容器固定为"单页视口"(最多 kRowsPerPage 行,
     // 贴合屏幕),超出的 APP 落到下一页,由左右滑动/盖板虚拟键切换 + 页码指示。
     // 不再是"行数随 app 总数无限长高"(那样超一屏会溢出且无分页可达)。
@@ -971,8 +970,9 @@ lv_obj_t *HomeScreen::Create()
         HOME_APPS_PAD_TOP + apps_rows * HOME_APP_CARD_H +
         (apps_rows > 1 ? (apps_rows - 1) * HOME_APP_CARD_GAP_ROW : 0) +
         HOME_APPS_PAD_BOT;
-    const lv_coord_t apps_bottom_inset =
-        HOME_APPS_LIFT + (indicator_h > 0 ? indicator_h : 0);
+    // 圆点指示画在宫格下方的 HOME_APPS_LIFT 空余带内(y=-2 贴底),不额外
+    // 抬高宫格——否则多页时宫格上移 18px 压住大字钟表(实测钟表显示不全)。
+    const lv_coord_t apps_bottom_inset = HOME_APPS_LIFT;
 
     s_apps = lv_obj_create(scr);
     lv_obj_remove_style_all(s_apps);
