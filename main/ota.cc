@@ -69,22 +69,20 @@ std::string Ota::GetCheckVersionUrl() {
     return url;
 }
 
-std::unique_ptr<Http> Ota::SetupHttp() {
-    auto& board = Board::GetInstance();
-    auto network = board.GetNetwork();
-    auto http = network->CreateHttp(0);
-    auto user_agent = SystemInfo::GetUserAgent();
-    api::ApplyJsonHeaders(http);
-    http->SetHeader("Activation-Version", has_serial_number_ ? "2" : "1");
-    http->SetHeader("Client-Id", board.GetUuid());
-    if (has_serial_number_) {
-        http->SetHeader("Serial-Number", serial_number_.c_str());
-        ESP_LOGI(TAG, "Setup HTTP, User-Agent: %s, Serial-Number: %s", user_agent.c_str(), serial_number_.c_str());
+// OTA 接口的身份头集合(原 SetupHttp 的头,随 §2.2 迁 helper 改为显式列表)。
+// 注:ota_url 可被用户改写,这些头会发往该 host——与旧行为一致,helper 的
+// 跨 host 重定向剥头规则只作用于 3xx 跳转。
+static api::HeaderList OtaHeaders(bool has_serial_number, const std::string& serial_number) {
+    api::HeaderList headers;
+    headers.emplace_back("Content-Type", "application/json");
+    headers.emplace_back("Activation-Version", has_serial_number ? "2" : "1");
+    headers.emplace_back("Client-Id", Board::GetInstance().GetUuid());
+    if (has_serial_number) {
+        headers.emplace_back("Serial-Number", serial_number);
     }
-    http->SetHeader("User-Agent", user_agent);
-    http->SetHeader("Accept-Language", Lang::CODE);
-
-    return http;
+    headers.emplace_back("User-Agent", SystemInfo::GetUserAgent());
+    headers.emplace_back("Accept-Language", Lang::CODE);
+    return headers;
 }
 
 /* 
@@ -104,26 +102,23 @@ esp_err_t Ota::CheckVersion() {
         return ESP_ERR_INVALID_ARG;
     }
 
-    auto http = SetupHttp();
-
+    // system info JSON 有则 POST,没有退化为 GET(该接口的约定)
     std::string data = board.GetSystemInfoJson();
-    std::string method = data.length() > 0 ? "POST" : "GET";
-    http->SetContent(std::move(data));
-
-    if (!http->Open(method, url)) {
-        int last_error = http->GetLastError();
-        ESP_LOGE(TAG, "Failed to open HTTP connection, code=0x%x", last_error);
-        return last_error;
+    const char* method = data.length() > 0 ? "POST" : "GET";
+    api::HttpFetchOptions opts;
+    opts.timeout_ms = 15000;   // 原实现未设超时,吃库默认;统一 15s
+    const api::HttpReply rep =
+        api::HttpFetch(method, url, data, opts, OtaHeaders(has_serial_number_, serial_number_));
+    if (!rep.ok) {
+        ESP_LOGE(TAG, "Failed to check version: %s", rep.error.c_str());
+        return rep.status != 0 ? static_cast<esp_err_t>(rep.status) : ESP_FAIL;
+    }
+    if (rep.status != 200) {   // 该接口以严格 200 为准(非 200 的 2xx 也算异常)
+        ESP_LOGE(TAG, "Failed to check version, status code: %d", rep.status);
+        return static_cast<esp_err_t>(rep.status);
     }
 
-    auto status_code = http->GetStatusCode();
-    if (status_code != 200) {
-        ESP_LOGE(TAG, "Failed to check version, status code: %d", status_code);
-        return status_code;
-    }
-
-    data = http->ReadAll();
-    http->Close();
+    data = rep.body;
 
     // Response: { "firmware": { "version": "1.0.0", "url": "http://" } }
     // Parse the JSON response and check if the version is newer
@@ -469,28 +464,17 @@ esp_err_t Ota::Activate() {
         url += "activate";
     }
 
-    auto http = SetupHttp();
-
-    std::string data = GetActivationPayload();
-    http->SetContent(std::move(data));
-
-    if (!http->Open("POST", url)) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection");
-        return ESP_FAIL;
+    api::HttpFetchOptions opts;
+    opts.timeout_ms = 15000;
+    const api::HttpReply rep = api::HttpFetch("POST", url, GetActivationPayload(), opts,
+                                              OtaHeaders(has_serial_number_, serial_number_));
+    if (rep.status == 200) {
+        ESP_LOGI(TAG, "Activation successful");
+        return ESP_OK;
     }
-    
-    auto status_code = http->GetStatusCode();
-    if (status_code == 202) {
-        http->Close();
+    if (rep.status == 202) {
         return ESP_ERR_TIMEOUT;
     }
-    if (status_code != 200) {
-        ESP_LOGE(TAG, "Failed to activate, code: %d, body: %s", status_code, http->ReadAll().c_str());
-        http->Close();
-        return ESP_FAIL;
-    }
-
-    ESP_LOGI(TAG, "Activation successful");
-    http->Close();
-    return ESP_OK;
+    ESP_LOGE(TAG, "Failed to activate: %s", rep.error.c_str());
+    return rep.status != 0 ? static_cast<esp_err_t>(rep.status) : ESP_FAIL;
 }
