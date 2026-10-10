@@ -33,14 +33,14 @@
 
 // ---- 首页布局（逻辑分辨率约 480x800，旋转 270°）----
 #define HOME_STATUS_BAR_H 45          // 状态栏高度 (px)
-#define HOME_APPS_PAD_TOP 16          // 应用区顶部内边距 (px)；贴底时仅作内容间距
-#define HOME_APPS_PAD_BOT 16          // 应用区底部内边距 (px)
+#define HOME_APPS_PAD_TOP 10          // 应用区顶部内边距 (px)；贴底时仅作内容间距
+#define HOME_APPS_PAD_BOT 10          // 应用区底部内边距 (px)
 #define HOME_APPS_LIFT 48             // 宫格整体相对屏底上移 (px)
 #define HOME_APP_CARD_W 116           // 应用图标卡片宽 (px)
 #define HOME_APP_CARD_H 136           // 应用图标卡片高 (px)
 #define HOME_APP_CARD_MARGIN_H 38     // 每行应用卡片距左右边距 (px)
 #define HOME_APP_CARD_GAP_COL 28      // 同行相邻应用卡片间距 (px)
-#define HOME_APP_CARD_GAP_ROW 41      // 上下两行应用卡片间距 (px)
+#define HOME_APP_CARD_GAP_ROW 36      // 上下两行应用卡片间距 (px)
 #define HOME_APP_CARD_ICON_PAD_TOP 10 // 卡片内图标距卡片顶部 (px)，水平居中
 #define HOME_APP_CARD_NAME_PAD_BOT 10 // 卡片内名称距卡片底部 (px)，水平居中
 #define HOME_APP_CARD_BORDER_W 4      // 描边样式时黑色描边宽度 (px)
