@@ -296,3 +296,21 @@ Init（boot·main 任务·可读 NVS）/ Start（进屏·LVGL 任务·不碰 fla
 cloud_screen 两个无调用 dialog 函数清理、§1.8 对话 Tab 文案(随语言表重生成);
 高风险 §1.1 唤醒词删除 + §1.7 boards/common 条件编译——前置百问通话 AEC 实测
 (设备已刷最新固件,等用户按 PTT 实测);§2.4 sys_mon 降频(发布准备期)。
+
+## 跟进 6(2026-10-10 第五批落地)
+
+- **mcp preview_image 硬化**:Content-Length 上限 2MB + 零长拒绝 + 短读校验
+  (原实现短读会把垃圾尾部当图像数据)+ 统一超时 15s。全仓最危险的
+  "用户 URL 无上限分配"点已封。
+- **cloud_screen 死代码**:ShowActionDialog/ShowDownloadDialog 删除(164 行,
+  自开源初始提交就无调用)。
+- **§2.8 boot 表驱动落地**:Start() 15 步 BootStep 表,每步 I 级耗时,≥1s 立
+  W 级。**首刷即兑现价值**:开机总 10.9s,其中 network(StartNetwork 等网)
+  8.2s、mcp_services 1.8s、boot_ready 0.9s——后续开机优化目标直接明确。
+- 顺带根因一个格式化坑:本机 sdkconfig NEWLIB_NANO_FORMAT=y,%lld 打印损坏,
+  ESP_LOG 一律用 %lu(PRId64 同理慎用)。
+
+**剩余待办(再更新):** §3.1 APP 注册表完整版(kApps/kSlashApps 合一)、
+§3.4 服务生命周期框架、§3.3 补全(network_screen MakeBtn/MakeSection)、
+§1.8 对话 Tab 文案(随语言表重生成);开机优化候选:network 步 8.2s(等网
+策略,动它属产品行为变更,单独立项);高风险 §1.1+§1.7 等百问通话 AEC 实测。
