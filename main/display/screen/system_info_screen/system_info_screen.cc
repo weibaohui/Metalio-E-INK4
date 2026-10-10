@@ -185,9 +185,14 @@ void FillSystem(lv_obj_t* parent) {
     ScreenMakeLabel(parent, line, 25, true);
 }
 
+lv_timer_t* s_refresh_timer = nullptr;
+
 void FillBody() {
     if (s_ui.body == nullptr) return;
+    // 记住滚动位置,自动刷新不把用户拉回顶部
+    const lv_coord_t scroll_y = lv_obj_get_scroll_y(s_ui.body);
     lv_obj_clean(s_ui.body);
+    lv_obj_scroll_to_y(s_ui.body, scroll_y, LV_ANIM_OFF);
     FillMemory(s_ui.body);
     FillStorage(s_ui.body);
     FillNvs(s_ui.body);
@@ -200,8 +205,19 @@ void OnRefreshClicked(lv_event_t*) {
     FillBody();
 }
 
+void OnRefreshTimer(lv_timer_t*) {
+    // 只在屏活着时刷新;5s 与状态栏局部刷新同管线,eink 撑得住
+    if (s_alive) {
+        FillBody();
+    }
+}
+
 void OnScreenUnloaded(lv_event_t*) {
     s_alive = false;
+    if (s_refresh_timer != nullptr) {
+        lv_timer_del(s_refresh_timer);
+        s_refresh_timer = nullptr;
+    }
     s_ui = {};
 }
 
@@ -284,6 +300,10 @@ lv_obj_t* SystemInfoScreen::Create() {
     s_ui.body = scroll;
 
     FillBody();
+    if (s_refresh_timer != nullptr) {
+        lv_timer_del(s_refresh_timer);
+    }
+    s_refresh_timer = lv_timer_create(OnRefreshTimer, 5000, nullptr);
     VkKey_AttachScreen(screen, kScreenId, VkKeyScreenDesc{SystemInfoScreen::Create, nullptr});
     return screen;
 }
