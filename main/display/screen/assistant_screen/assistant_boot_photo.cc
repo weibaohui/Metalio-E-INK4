@@ -12,6 +12,7 @@
 #include "reader_types.h"
 #include "screen_common.h"
 #include "usb_uvc_still.h"
+#include "utils/psr_worker.h"
 
 #include <atomic>
 #include <cstdio>
@@ -408,7 +409,6 @@ void PhotoWorker(void* /*arg*/) {
             }
         }
     }
-    vTaskDeleteWithCaps(nullptr);
 }
 
 }  // namespace
@@ -453,10 +453,8 @@ bool AssistantBootPhoto_OnDoubleClick() {
     }
 
     // 与书封/壁纸预览一致：任务栈放 SPIRAM。内部 24KB 连续块常因碎片不够 → create failed。
-    const BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
-        PhotoWorker, "asst_cam", kWorkerStack, nullptr, kWorkerPrio, nullptr, kWorkerCore,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (ok != pdPASS) {
+    if (!SpawnPsrWorker("asst_cam", kWorkerStack, kWorkerPrio, PhotoWorker, nullptr, nullptr,
+                        kWorkerCore)) {
         s_busy.store(false, std::memory_order_release);
         ESP_LOGE(TAG,
                  "worker create failed: need stack=%u SPIRAM; int free=%u largest=%u; "

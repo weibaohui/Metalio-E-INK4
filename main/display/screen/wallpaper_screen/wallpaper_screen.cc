@@ -34,6 +34,7 @@
 #include <freertos/idf_additions.h>
 #include <freertos/task.h>
 #include "assets/lang_config.h"
+#include "utils/psr_worker.h"
 
 namespace {
 
@@ -751,7 +752,6 @@ void LoadPreviewTask(void* arg) {
         s_load_busy.store(false);
         s_load_task = nullptr;
     }
-    vTaskDeleteWithCaps(nullptr);
 }
 
 void ScheduleLoadPreview(int index) {
@@ -771,9 +771,7 @@ void ScheduleLoadPreview(int index) {
                   s_files[static_cast<size_t>(index)].path);
     // 与 thumb 相同：解码栈放 SPIRAM，避免内部 12KB 连续块不足 →「预览启动失败」
     constexpr uint32_t kPreviewStack = 12 * 1024;
-    if (xTaskCreatePinnedToCoreWithCaps(LoadPreviewTask, "wp_preview", kPreviewStack, work, 5,
-                                        &s_load_task, 0,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+    if (!SpawnPsrWorker("wp_preview", kPreviewStack, 5, LoadPreviewTask, work, &s_load_task, 0)) {
         const size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         const size_t largest_int =
             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
@@ -884,7 +882,6 @@ void ThumbFillTask(void* arg) {
         s_thumb_busy.store(false);
         s_thumb_task = nullptr;
     }
-    vTaskDeleteWithCaps(nullptr);
 }
 
 void ScheduleThumbFill() {
@@ -924,9 +921,7 @@ void ScheduleThumbFill() {
     }
     // 栈放 SPIRAM：内部 DRAM 常仅数十 KB，12KB 连续块不足时会创建失败
     constexpr uint32_t kThumbStack = 12 * 1024;
-    if (xTaskCreatePinnedToCoreWithCaps(ThumbFillTask, "wp_thumb", kThumbStack, work, 4,
-                                        &s_thumb_task, 0,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+    if (!SpawnPsrWorker("wp_thumb", kThumbStack, 4, ThumbFillTask, work, &s_thumb_task, 0)) {
         const size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         const size_t largest_int =
             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
