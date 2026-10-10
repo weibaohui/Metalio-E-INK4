@@ -42,6 +42,7 @@
 #include "reader/text_encoding.h"
 #include "screen_common.h"
 #include "sd_paths.h"
+#include "utils/psr_worker.h"
 #include "vk_key_handler.h"
 #include "vk_page_repeat.h"
 
@@ -1608,7 +1609,6 @@ void PageImageWorker(void* arg) {
         delete finish;
     }
     delete ctx;
-    vTaskDelete(nullptr);
 }
 
 void StartPageImageWorker() {
@@ -1639,10 +1639,8 @@ void StartPageImageWorker() {
     st.page_image_abort.store(false, std::memory_order_relaxed);
     st.page_image_busy.store(true);
     st.page_image_again = false;
-    BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
-        PageImageWorker, "book_pimg", kPageImageWorkerStack, ctx, tskIDLE_PRIORITY + 1, nullptr, 0,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (created != pdPASS) {
+    if (!SpawnPsrWorker("book_pimg", kPageImageWorkerStack, tskIDLE_PRIORITY + 1, PageImageWorker,
+                        ctx, nullptr, 0)) {
         ESP_LOGW(TAG, "book_pimg task failed");
         st.page_image_busy.store(false);
         delete ctx;
@@ -1773,7 +1771,6 @@ void ListCoverFillWorker(void* arg) {
         vTaskDelay(pdMS_TO_TICKS(ok ? 15 : 5));
     }
     delete work;
-    vTaskDelete(nullptr);
 }
 
 void ScheduleListCoverFill() {
@@ -1786,10 +1783,8 @@ void ScheduleListCoverFill() {
     work->token = st.list_cover_token.load();
     work->items = std::move(st.list_cover_pending);
     st.list_cover_pending.clear();
-    BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
-        ListCoverFillWorker, "list_cover", kListCoverWorkerStack, work, tskIDLE_PRIORITY + 1,
-        nullptr, 0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (created != pdPASS) {
+    if (!SpawnPsrWorker("list_cover", kListCoverWorkerStack, tskIDLE_PRIORITY + 1,
+                        ListCoverFillWorker, work, nullptr, 0)) {
         ESP_LOGW(TAG, "list_cover task failed; keep placeholders");
         delete work;
     }
@@ -1924,7 +1919,6 @@ void DetailCoverWorker(void* arg) {
         delete done;
     }
     delete ctx;
-    vTaskDelete(nullptr);
 }
 
 /** 无旁路时后台读文件内封面；有旁路则 CreateDetailScreen 已同步显示。 */
@@ -1941,10 +1935,8 @@ void StartDetailCoverWorker(int book_index) {
     ctx->info = st.books[static_cast<size_t>(book_index)];
     ctx->max_w = CoverFrameInner(st.detail_cover_fw);
     ctx->max_h = CoverFrameInner(st.detail_cover_fh);
-    BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
-        DetailCoverWorker, "book_cover", kDetailCoverWorkerStack, ctx, tskIDLE_PRIORITY + 2, nullptr,
-        0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (created != pdPASS) {
+    if (!SpawnPsrWorker("book_cover", kDetailCoverWorkerStack, tskIDLE_PRIORITY + 2, DetailCoverWorker,
+                        ctx, nullptr, 0)) {
         ESP_LOGW(TAG, "book_cover task failed; keep placeholder");
         delete ctx;
         st.detail_cover_token.fetch_add(1);
@@ -2154,7 +2146,6 @@ void OpenBookWorker(void* arg) {
         ESP_LOGW(TAG, "book_open done: ScreenLvAsync fail, deferred_cleanup");
     }
     delete ctx;
-    vTaskDelete(nullptr);
 }
 
 void StartOpenWorker(int book_index) {
@@ -2184,10 +2175,8 @@ void StartOpenWorker(int book_index) {
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
              ctx->info.path.c_str());
-    BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
-        OpenBookWorker, "book_open", kOpenWorkerStack, ctx, tskIDLE_PRIORITY + 2, nullptr, 0,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (created != pdPASS) {
+    if (!SpawnPsrWorker("book_open", kOpenWorkerStack, tskIDLE_PRIORITY + 2, OpenBookWorker, ctx,
+                        nullptr, 0)) {
         const size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         const size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         ESP_LOGE(TAG, "book_open task failed: int free=%u spiram=%u stack=%u",
@@ -3933,7 +3922,6 @@ void LayoutWorker(void* arg) {
         st.layout_busy.store(false);
     }
     delete ctx;
-    vTaskDelete(nullptr);
 }
 
 struct ChapterPagesDoneMsg {
@@ -3996,7 +3984,6 @@ void ChapterPageWorker(void* arg) {
         delete done;
         st.chapter_pages_busy.store(false);
     }
-    vTaskDelete(nullptr);
 }
 
 void StartChapterPageWorker() {
@@ -4017,10 +4004,8 @@ void StartChapterPageWorker() {
     st.chapter_pages_again = false;
     MarkLayoutHintBusy();
     auto* ctx = new uint32_t(token);
-    BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
-        ChapterPageWorker, "book_cpages", kOpenWorkerStack, ctx, tskIDLE_PRIORITY + 1, nullptr, 0,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (created != pdPASS) {
+    if (!SpawnPsrWorker("book_cpages", kOpenWorkerStack, tskIDLE_PRIORITY + 1, ChapterPageWorker, ctx,
+                        nullptr, 0)) {
         ESP_LOGE(TAG, "book_cpages task failed");
         delete ctx;
         st.chapter_pages_busy.store(false);
@@ -4039,10 +4024,8 @@ void StartLayoutWorker() {
     auto* ctx = new LayoutWorkerArg{};
     ctx->token = token;
     ctx->anchor = st.layout_anchor;
-    BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
-        LayoutWorker, "book_layout", kOpenWorkerStack, ctx, tskIDLE_PRIORITY + 1, nullptr, 0,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (created != pdPASS) {
+    if (!SpawnPsrWorker("book_layout", kOpenWorkerStack, tskIDLE_PRIORITY + 1, LayoutWorker, ctx,
+                        nullptr, 0)) {
         ESP_LOGE(TAG, "book_layout task failed");
         delete ctx;
         st.layout_busy.store(false);
