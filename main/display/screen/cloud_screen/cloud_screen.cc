@@ -628,7 +628,6 @@ void AbortCloudSideHttpForDownload();  // 打断封面/预览 HTTP，详情页�
 void ResumeCloudSideHttpAfterDl();     // 下载/批量全结束后续封面，并刷新仍打开的详情
 bool CloudDlTasksActive();
 void ShowPreviewWaitDlTip();
-void ShowActionDialog(int cloud_index);
 void StyleDownloadBtn(bool enabled);
 void ClearWallpaperPreviewImage();
 void CloseWallpaperPreview();
@@ -1403,88 +1402,6 @@ void OnDeleteClicked(lv_event_t* /*e*/) {
     ScheduleDeleteItems(std::move(items));
 }
 
-void ShowActionDialog(int cloud_index) {
-    auto& st = State();
-    if (!ScreenAlive() || st.action_mask != nullptr || st.dialog_mask != nullptr ||
-        st.download_busy || st.delete_busy || SyncBusy()) {
-        return;
-    }
-    if (cloud_index < 0 || cloud_index >= static_cast<int>(st.items.size())) {
-        return;
-    }
-
-    const reader::CloudPushResource& item = st.items[static_cast<size_t>(cloud_index)];
-    char title_buf[160];
-    std::snprintf(title_buf, sizeof(title_buf), "「%s」\n%s", item.name.c_str(), item.TypeLabel());
-    st.action_index = cloud_index;
-
-    lv_obj_t* mask = lv_obj_create(st.screen);
-    st.action_mask = mask;
-    lv_obj_remove_style_all(mask);
-    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_pos(mask, 0, 0);
-    ScreenApplyDotBackdrop(mask);
-    lv_obj_clear_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    HapticAttachClick(mask);
-    lv_obj_add_event_cb(mask, OnActionCancelClicked, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t* card = lv_obj_create(mask);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_HOR_RES - 48, 220);
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, kRowBorderW, 0);
-    lv_obj_set_style_radius(card, kRowRadius, 0);
-    lv_obj_set_style_pad_all(card, 14, 0);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(card, 12, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(card, [](lv_event_t* e) { lv_event_stop_bubbling(e); }, LV_EVENT_CLICKED,
-                        nullptr);
-
-    lv_obj_t* lbl = lv_label_create(card);
-    lv_label_set_text(lbl, title_buf);
-    lv_obj_set_width(lbl, lv_pct(100));
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(lbl, UiFont(), 0);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* btn_row = lv_obj_create(card);
-    lv_obj_remove_style_all(btn_row);
-    lv_obj_set_width(btn_row, lv_pct(100));
-    lv_obj_set_height(btn_row, 48);
-    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_CLICKABLE);
-
-    auto make_btn = [&](const char* text, lv_event_cb_t cb) {
-        lv_obj_t* btn = lv_obj_create(btn_row);
-        lv_obj_remove_style_all(btn);
-        lv_obj_set_size(btn, 120, 44);
-        lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(btn, lv_color_black(), 0);
-        lv_obj_set_style_border_width(btn, kRowBorderW, 0);
-        lv_obj_set_style_radius(btn, kRowRadius, 0);
-        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-        HapticAttachClick(btn);
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-        lv_obj_t* bl = lv_label_create(btn);
-        lv_label_set_text(bl, text);
-        lv_obj_set_style_text_font(bl, UiFont(), 0);
-        lv_obj_center(bl);
-        lv_obj_clear_flag(bl, LV_OBJ_FLAG_CLICKABLE);
-    };
-    make_btn(Lang::Strings::COMMON_DELETE, OnDeleteClicked);
-    make_btn(Lang::Strings::COMMON_CANCEL, OnActionCancelClicked);
-}
 
 void CloseDialog() {
     auto& st = State();
@@ -1786,88 +1703,6 @@ void OnDownloadYesClicked(lv_event_t* /*e*/) {
     StartResourceDownload(index);
 }
 
-void ShowDownloadDialog(int cloud_index) {
-    auto& st = State();
-    if (!ScreenAlive() || st.dialog_mask != nullptr || st.action_mask != nullptr ||
-        st.download_busy || SyncBusy()) {
-        return;
-    }
-    if (cloud_index < 0 || cloud_index >= static_cast<int>(st.items.size())) {
-        return;
-    }
-
-    const reader::CloudPushResource& item = st.items[static_cast<size_t>(cloud_index)];
-    char msg[192];
-    std::snprintf(msg, sizeof(msg), Lang::Strings::CLOUD_CONFIRM_DL_FMT, item.name.c_str(),
-                  item.TypeLabel(), reader::FormatCloudFileSize(item.file_size).c_str());
-    st.pending_index = cloud_index;
-
-    lv_obj_t* mask = lv_obj_create(st.screen);
-    st.dialog_mask = mask;
-    lv_obj_remove_style_all(mask);
-    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_pos(mask, 0, 0);
-    ScreenApplyDotBackdrop(mask);
-    lv_obj_clear_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(mask, OnDownloadNoClicked, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t* card = lv_obj_create(mask);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_HOR_RES - 48, 240);
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, kRowBorderW, 0);
-    lv_obj_set_style_radius(card, kRowRadius, 0);
-    lv_obj_set_style_pad_all(card, 14, 0);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(card, 12, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(card, [](lv_event_t* e) { lv_event_stop_bubbling(e); }, LV_EVENT_CLICKED,
-                        nullptr);
-
-    lv_obj_t* lbl = lv_label_create(card);
-    lv_label_set_text(lbl, msg);
-    lv_obj_set_width(lbl, lv_pct(100));
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(lbl, UiFont(), 0);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* btn_row = lv_obj_create(card);
-    lv_obj_remove_style_all(btn_row);
-    lv_obj_set_width(btn_row, lv_pct(100));
-    lv_obj_set_height(btn_row, 48);
-    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_CLICKABLE);
-
-    auto make_btn = [&](const char* text, lv_event_cb_t cb) {
-        lv_obj_t* btn = lv_obj_create(btn_row);
-        lv_obj_remove_style_all(btn);
-        lv_obj_set_size(btn, 120, 44);
-        lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(btn, lv_color_black(), 0);
-        lv_obj_set_style_border_width(btn, kRowBorderW, 0);
-        lv_obj_set_style_radius(btn, kRowRadius, 0);
-        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-        HapticAttachClick(btn);
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-        lv_obj_t* bl = lv_label_create(btn);
-        lv_label_set_text(bl, text);
-        lv_obj_set_style_text_font(bl, UiFont(), 0);
-        lv_obj_center(bl);
-        lv_obj_clear_flag(bl, LV_OBJ_FLAG_CLICKABLE);
-    };
-    make_btn(Lang::Strings::CLOUD_DOWNLOAD, OnDownloadYesClicked);
-    make_btn(Lang::Strings::COMMON_CANCEL, OnDownloadNoClicked);
-}
 
 void OnRowLongPressed(lv_event_t* e) {
     auto& st = State();
