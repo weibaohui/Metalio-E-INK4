@@ -184,24 +184,34 @@ std::vector<int16_t> RecordWhileHeld() {
     auto* codec = Board::GetInstance().GetAudioCodec();
     if (codec == nullptr) return pcm;
     const bool two_ch = codec->input_channels() == 2;   // mic + 回声参考,取 mic(偶数序)
+    // InputData 契约:按 data.size() 读,必须预 resize(空 vector 读 0 样本即失败)
+    const size_t chunk = kSampleRate * 60 / 1000 * (two_ch ? 2 : 1);   // 60ms
+    int iters = 0;
     const int64_t deadline = esp_timer_get_time() + (int64_t)kMaxRecordSec * 1000000LL;
     while (s_record_flag.load() && !s_cancel.load() && esp_timer_get_time() < deadline) {
-        // AudioCodec::Read 是 protected;公有入口是 InputData(一次给一帧原始 PCM)
-        std::vector<int16_t> raw;
-        if (!codec->InputData(raw) || raw.empty()) break;
+        std::vector<int16_t> raw(chunk);
+        if (!codec->InputData(raw) || raw.empty()) {
+            ESP_LOGW(TAG, "record: InputData failed (iter %d)", iters);
+            break;
+        }
+        ++iters;
         if (two_ch) {
             for (size_t i = 0; i + 1 < raw.size(); i += 2) pcm.push_back(raw[i]);
         } else {
             pcm.insert(pcm.end(), raw.begin(), raw.end());
         }
     }
+    ESP_LOGI(TAG, "record done: %ums %u samples (%d iters)",
+             (unsigned)((esp_timer_get_time() - deadline + (int64_t)kMaxRecordSec * 1000000LL) / 1000),
+             (unsigned)pcm.size(), iters);
     return pcm;
 }
 
 // 管线:录音→STT→对话。在内部栈任务上(HTTPS/TLS 读 CA 证书碰 flash,禁 PSRAM 栈)。
 void PipelineTask(void*) {
+    ESP_LOGI(TAG, "pipeline start (hold to record)");
     auto* codec = Board::GetInstance().GetAudioCodec();
-    if (codec == nullptr) { SetState(AiChatState::Error, "无音频编解码器"); goto done; }
+    if (codec == nullptr) { SetState(AiChatState::Error, "无音频编解码器"); ESP_LOGE(TAG, "no codec"); goto done; }
     if (!codec->input_enabled()) codec->EnableInput(true);
 
     {
@@ -216,13 +226,16 @@ void PipelineTask(void*) {
         { std::lock_guard<std::mutex> l(s_cfg_mutex); cfg = s_cfg; }
 
         SetState(AiChatState::Transcribing);
+        ESP_LOGI(TAG, "stt: %u bytes wav uploading", (unsigned)(pcm.size() * 2 + 44));
         std::string text, err;
-        if (!SttTranscribe(cfg, pcm, text, err)) { SetState(AiChatState::Error, err); goto done; }
+        if (!SttTranscribe(cfg, pcm, text, err)) { ESP_LOGE(TAG, "stt fail: %s", err.c_str()); SetState(AiChatState::Error, err); goto done; }
+        ESP_LOGI(TAG, "stt ok: %s", text.c_str());
         SetUserText(text);
 
         SetState(AiChatState::Thinking);
         std::string reply;
-        if (!LlmChat(cfg, text, reply, err)) { SetState(AiChatState::Error, err); goto done; }
+        if (!LlmChat(cfg, text, reply, err)) { ESP_LOGE(TAG, "llm fail: %s", err.c_str()); SetState(AiChatState::Error, err); goto done; }
+        ESP_LOGI(TAG, "llm ok: %u chars", (unsigned)reply.size());
         SetReplyText(reply);
         SetState(AiChatState::Done);
     }
