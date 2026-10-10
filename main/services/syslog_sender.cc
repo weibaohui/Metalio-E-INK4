@@ -12,7 +12,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <freertos/idf_additions.h>   // xTaskCreateWithCaps / vTaskDeleteWithCaps
+#include "utils/psr_worker.h"
 #include <freertos/semphr.h>
 #include <esp_log.h>
 #include <esp_mac.h>
@@ -255,7 +255,7 @@ void SenderTask(void*) {
     }
     CloseSock(&sock);
     s_task = nullptr;
-    vTaskDeleteWithCaps(nullptr);   // 配对 WithCaps 创建,防 PSRAM 栈泄漏
+    // return 即自动自删(SpawnPsrWorker 包装,勿再 vTaskDeleteWithCaps)
 }
 
 void LoadHostname() {
@@ -304,11 +304,9 @@ void StartLocked() {
 
     if (s_task == nullptr) {
         s_running.store(true);
-        // 栈放 PSRAM:内部 RAM 预算紧张(承载 httpd/lwip/WiFi),本任务只做
-        // socket 收发,与 radio 任务同先例。WithCaps 任务须配对 WithCaps 删除。
-        if (xTaskCreateWithCaps(SenderTask, "syslog", 4096, nullptr, 1, &s_task,
-                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-            s_task = nullptr;
+        // 栈放 PSRAM(统一入口 SpawnPsrWorker):内部 RAM 预算紧张(承载
+        // httpd/lwip/WiFi),本任务只做 socket 收发,与 radio 任务同先例。
+        if (!SpawnPsrWorker("syslog", 4096, 1, SenderTask, nullptr, &s_task)) {
             s_running.store(false);
             ESP_LOGE(TAG, "syslog sender task create failed");
             return;

@@ -11,7 +11,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
-#include <freertos/idf_additions.h>   // xTaskCreateWithCaps
+#include "utils/psr_worker.h"
 
 #include "application.h"
 #include "board.h"
@@ -111,11 +111,9 @@ void TimeService_Init() {
         s_events = xEventGroupCreate();
     }
     if (s_task == nullptr && s_events != nullptr) {
-        // 栈放 PSRAM:内部 RAM 预算紧张(4KB 挤占 httpd 可用连续块)。本任务只做
-        // 事件组等待 + I2C 写 RTC(驱动不关 cache),与 radio/GLM worker 同先例。
-        if (xTaskCreateWithCaps(TimeTask, "time_svc", 4096, nullptr, 2, &s_task,
-                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-            s_task = nullptr;
+        // 栈放 PSRAM(统一入口 SpawnPsrWorker):内部 RAM 预算紧张(4KB 挤占 httpd
+        // 可用连续块)。本任务只做事件组等待 + I2C 写 RTC(驱动不关 cache),常驻不退。
+        if (!SpawnPsrWorker("time_svc", 4096, 2, TimeTask, nullptr, &s_task)) {
             ESP_LOGE(TAG, "time_svc task create failed");
         }
     }
