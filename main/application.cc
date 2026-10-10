@@ -1007,157 +1007,196 @@ void Application::FlushPendingXiaozhiVoice() {
 }
 
 void Application::Start() {
-    // UI 语言：NVS ui/language，无则 LANG_DEFAULT_CODE（跟 CONFIG_LANGUAGE_*）
-    Lang::InitFromNvs();
-
+    // §2.8 boot 表驱动:开机流程拆 BootStep 表,每步打耗时日志——以后排查
+    // "开机慢/某步崩"直接看日志表,不用顺着 150 行顺序调用猜。步骤顺序即
+    // 原实现顺序;条件与注释原样保留在各步内。
     auto& board = Board::GetInstance();
-    SetDeviceState(kDeviceStateStarting);
-
-    /* Setup the display */
     auto display = board.GetDisplay();
 
-    // fontpack mmap 须在内部 DRAM 栈任务上完成；开机预热 UI 25@2，避免各页首绘空字体
-    fontpack_lv_ensure_ready();
-    (void)fontpack_lv_font_ui();
+    struct BootStep {
+        const char* name;
+        std::function<void()> fn;
+    };
+    const BootStep kSteps[] = {
+        {"lang",
+         [&] {
+             // UI 语言：NVS ui/language，无则 LANG_DEFAULT_CODE（跟 CONFIG_LANGUAGE_*）
+             Lang::InitFromNvs();
+         }},
+        {"device_starting",
+         [&] {
+             SetDeviceState(kDeviceStateStarting);
+         }},
+        {"fontpack",
+         [&] {
+             // fontpack mmap 须在内部 DRAM 栈任务上完成；开机预热 UI 25@2，避免各页首绘空字体
+             fontpack_lv_ensure_ready();
+             (void)fontpack_lv_font_ui();
+         }},
+        {"a2ui_cache",
+         [&] {
+             // A2UI 图片会话缓存：有 SD 则用 /sdcard/metalio/e-ink/a2ui_cache（开机清空）；无卡则仅 HTTP
+             esp_err_t cache_err = a2ui_img_cache_init();
+             if (cache_err != ESP_OK) {
+                 ESP_LOGW(TAG, "a2ui_img_cache_init: %s (HTTP-only images)", esp_err_to_name(cache_err));
+             }
+         }},
+        {"chat_store",
+         [&] {
+             // 百问AI 会话 JSON：有 SD 则 /sdcard/metalio/e-ink/chat_log（开机清空）；无卡不记历史
+             esp_err_t chat_err = assistant_chat_store_init();
+             if (chat_err != ESP_OK) {
+                 ESP_LOGW(TAG, "assistant_chat_store_init: %s (RAM-only chat)", esp_err_to_name(chat_err));
+             }
+         }},
+        {"chat_message",
+         [&] {
+             // Print board name/version info
+             display->SetChatMessage("system", SystemInfo::GetUserAgent().c_str());
+         }},
+        {"main_loop",
+         [&] {
+             // 开机不启动音频 / 唤醒词 / 协议；主事件循环仍负责 Schedule 与状态栏
+             // 栈须内部 DRAM：Schedule 路径含 NVS/flash（关 cache），SPIRAM 栈会 assert
+             xTaskCreate([](void* arg) {
+                 ((Application*)arg)->MainEventLoop();
+                 vTaskDelete(NULL);
+             }, "main_event_loop", 2048 * 4, this, 3, &main_event_loop_task_handle_);
+             /* Start the clock timer to update the status bar */
+             esp_timer_start_periodic(clock_timer_handle_, 1000000);
+         }},
+        {"reader_warmup",
+         [&] {
+             // 书库预热须在 StartNetwork 之前（仅创建后台任务）。
+             reader::book_home_snapshot::HydrateFromNvs();
+             reader::book_library_warmup::RequestBootWarmup();
+         }},
+        {"app_toggles",
+         [&] {
+             // APP 开关(需求一.3):开机把 NVS 开关载入 RAM 缓存(main 任务,内部栈)。
+             // 必须早于:1) 下方 MCP 工具注册的开关门控;2) 首页首次渲染。
+             HomeScreen::InitAppToggles();
+             // GLM 用量服务的 Init(NVS 读 + MCP 工具注册)必须在 StartNetwork 之前完成:
+             // StartNetwork 会阻塞数十秒(慢路由连网),期间用户已可进入 GLM 用量屏;
+             // 若 Init 迟到,屏幕侧 Start() 因 !inited_ 空手而归 → 无 worker 不刷新,
+             // 卡"尚未查询"(2026-10-09 实测:22s 进屏报 start-before-init,125s Init 才跑)。
+             // Init 幂等。应用开关关掉 GLM 用量时不初始化:不注册 MCP,也不载入状态。
+             if (HomeScreen::IsAppEnabledById("glm")) {
+                 GlmUsageService::GetInstance().Init();
+             }
+         }},
+        {"network",
+         [&] {
+             /* 有已存 WiFi：等保网时长；失败不 SoftAP。无 SSID 跳过联网，到设置→网络机上配网 */
+             board.StartNetwork();
+             // Update the status bar immediately to show the network state
+             display->UpdateStatusBar(true);
+         }},
+        {"ota_url",
+         [&] {
+             // OTA URL：NVS(wifi/ota_url) 为空则写入 cloudzao 默认（开源版该串为空则跳过）
+             Settings settings("wifi", true);
+             std::string ota_url = settings.GetString("ota_url");
+             if (!api::HasDefaultOtaUrl()) {
+                 settings.EraseKey("ota_url");
+                 activation_code_.clear();
+                 activation_message_.clear();
+                 ESP_LOGI(TAG, "blank cloud endpoints: cleared stale ota_url and activation state");
+             } else if (ota_url.empty()) {
+                 ota_url = api::kDefaultOtaUrl;
+                 settings.SetString("ota_url", ota_url);
+                 ESP_LOGD(TAG, "OTA URL empty in NVS, wrote default");
+             } else {
+                 ESP_LOGD(TAG, "OTA URL from NVS");
+             }
+         }},
+        {"ota_check",
+         [&] {
+             // Check for new assets version
+             CheckAssetsVersion();
+             // Check for new firmware version or get the MQTT broker address（OTA 不变）
+             Ota ota;
+             CheckNewVersion(ota);
+             has_server_time_ = ota.HasServerTime();
+             current_version_ = ota.GetCurrentVersion();
+             // 联网且拿到 server_time 后，通知板级回写 RTC（如 PCF8563）
+             if (has_server_time_) {
+                 board.OnNetworkTimeSynced();
+             }
+         }},
+        {"post_net_jobs",
+         [&] {
+             // 天气：每天开机拉一次，写入 NVS；当天后续走缓存
+             StandbyScreen::EnsureWeatherCached();
+             // 壁纸启用：同步灌关机+待机 NVS→缓存，供待机入口路由（勿在 LVGL 任务）
+             wallpaper::HydrateFromNvsNow();
+             // 阅读快照：显示初始化 / StartNetwork 前已灌；此处幂等补灌
+             reader::book_home_snapshot::HydrateFromNvs();
+             // 开机未连上：勿 EnsureNetworkReady 再空等（会硬占网续扫）
+             // 配网 SoftAP / 4G 未真正上网时 IsNetworkReady=false，一律跳过联网任务
+             if (board.IsNetworkReady() && !board.IsWifiConfigMode()) {
+                 if (api::HasHost()) {
+                     TaskScreen::EnsureCacheSynced();
+                     // sync 仅 POST：等 warmup 缓存就绪后组包，不再扫盘 Peek
+                     reader::book_progress_sync::RequestBootReport();
+                     device_wifi_location::RequestBootReport();
+                 } else {
+                     ESP_LOGI(TAG, "skip boot checklist/book sync/wifi-loc: cloud endpoints blank");
+                 }
+             } else {
+                 ESP_LOGW(TAG, "skip boot checklist/book sync/wifi-loc: network not ready");
+             }
+         }},
+        {"mcp_services",
+         [&] {
+             // MCP 工具可提前注册；真正连协议在进入 AI 聊天页时
+             auto& mcp_server = McpServer::GetInstance();
+             mcp_server.AddCommonTools();
+             mcp_server.AddUserOnlyTools();
+             // MCP 注册跟随应用开关,表驱动(关掉的 APP 连 MCP 工具都不注册,重启后生效)。
+             // syslog/MCP 自身是系统服务非 APP,常注册;GLM 的 Init(含 MCP 注册)
+             // 已按开关在 StartNetwork 前完成(见上)。
+             HomeScreen::RegisterEnabledAppMcpTools();
+             SyslogRegisterMcpTools();   // 需求一.2:syslog 的 MCP 配置接口(self.syslog.*)
+             LocalMcpServer::GetInstance().Start();
+             // syslog 日志上报(需求一.2):读 NVS 配置,已启用且配了 IP 则启动发送任务。
+             Syslog_Init();
+             // 网络对时服务(SNTP,需求一.1):读时区偏移 + 起后台任务,网络就绪后自动对时。
+             // Init 在 main 任务(内部栈)读 NVS,安全。
+             TimeService_Init();
+             // ICS 日历订阅:读 NVS 订阅 URL/最近同步时间(main 任务,内部栈,安全)。
+             // 不联网下载——首次进日历屏时按过期策略自动同步。
+             CalendarIcs_Init();
+             // APP 开关(需求一.3):NVS→RAM 缓存已随显示初始化(SetupUI 首次渲染首页前)
+             // 载入,开机第一屏就按开关过滤图标;此处幂等重载兜底,防启动路径变动回归。
+             HomeScreen::InitAppToggles();
+         }},
+        {"boot_ready",
+         [&] {
+             boot_ready_.store(true, std::memory_order_release);
+             // 开机收尾：勿拆掉已在百问页的会话；无挂起意图时才清临时音频
+             if (!AssistantScreen::IsActive() &&
+                 !pending_xiaozhi_voice_.load(std::memory_order_acquire)) {
+                 StopAudioServiceIfRunning();
+             }
+             SetDeviceState(kDeviceStateIdle);
+             ESP_LOGI(TAG, "Boot complete; voice/audio deferred until Xiaozhi screen");
+             FlushPendingXiaozhiVoice();
+         }},
+    };
 
-    // A2UI 图片会话缓存：有 SD 则用 /sdcard/metalio/e-ink/a2ui_cache（开机清空）；无卡则仅 HTTP
-    {
-        esp_err_t cache_err = a2ui_img_cache_init();
-        if (cache_err != ESP_OK) {
-            ESP_LOGW(TAG, "a2ui_img_cache_init: %s (HTTP-only images)", esp_err_to_name(cache_err));
+    const int64_t boot_t0 = esp_timer_get_time();
+    for (const auto& step : kSteps) {
+        const int64_t t0 = esp_timer_get_time();
+        step.fn();
+        const int64_t cost_ms = (esp_timer_get_time() - t0) / 1000;
+        ESP_LOGI(TAG, "boot[%s] %lld ms", step.name, (long long)cost_ms);
+        if (cost_ms >= 1000) {
+            // 慢步单独立 W 级,开机慢时一眼定位
+            ESP_LOGW(TAG, "boot[%s] slow: %lld ms", step.name, (long long)cost_ms);
         }
     }
-
-    // 百问AI 会话 JSON：有 SD 则 /sdcard/metalio/e-ink/chat_log（开机清空）；无卡不记历史
-    {
-        esp_err_t chat_err = assistant_chat_store_init();
-        if (chat_err != ESP_OK) {
-            ESP_LOGW(TAG, "assistant_chat_store_init: %s (RAM-only chat)", esp_err_to_name(chat_err));
-        }
-    }
-
-    // Print board name/version info
-    display->SetChatMessage("system", SystemInfo::GetUserAgent().c_str());
-
-    // 开机不启动音频 / 唤醒词 / 协议；主事件循环仍负责 Schedule 与状态栏
-    // 栈须内部 DRAM：Schedule 路径含 NVS/flash（关 cache），SPIRAM 栈会 assert
-    xTaskCreate([](void* arg) {
-        ((Application*)arg)->MainEventLoop();
-        vTaskDelete(NULL);
-    }, "main_event_loop", 2048 * 4, this, 3, &main_event_loop_task_handle_);
-
-    /* Start the clock timer to update the status bar */
-    esp_timer_start_periodic(clock_timer_handle_, 1000000);
-
-    // 书库预热须在 StartNetwork 之前（仅创建后台任务）。
-    reader::book_home_snapshot::HydrateFromNvs();
-    reader::book_library_warmup::RequestBootWarmup();
-
-    // APP 开关(需求一.3):开机把 NVS 开关载入 RAM 缓存(main 任务,内部栈)。
-    // 必须早于:1) 下方 MCP 工具注册的开关门控;2) 首页首次渲染。
-    HomeScreen::InitAppToggles();
-
-    // GLM 用量服务的 Init(NVS 读 + MCP 工具注册)必须在 StartNetwork 之前完成:
-    // StartNetwork 会阻塞数十秒(慢路由连网),期间用户已可进入 GLM 用量屏;
-    // 若 Init 迟到,屏幕侧 Start() 因 !inited_ 空手而归 → 无 worker 不刷新,
-    // 卡"尚未查询"(2026-10-09 实测:22s 进屏报 start-before-init,125s Init 才跑)。
-    // Init 幂等。应用开关关掉 GLM 用量时不初始化:不注册 MCP,也不载入状态。
-    if (HomeScreen::IsAppEnabledById("glm")) {
-        GlmUsageService::GetInstance().Init();
-    }
-
-    /* 有已存 WiFi：等保网时长；失败不 SoftAP。无 SSID 跳过联网，到设置→网络机上配网 */
-    board.StartNetwork();
-
-    // Update the status bar immediately to show the network state
-    display->UpdateStatusBar(true);
-
-    // OTA URL：NVS(wifi/ota_url) 为空则写入 cloudzao 默认（开源版该串为空则跳过）
-    {
-        Settings settings("wifi", true);
-        std::string ota_url = settings.GetString("ota_url");
-        if (!api::HasDefaultOtaUrl()) {
-            settings.EraseKey("ota_url");
-            activation_code_.clear();
-            activation_message_.clear();
-            ESP_LOGI(TAG, "blank cloud endpoints: cleared stale ota_url and activation state");
-        } else if (ota_url.empty()) {
-            ota_url = api::kDefaultOtaUrl;
-            settings.SetString("ota_url", ota_url);
-            ESP_LOGD(TAG, "OTA URL empty in NVS, wrote default");
-        } else {
-            ESP_LOGD(TAG, "OTA URL from NVS");
-        }
-    }
-
-    // Check for new assets version
-    CheckAssetsVersion();
-
-    // Check for new firmware version or get the MQTT broker address（OTA 不变）
-    Ota ota;
-    CheckNewVersion(ota);
-
-    has_server_time_ = ota.HasServerTime();
-    current_version_ = ota.GetCurrentVersion();
-
-    // 联网且拿到 server_time 后，通知板级回写 RTC（如 PCF8563）
-    if (has_server_time_) {
-        board.OnNetworkTimeSynced();
-    }
-
-    // 天气：每天开机拉一次，写入 NVS；当天后续走缓存
-    StandbyScreen::EnsureWeatherCached();
-    // 壁纸启用：同步灌关机+待机 NVS→缓存，供待机入口路由（勿在 LVGL 任务）
-    wallpaper::HydrateFromNvsNow();
-    // 阅读快照：显示初始化 / StartNetwork 前已灌；此处幂等补灌
-    reader::book_home_snapshot::HydrateFromNvs();
-    // 开机未连上：勿 EnsureNetworkReady 再空等（会硬占网续扫）
-    // 配网 SoftAP / 4G 未真正上网时 IsNetworkReady=false，一律跳过联网任务
-    if (board.IsNetworkReady() && !board.IsWifiConfigMode()) {
-        if (api::HasHost()) {
-            TaskScreen::EnsureCacheSynced();
-            // sync 仅 POST：等 warmup 缓存就绪后组包，不再扫盘 Peek
-            reader::book_progress_sync::RequestBootReport();
-            device_wifi_location::RequestBootReport();
-        } else {
-            ESP_LOGI(TAG, "skip boot checklist/book sync/wifi-loc: cloud endpoints blank");
-        }
-    } else {
-        ESP_LOGW(TAG, "skip boot checklist/book sync/wifi-loc: network not ready");
-    }
-
-    // MCP 工具可提前注册；真正连协议在进入 AI 聊天页时
-    auto& mcp_server = McpServer::GetInstance();
-    mcp_server.AddCommonTools();
-    mcp_server.AddUserOnlyTools();
-    // MCP 注册跟随应用开关,表驱动(关掉的 APP 连 MCP 工具都不注册,重启后生效)。
-    // syslog/MCP 自身是系统服务非 APP,常注册;GLM 的 Init(含 MCP 注册)
-    // 已按开关在 StartNetwork 前完成(见上)。
-    HomeScreen::RegisterEnabledAppMcpTools();
-    SyslogRegisterMcpTools();   // 需求一.2:syslog 的 MCP 配置接口(self.syslog.*)
-    LocalMcpServer::GetInstance().Start();
-    // syslog 日志上报(需求一.2):读 NVS 配置,已启用且配了 IP 则启动发送任务。
-    Syslog_Init();
-    // 网络对时服务(SNTP,需求一.1):读时区偏移 + 起后台任务,网络就绪后自动对时。
-    // Init 在 main 任务(内部栈)读 NVS,安全。
-    TimeService_Init();
-    // ICS 日历订阅:读 NVS 订阅 URL/最近同步时间(main 任务,内部栈,安全)。
-    // 不联网下载——首次进日历屏时按过期策略自动同步。
-    CalendarIcs_Init();
-    // APP 开关(需求一.3):NVS→RAM 缓存已随显示初始化(SetupUI 首次渲染首页前)
-    // 载入,开机第一屏就按开关过滤图标;此处幂等重载兜底,防启动路径变动回归。
-    HomeScreen::InitAppToggles();
-
-    boot_ready_.store(true, std::memory_order_release);
-
-    // 开机收尾：勿拆掉已在百问页的会话；无挂起意图时才清临时音频
-    if (!AssistantScreen::IsActive() && !pending_xiaozhi_voice_.load(std::memory_order_acquire)) {
-        StopAudioServiceIfRunning();
-    }
-
-    SetDeviceState(kDeviceStateIdle);
-    ESP_LOGI(TAG, "Boot complete; voice/audio deferred until Xiaozhi screen");
-    FlushPendingXiaozhiVoice();
+    ESP_LOGI(TAG, "boot total %lld ms", (long long)((esp_timer_get_time() - boot_t0) / 1000));
 }
 
 // Add a async task to MainLoop
