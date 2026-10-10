@@ -226,8 +226,12 @@ void McpServer::AddUserOnlyTools() {
                 Property("url", kPropertyTypeString)
             }),
             [display](const PropertyList& properties) -> ReturnValue {
+                // URL 来自 AI/用户输入,不可信:Content-Length 无上限会触发 OOM,
+                // 短读不校验会把垃圾尾部当图像数据。上限 2MB + 短读报错 + 统一超时。
+                constexpr size_t kMaxPreviewImageBytes = 2 * 1024 * 1024;
                 auto url = properties["url"].value<std::string>();
                 auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
+                http->SetTimeout(15000);
 
                 if (!http->Open("GET", url)) {
                     throw std::runtime_error("Failed to open URL: " + url);
@@ -238,6 +242,10 @@ void McpServer::AddUserOnlyTools() {
                 }
 
                 size_t content_length = http->GetBodyLength();
+                if (content_length == 0 || content_length > kMaxPreviewImageBytes) {
+                    throw std::runtime_error("Image size out of range: " +
+                                             std::to_string(content_length) + " bytes");
+                }
                 char* data = (char*)heap_caps_malloc(content_length, MALLOC_CAP_8BIT);
                 if (data == nullptr) {
                     throw std::runtime_error("Failed to allocate memory for image: " + url);
@@ -255,6 +263,11 @@ void McpServer::AddUserOnlyTools() {
                     total_read += ret;
                 }
                 http->Close();
+                if (total_read < content_length) {
+                    heap_caps_free(data);
+                    throw std::runtime_error("Short read: " + std::to_string(total_read) + "/" +
+                                             std::to_string(content_length));
+                }
 
                 auto image = std::make_unique<LvglAllocatedImage>(data, content_length);
                 display->SetPreviewImage(std::move(image));
