@@ -190,3 +190,45 @@ Init（boot·main 任务·可读 NVS）/ Start（进屏·LVGL 任务·不碰 fla
 剩余:§2.2 HTTP helper(18 处)、§2.3 SafeSettings、§2.4 sys_mon 降频、
 §2.6 语言表裁剪、§2.8 boot 表驱动、§3.4 服务生命周期框架 → 低/中风险;
 §1.1 唤醒词删除、§1.7 boards/common 条件编译 → 高风险,先真机验证。
+
+## 跟进 3(2026-10-10,逐项对拍当前 main,修正过时项)
+
+#32~#36 合入后(main@278d53d)逐项 grep 对拍,以下条目与正文有出入:
+
+**已过时/已完成,从待办划掉:**
+- §2.5 日期工具:✅ 彻底完成。"第三处 civil 换算(status bar/standby)"已不存在
+  (sysinfo 里的 86400 是 uptime 折算天数,非日期换算);date_utils.h 消费方
+  calendar_screen + calendar_ics。
+- §2.6 语言表裁剪:✅ 前提过时。gen_lang.py 已是 `RUNTIME_LOCALES=("en-US","zh-CN")`
+  运行时双语表,不存在"40 国全量编入"。只剩 §1.8 的 SETTINGS_TAB_CONVERSATION
+  键清理(lang_tables.cc 5 处 + 2 个 language.json),下次重生成顺带。
+- §2.7 端点判空:大半已收敛,HasHost() 仅剩 4 个文件;其余随 §2.2 helper 内置。
+
+**数字修正(仍有效但规模变了):**
+- §2.2 HTTP helper:手写块实测 **16 文件 24 处**(正文说 18;不含
+  components/esp-ml307 的 4 处,vendored 库不动)。
+- §3.2 PSRAM 工作线程:跟进 1 说"已迁 4 处",实际裸写仍 **10 文件 16 处**;
+  但其中 **6 处不该迁**:audio_service 3 处是常驻服务任务(不适用 return-自删
+  契约),power_policy_standby_lp / book_home_snapshot(NVS 持久化) /
+  cloud_screen(下载) 共 3 处刻意 MALLOC_CAP_INTERNAL(低功耗期 PSRAM 不可用、
+  NVS 纪律)。实际可迁候选 ≈12 处:book_screen×6(待逐个核对)、ttf_convert、
+  assistant_boot_photo、standby_wallpaper、task_screen、wallpaper_screen×2。
+- §3.3 屏幕共享件:六屏已收;剩 network_screen 的 MakeBtn(参数化高度)、
+  MakeSection/MakeScrollColumn/NewPlainObj 未沉淀;lv_obj_remove_style_all
+  散布 36 文件(正文说 30)。
+
+**核实未变:**
+- §2.3 SafeSettings:无任何机制,纪律仍靠 30 文件注释。
+- §2.4 sys_mon:board.cc 仍 1000ms + ESP_LOGI。**建议改期到发布准备期再做**:
+  当前真机调试期,@@@RAM/CPU 行是调试管线在用的信号,现在降频自断耳目。
+- §2.8 boot 表驱动:application.cc 1598 行,Start() 约 425 行(1009-1434),无 BootStep。
+- §3.1 APP 注册表:#36 只是 register_mcp 钩子最小版;kApps/kSlashApps 仍两张表,
+  create/name/icon/toggle 未统一。
+- §3.4 服务生命周期:无 AppService 接口,GLM 手写 Init/Start/Stop 依旧。
+- §1.1 唤醒词:CONFIG_USE_AFE_WAKE_WORD=y 仍在编。§1.7:boards/common GLOB
+  仍无条件。解锁前置不变:真机验证百问通话 AEC。
+
+**修订后执行顺序:** ① §2.2 HTTP helper(24 处,安全+去重双收益) →
+② §3.2 剩余 ~12 处一次性任务迁移(机械,逐个核对 book_screen) →
+③ §2.3 SafeSettings → ④ §3.3 补全 + §2.8 + §3.1 完整版 + §3.4(中风险框架批) →
+⑤ §1.1 + §1.7(高风险,先真机 AEC)。§2.4 挪到发布准备期。
