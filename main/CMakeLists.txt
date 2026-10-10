@@ -138,7 +138,6 @@ set(SOURCES "audio/audio_codec.cc"
             "haptic_feedback.cc"
             "device_state_event.cc"
             "assets.cc"
-            "esp_debug_cloud.cc"
             "main.cc"
             )
 
@@ -331,7 +330,6 @@ if(CONFIG_IDF_TARGET_ESP32)
                              "audio/codecs/es8388_audio_codec.cc"
                              "audio/codecs/es8389_audio_codec.cc"
                              "led/gpio_led.cc"
-                             "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/esp32_camera.cc"
                              "display/lvgl_display/jpg/image_to_jpeg.cpp"
                              "display/lvgl_display/jpg/jpeg_to_image.c"
                              )

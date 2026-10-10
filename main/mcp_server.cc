@@ -97,30 +97,6 @@ void McpServer::AddCommonTools() {
             });
     }
 
-#if 0  // 本地拍照改走百问 BOOT 双击；暂禁用 MCP self.camera.take_photo
-    auto camera = board.GetCamera();
-    if (camera) {
-        AddTool("self.camera.take_photo",
-            "Take a photo and explain it. Use this tool after the user asks you to see something.\n"
-            "Args:\n"
-            "  `question`: The question that you want to ask about the photo.\n"
-            "Return:\n"
-            "  A JSON object that provides the photo information.",
-            PropertyList({
-                Property("question", kPropertyTypeString)
-            }),
-            [camera](const PropertyList& properties) -> ReturnValue {
-                // Lower the priority to do the camera capture
-                TaskPriorityReset priority_reset(1);
-
-                if (!camera->Capture()) {
-                    throw std::runtime_error("Failed to capture photo");
-                }
-                auto question = properties["question"].value<std::string>();
-                return camera->Explain(question);
-            });
-    }
-#endif
 #endif
 
     // Restore the original tools list to the end of the tools list
