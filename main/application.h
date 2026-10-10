@@ -20,7 +20,6 @@
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
 #define MAIN_EVENT_SEND_AUDIO (1 << 1)
-#define MAIN_EVENT_WAKE_WORD_DETECTED (1 << 2)
 #define MAIN_EVENT_VAD_CHANGE (1 << 3)
 #define MAIN_EVENT_ERROR (1 << 4)
 #define MAIN_EVENT_CHECK_NEW_VERSION_DONE (1 << 5)
@@ -59,7 +58,6 @@ public:
     void StopListening();
     void AbortSpeakingToIdle();
     void Reboot();
-    void WakeWordInvoke(const std::string& wake_word);
     bool UpgradeFirmware(Ota& ota, const std::string& url = "");
     bool UpgradeFirmwareUrl(const std::string& url, const std::string& current_version,
                             const std::string& new_version);
@@ -106,7 +104,6 @@ private:
     std::string current_version_;
     bool audio_initialized_ = false;
     bool audio_running_ = false;
-    bool voice_models_ready_ = false;
     bool protocol_ready_ = false;
     bool xiaozhi_voice_active_ = false;
     bool aborted_ = false;
@@ -120,21 +117,17 @@ private:
     std::atomic<bool> activation_kick_{false};
     TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
-
-    void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);
     void CheckAssetsVersion();
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
     // 屏级会话：打开音频通道并进入 AutoStop/Realtime 聆听；失败会保持 Idle。
-    bool EnterContinuousListening();
     // Idle 状态栏：允许时钟页面（含百问）刷 HH:MM；固定文案页改用 GetIdleStatusFixedText。
     void ApplyIdleStatusBar();
     // 可中断延迟；Idle 时返回 false，activation_kick 时返回 true。
     bool DelayMsInterruptible(int ms);
 
     bool ShouldAllowBootAudio() const;
-    void EnsureVoiceModelsReady();
     void EnsureProtocolReady();
     void TeardownProtocol();
     // 开机完成后：若仍在百问页，则兑现挂起的进页/聆听意图。

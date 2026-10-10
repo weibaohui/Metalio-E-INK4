@@ -210,13 +210,6 @@ if(CONFIG_USE_AUDIO_PROCESSOR)
 else()
     list(APPEND SOURCES "audio/processors/no_audio_processor.cc")
 endif()
-if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4)
-    list(APPEND SOURCES "audio/wake_words/afe_wake_word.cc")
-    list(APPEND SOURCES "audio/wake_words/custom_wake_word.cc")
-else()
-    list(APPEND SOURCES "audio/wake_words/esp_wake_word.cc")
-endif()
-
 # Select language directory according to Kconfig
 if(CONFIG_LANGUAGE_ZH_CN)
     set(LANG_DIR "zh-CN")
