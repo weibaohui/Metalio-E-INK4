@@ -665,85 +665,18 @@ void ReleaseUiKeepNet() {
 }
 
 bool DownloadUrlToBuffer(const char* url, std::vector<uint8_t>& buf, size_t max_bytes) {
-    buf.clear();
     if (url == nullptr || url[0] == '\0' || max_bytes == 0) {
         return false;
     }
-    auto network = Board::GetInstance().GetNetwork();
-    if (network == nullptr) {
-        return false;
-    }
-    auto http = network->CreateHttp(0);
-    if (http == nullptr) {
-        ESP_LOGW(TAG, "cover http CreateHttp failed int=%u psram=%u",
-                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
-                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
-        return false;
-    }
-
-    http->SetTimeout(15000);
-    api::ApplyCommonHeaders(http);
-    if (!http->Open("GET", url)) {
-        ESP_LOGW(TAG, "cover http Open fail");
-        return false;
-    }
-    if (s_dl_owns_http.load(std::memory_order_acquire) ||
-        s_thumb_abort.load(std::memory_order_acquire)) {
-        http->Close();
-        return false;
-    }
-
-    const int status = http->GetStatusCode();
-    if (status < 200 || status >= 300) {
-        ESP_LOGW(TAG, "cover http status=%d", status);
-        http->Close();
-        return false;
-    }
-
-    const size_t content_length = http->GetBodyLength();
-    if (content_length > max_bytes) {
-        ESP_LOGW(TAG, "cover http too large cl=%u max=%u", static_cast<unsigned>(content_length),
-                 static_cast<unsigned>(max_bytes));
-        http->Close();
-        return false;
-    }
-    size_t cap = content_length > 0 ? content_length : max_bytes;
-    if (cap > max_bytes) {
-        cap = max_bytes;
-    }
-
-    // 读块放堆上，压低任务栈占用
-    constexpr size_t kChunk = 1024;
-    std::unique_ptr<char[]> chunk(new (std::nothrow) char[kChunk]);
-    if (chunk == nullptr) {
-        ESP_LOGE(TAG, "cover chunk alloc fail int=%u psram=%u",
-                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
-                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
-        http->Close();
-        return false;
-    }
-    while (buf.size() < cap) {
-        if (s_dl_owns_http.load(std::memory_order_acquire) ||
-            s_thumb_abort.load(std::memory_order_acquire)) {
-            http->Close();
-            buf.clear();
-            return false;
-        }
-        const int n = http->Read(chunk.get(), kChunk);
-        if (n < 0) {
-            http->Close();
-            buf.clear();
-            return false;
-        }
-        if (n == 0) {
-            break;
-        }
-        buf.insert(buf.end(), chunk.get(), chunk.get() + static_cast<size_t>(n));
-    }
-    http->Close();
-    ESP_LOGI(TAG, "cover http done bytes=%u cl=%u", static_cast<unsigned>(buf.size()),
-             static_cast<unsigned>(content_length));
-    return !buf.empty();
+    api::HttpFetchOptions opts;
+    opts.timeout_ms = 15000;
+    opts.max_bytes = max_bytes;
+    // 下载独占/缩略图翻页打断:逐块协作式取消(原语义不变)
+    opts.cancel = [] {
+        return s_dl_owns_http.load(std::memory_order_acquire) ||
+               s_thumb_abort.load(std::memory_order_acquire);
+    };
+    return api::HttpGetBytes(url, buf, opts);
 }
 
 int PageCount() {
