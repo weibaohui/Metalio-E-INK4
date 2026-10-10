@@ -164,6 +164,14 @@ bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, s
     const cJSON* content = msg ? cJSON_GetObjectItem(msg, "content") : nullptr;
     if (cJSON_IsString(content)) reply = content->valuestring;
     cJSON_Delete(root);
+    // MiniMax-M2 等推理模型带 <think>...</think> 思考块,剥掉再上屏
+    if (reply.rfind("<think>", 0) == 0) {
+        const size_t end = reply.find("</think>");
+        reply = end == std::string::npos ? "" : reply.substr(end + 8);
+    }
+    // 首尾空白
+    while (!reply.empty() && (reply.front() == '\n' || reply.front() == ' ')) reply.erase(reply.begin());
+    while (!reply.empty() && (reply.back() == '\n' || reply.back() == ' ')) reply.pop_back();
     if (reply.empty()) { err = "对话结果为空"; return false; }
     return true;
 }
