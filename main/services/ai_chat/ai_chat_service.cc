@@ -210,7 +210,8 @@ std::vector<int16_t> RecordWhileHeld() {
             pcm.insert(pcm.end(), raw.begin(), raw.end());
         }
     }
-    // 能量统计:全零/极低 RMS = 录到静音(声道/增益问题),与"服务端说没有语音"区分
+    // 能量统计 + 峰值归一化。本板 I2S 32→16 位 >>12 后语音峰值仅数百(实测 512),
+    // 直接上传会被 ASR 判为无语音;基线 AudioCodec::SetInputGain 是从未生效的死钩子。
     int64_t sum_sq = 0;
     int16_t peak = 0;
     for (int16_t v : pcm) {
@@ -218,9 +219,20 @@ std::vector<int16_t> RecordWhileHeld() {
         int16_t a = v < 0 ? (int16_t)-v : v;
         if (a > peak) peak = a;
     }
+    float gain = 1.0f;
+    if (!pcm.empty() && peak > 0 && peak < 14000) {
+        gain = 14000.0f / peak;
+        if (gain > 24.0f) gain = 24.0f;   // 防把底噪抬爆
+        for (auto& v : pcm) {
+            int32_t sv = (int32_t)(v * gain + (v >= 0 ? 0.5f : -0.5f));
+            if (sv > 32767) sv = 32767;
+            if (sv < -32768) sv = -32768;
+            v = (int16_t)sv;
+        }
+    }
     const unsigned rms = pcm.empty() ? 0 : (unsigned)sqrt((double)sum_sq / pcm.size());
-    ESP_LOGI(TAG, "record done: %u samples (%d iters) rms=%u peak=%d",
-             (unsigned)pcm.size(), iters, rms, peak);
+    ESP_LOGI(TAG, "record done: %u samples (%d iters) rms=%u peak=%d gain=x%.1f",
+             (unsigned)pcm.size(), iters, rms, peak, gain);
     return pcm;
 }
 
