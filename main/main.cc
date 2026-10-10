@@ -9,7 +9,6 @@
 
 #include "application.h"
 #include "system_info.h"
-#include "esp_debug_cloud.h"
 
 #define TAG "main"
 
@@ -26,9 +25,6 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-
-    // 调试云 UDP 日志：默认宏关闭为空操作，不影响业务
-    EspDebugCloud_Start();
 
     // Launch the application
     auto& app = Application::GetInstance();
