@@ -300,8 +300,11 @@ lv_obj_t* CreateInternal() {
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(content, kSettingsOptionGap, 0);
-    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(content, LV_OBJ_FLAG_CLICKABLE);
+    // 内容超出屏幕高度时上下滚动(与左侧 tab 列同款):所有 tab 共用本容器,
+    // 内容多的页(如调试)不再被屏幕高度截断。scroll 接管后 LVGL 自动取消
+    // 按下的 CLICKED(issue #43 的 scroll 抑制路径),滚动误触不存在。
+    lv_obj_add_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(content, LV_DIR_VER);
     s_ui.content_page = content;
 
     const SettingsTab open_tab = s_pending_tab;
