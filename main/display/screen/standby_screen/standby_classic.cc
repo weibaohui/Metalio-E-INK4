@@ -24,7 +24,6 @@
 #include "haptic_feedback.h"
 #include "screen_common.h"
 #include "settings.h"
-#include "task_screen/task_screen.h"
 #include "wifi_station.h"
 #include "assets/lang_config.h"
 
@@ -165,9 +164,6 @@ std::vector<TodoItem> s_todos;
 
 constexpr int kMaxWeatherListeners = 2;
 standby_classic::WeatherUiListener s_weather_listeners[kMaxWeatherListeners] = {};
-
-void OpenTaskScreenAsync(void* /*arg*/);
-void OnTodoItemClicked(lv_event_t* e);
 
 bool CodeKnown(const char* code) {
     if (code == nullptr || code[0] == '\0') {
@@ -478,13 +474,7 @@ void RebuildTodoList() {
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-        if (!s_as_overlay) {
-            lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-            HapticAttachClick(row);
-            lv_obj_add_event_cb(row, OnTodoItemClicked, LV_EVENT_CLICKED, nullptr);
-        } else {
-            lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        }
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_t* text_col = lv_obj_create(row);
         lv_obj_remove_style_all(text_col);
@@ -568,14 +558,7 @@ void OnHomeBtnClicked(lv_event_t* /*e*/) {
         nullptr);
 }
 
-void OpenTaskScreenAsync(void* /*arg*/) {
-    ScreenNavigateTo(TaskScreen::Create);
-}
 
-void OnTodoItemClicked(lv_event_t* /*e*/) {
-    ESP_LOGI(TAG, "todo item -> task screen");
-    lv_async_call(OpenTaskScreenAsync, nullptr);
-}
 
 bool ParseWeatherJson(const std::string& body, WeatherSnap& out, std::string& err) {
     out = WeatherSnap{};

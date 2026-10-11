@@ -82,10 +82,6 @@ set(SOURCES "audio/audio_codec.cc"
             "reader/http_download_file.cc"
             "reader/book_session.cc"
             "reader/txt_chapter.cc"
-            "display/screen/task_screen/task_screen.cc"
-            "display/screen/assistant_screen/assistant_screen.cc"
-            "display/screen/assistant_screen/assistant_chat_store.cc"
-            "display/screen/assistant_screen/assistant_boot_photo.cc"
             "display/screen/settings_screen/settings_screen.cc"
             "display/screen/settings_screen/settings_common.cc"
             "display/screen/settings_screen/settings_network_tab.cc"
@@ -141,27 +137,27 @@ set(SOURCES "audio/audio_codec.cc"
 
 set(INCLUDE_DIRS "." "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services")
 
-# Add board common files（GLOB 缓存：新增 boards/common/*.cc 后需 idf.py reconfigure）
-file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
-# §1.7:本板(metalio-e-ink-4)与保留公共件都不引用的死源,不进编译。
-# 全仓 grep 零引用(头与符号);哪天加新板用到,从下面移回即可:
-# - knob: 旋转编码器,本板无此硬件
-# - axp2101/sy6970/adc_battery_monitor: 别的板的电源方案(本板用 BQ27220+CX25601N)
-# - press_to_talk_mcp_tool: 本板 PTT 走按键 VkKey 分发,不用该 MCP 工具
-# - afsk_demod: 音频配网解调,本板 SoftAP 配网用不到
-# 注:ml307_board/uart_eth_modem/backlight/nt26_board 虽疑似边缘,但分别被
-# dual_network_board(在用)/nt26_board(在用)/mcp_server(链接需要)/本板引用,保留。
-list(REMOVE_ITEM BOARD_COMMON_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/knob.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/axp2101.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/sy6970.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/adc_battery_monitor.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/press_to_talk_mcp_tool.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/afsk_demod.cc
+# Add board common files explicitly (replaces GLOB to avoid cache issues and unwanted sources)
+list(APPEND SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/backlight.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/board.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/bq27220_gauge.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/bt_audio_codec.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/button.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/cx25601n.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/dual_network_board.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/i2c_device.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/ml307_board.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/nt26_board.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/pcf8563.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/sc7a20h.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/system_reset.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/uart_eth_modem.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/usb_uvc_still.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/usb_virtual_disk.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/uvc_still_camera.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/wifi_board.cc"
 )
-list(APPEND SOURCES ${BOARD_COMMON_SOURCES})
-# 显式纳入，避免仅依赖 GLOB 缓存漏编
-list(APPEND SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/uvc_still_camera.cc)
 list(REMOVE_DUPLICATES SOURCES)
 list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common)
 list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/power_policy)
