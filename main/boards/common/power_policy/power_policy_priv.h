@@ -47,6 +47,10 @@ extern bool main_rail_on_pending;            // 待锁外 MAIN_PWR on（含 BT �
 extern bool standby_show_pending;            // 待锁外排队 StandbyScreen::Show
 extern bool restore_provisioning_ui_pending; // 待锁外恢复配网/激活 UI
 extern bool touch_asleep;                    // 触摸芯片是否已写深睡
+extern bool touch_transition;                 // 触摸硬件状态正在切换；轮询暂缓
+extern bool touch_target_asleep;              // 最近一次请求的硬件目标状态
+extern bool touch_op_pending;                 // 待锁外执行触摸硬件操作
+extern SemaphoreHandle_t touch_effect_mu;     // 串行执行锁外触摸硬件操作
 extern int idle_cpu_mhz;                     // AppIdle 目标 CPU MHz
 extern int queued_cpu_mhz;                   // 最近投递/应用的目标 MHz；0=未知
 extern int idle_to_standby_sec;              // 无操作满此时长（秒）→ 待机页
@@ -92,7 +96,9 @@ const char* ModeName(Mode m);
 /** @brief 持锁重算并 Apply */
 void ReevaluateLocked();
 /** @brief 释放锁后投递/执行待改 CPU 频，并执行待 Pause/Resume WiFi */
-void FlushCpuFreqOutsideLock();
+void FlushPendingActionsOutsideLock();
+/** 执行在策略锁内登记的触摸硬件状态切换；必须在策略锁外调用。 */
+void FlushTouchOutsideLock();
 /** @brief 持锁登记目标 CPU MHz（同值跳过） */
 void QueueCpuMhzLocked(int mhz);
 /** @brief 持锁发起硬关机（幂等） */

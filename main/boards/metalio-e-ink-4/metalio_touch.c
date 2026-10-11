@@ -9,12 +9,24 @@
 #include <esp_lcd_touch_cst816s.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 
 static const char* TAG = "MetalioTouch";
 
 /* TCA9555 P1.1 = io_index 9 = 原理图 P11（触摸 RST） */
 static const uint32_t kTouchRstMask = (1U << 9);
+static SemaphoreHandle_t s_touch_io_mutex = NULL;
+static const TickType_t kTouchIoLockTimeoutTicks = pdMS_TO_TICKS(1000);
+
+static esp_err_t touch_io_lock(void)
+{
+    if (s_touch_io_mutex == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return xSemaphoreTake(s_touch_io_mutex, kTouchIoLockTimeoutTicks) == pdTRUE ? ESP_OK
+                                                                                : ESP_ERR_TIMEOUT;
+}
 
 static esp_err_t touch_rst_set(esp_io_expander_handle_t expander, int level)
 {
@@ -54,6 +66,12 @@ esp_err_t metalio_touch_init(i2c_master_bus_handle_t i2c_bus, esp_lcd_touch_hand
 {
     ESP_RETURN_ON_FALSE(i2c_bus != NULL && out_touch != NULL, ESP_ERR_INVALID_ARG, TAG, "bad arg");
     *out_touch = NULL;
+
+    if (s_touch_io_mutex == NULL) {
+        s_touch_io_mutex = xSemaphoreCreateMutex();
+        ESP_RETURN_ON_FALSE(s_touch_io_mutex != NULL, ESP_ERR_NO_MEM, TAG,
+                            "touch I2C mutex create failed");
+    }
 
     esp_err_t probe = i2c_master_probe(i2c_bus, ESP_LCD_TOUCH_IO_I2C_CST816S_ADDRESS, 200);
     if (probe != ESP_OK) {
@@ -118,6 +136,22 @@ esp_err_t metalio_touch_init(i2c_master_bus_handle_t i2c_bus, esp_lcd_touch_hand
     return ESP_OK;
 }
 
+esp_err_t metalio_touch_poll(esp_lcd_touch_handle_t touch, esp_lcd_touch_point_data_t* points,
+                             uint8_t* count, uint8_t max_points)
+{
+    ESP_RETURN_ON_FALSE(touch != NULL && points != NULL && count != NULL && max_points > 0,
+                        ESP_ERR_INVALID_ARG, TAG, "bad poll args");
+    ESP_RETURN_ON_ERROR(touch_io_lock(), TAG, "touch I2C mutex unavailable");
+    esp_err_t err = esp_lcd_touch_read_data(touch);
+    if (err == ESP_OK) {
+        err = esp_lcd_touch_get_data(touch, points, count, max_points);
+    } else {
+        *count = 0;
+    }
+    xSemaphoreGive(s_touch_io_mutex);
+    return err;
+}
+
 esp_err_t metalio_touch_enter_sleep(esp_lcd_touch_handle_t touch)
 {
     if (touch == NULL || touch->io == NULL) {
@@ -125,7 +159,9 @@ esp_err_t metalio_touch_enter_sleep(esp_lcd_touch_handle_t touch)
         return ESP_ERR_INVALID_STATE;
     }
     const uint8_t sleep_cmd = 0x03;
+    ESP_RETURN_ON_ERROR(touch_io_lock(), TAG, "touch I2C mutex unavailable");
     esp_err_t err = esp_lcd_panel_io_tx_param(touch->io, 0xA5, &sleep_cmd, 1);
+    xSemaphoreGive(s_touch_io_mutex);
     ESP_LOGI(TAG, "touch sleep A5=03: %s", esp_err_to_name(err));
     return err;
 }
@@ -135,7 +171,9 @@ esp_err_t metalio_touch_wake_by_reset(esp_io_expander_handle_t expander,
 {
     ESP_RETURN_ON_FALSE(expander != NULL, ESP_ERR_INVALID_ARG, TAG, "expander null");
 
+    ESP_RETURN_ON_ERROR(touch_io_lock(), TAG, "touch I2C mutex unavailable");
     esp_err_t err = metalio_touch_hw_reset_pulse(expander);
+    xSemaphoreGive(s_touch_io_mutex);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "touch wake RST failed: %s", esp_err_to_name(err));
         return err;

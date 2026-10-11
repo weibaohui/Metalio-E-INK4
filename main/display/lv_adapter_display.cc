@@ -209,6 +209,11 @@ portMUX_TYPE s_touch_snap_mux = portMUX_INITIALIZER_UNLOCKED;
 TouchFeedSnapshot s_touch_snap{};
 TaskHandle_t s_touch_feed_task = nullptr;
 volatile bool s_touch_feed_run = false;
+struct TouchFeedContext {
+    esp_lcd_touch_handle_t touch = nullptr;
+    TouchPollCallback poll = nullptr;
+};
+TouchFeedContext s_touch_feed_context;
 
 const TouchVirtualKey* HitVirtualKey(int x, int y) {
     for (size_t i = 0; i < s_vk_count; ++i) {
@@ -431,7 +436,8 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
 }
 
 void TouchFeedTask(void* arg) {
-    auto* tp = static_cast<esp_lcd_touch_handle_t>(arg);
+    auto* context = static_cast<TouchFeedContext*>(arg);
+    auto* tp = context->touch;
     esp_lcd_touch_point_data_t pts[1] = {};
     ESP_LOGI(TAG, "touch_feed start prio=%u period=%dms", static_cast<unsigned>(kTouchFeedPriority),
              kTouchFeedPeriodMs);
@@ -439,10 +445,9 @@ void TouchFeedTask(void* arg) {
         uint8_t count = 0;
         // 待机 LP 已写 A5 深睡：勿再 I2C 读（CST816S 不应答 → panel_io 刷 E 级日志）
         if (tp != nullptr && !PowerPolicy::GetInstance().IsTouchAsleep()) {
-            if (esp_lcd_touch_read_data(tp) == ESP_OK) {
-                if (esp_lcd_touch_get_data(tp, pts, &count, 1) != ESP_OK) {
-                    count = 0;
-                }
+            const esp_err_t err = context->poll(tp, pts, &count, 1);
+            if (err != ESP_OK) {
+                count = 0;
             }
         }
         const int x = count > 0 ? static_cast<int>(pts[0].x) : 0;
@@ -454,12 +459,17 @@ void TouchFeedTask(void* arg) {
     vTaskDelete(nullptr);
 }
 
-void StartTouchFeed(esp_lcd_touch_handle_t tp) {
+void StartTouchFeed(esp_lcd_touch_handle_t tp, TouchPollCallback poll) {
     if (tp == nullptr || s_touch_feed_task != nullptr) {
         return;
     }
+    if (poll == nullptr) {
+        ESP_LOGE(TAG, "touch_feed requires a serialized hardware poll callback");
+        return;
+    }
     s_touch_feed_run = true;
-    BaseType_t ok = xTaskCreatePinnedToCore(TouchFeedTask, "touch_feed", 4096, tp,
+    s_touch_feed_context = {tp, poll};
+    BaseType_t ok = xTaskCreatePinnedToCore(TouchFeedTask, "touch_feed", 4096, &s_touch_feed_context,
                                              kTouchFeedPriority, &s_touch_feed_task, 0);
     if (ok != pdPASS) {
         s_touch_feed_run = false;
@@ -1190,7 +1200,7 @@ void EpdCommitBootBaseline(EpdFlushCtx* ctx)
 LVAdapterDisplay::LVAdapterDisplay(const esp_lcd_panel_handle_t panel,
                                    const esp_lcd_panel_io_handle_t panel_io,
                                    const esp_lcd_touch_handle_t touch_handle, const int width,
-                                   const int height) {
+                                   const int height, TouchPollCallback touch_poll) {
     instance_ = this;
     width_ = width;
     height_ = height;
@@ -1286,7 +1296,7 @@ LVAdapterDisplay::LVAdapterDisplay(const esp_lcd_panel_handle_t panel,
         touch_cfg.callbacks.custom_touch_read = CustomTouchRead;
         touch_indev_ = esp_lv_adapter_register_touch(&touch_cfg);
         ESP_ERROR_CHECK(touch_indev_ ? ESP_OK : ESP_FAIL);
-        StartTouchFeed(touch_handle);
+        StartTouchFeed(touch_handle, touch_poll);
     }
 
     ESP_ERROR_CHECK(esp_lv_adapter_start());
