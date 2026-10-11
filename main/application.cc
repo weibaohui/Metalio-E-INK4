@@ -9,6 +9,7 @@
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 #include "services/glm_usage/glm_usage_service.h"
+#include "services/radio/radio_player.h"
 #include "services/calendar/calendar_ics.h"
 #include "services/local_mcp/local_mcp_server.h"
 #include "services/syslog_sender.h"
@@ -739,6 +740,9 @@ void Application::Start() {
              // Init 幂等。应用开关关掉 GLM 用量时不初始化:不注册 MCP,也不载入状态。
              if (HomeScreen::IsAppEnabledById("glm")) {
                  GlmUsageService::GetInstance().Init();
+             }
+             if (HomeScreen::IsAppEnabledById("radio")) {
+                 RadioPlayer::GetInstance().Init();
              }
          }},
         {"network",

@@ -744,28 +744,43 @@ void GlmUsageService::SignalWorker() {
     }
 }
 
-void GlmUsageService::Init() {
+ServiceState GlmUsageService::GetState() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!inited_) {
+        return ServiceState::Uninitialized;
+    }
+    if (worker_ != nullptr) {
+        return ServiceState::Running;
+    }
+    return ServiceState::Stopped;
+}
+
+esp_err_t GlmUsageService::Init() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (inited_) {
-        return;
+        return ESP_OK;
     }
     if (event_group_ == nullptr) {
         event_group_ = xEventGroupCreate();
+        if (event_group_ == nullptr) {
+            return ESP_ERR_NO_MEM;
+        }
     }
     LoadPersisted();
     RegisterMcpTools();
     inited_ = true;
     ESP_LOGI(TAG, "inited: configured=%d contexts=%u (worker 未启动,不占 16K)",
              status_.configured, static_cast<unsigned>(status_.context_count));
+    return ESP_OK;
 }
 
-void GlmUsageService::Start() {
+esp_err_t GlmUsageService::Start() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (event_group_ == nullptr) {
         event_group_ = xEventGroupCreate();
     }
     if (event_group_ == nullptr) {
-        return;
+        return ESP_ERR_NO_MEM;
     }
 
     // 工具注册与持久化载入在 boot 期 Init()(main 任务,内部栈)完成。此处
@@ -773,7 +788,7 @@ void GlmUsageService::Start() {
     // 读会关 cache 触发断言崩机。正常时序 Init 一定先于任何屏幕,走不到这里。
     if (!inited_) {
         ESP_LOGW(TAG, "start before init (unexpected order); skip NVS on LVGL stack");
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
 
     // 进屏即查:无论本次是新建还是复用 worker,已配置都置刷新位。原来只在
@@ -783,7 +798,7 @@ void GlmUsageService::Start() {
         xEventGroupSetBits(event_group_, kRefreshBit);
     }
     if (worker_ != nullptr) {
-        return;   // 已在跑:复用(刷新位已置,worker 会拾取)
+        return ESP_OK;   // 已在跑:复用(刷新位已置,worker 会拾取)
     }
 
     // 清残留 kStopBit:上次 Stop 若因 worker 卡在拉取而超时,stop 位可能没被
@@ -805,10 +820,11 @@ void GlmUsageService::Start() {
         status_.error = "查询任务启动失败(内存不足),请重进或重启";
         ++status_.version;
         ESP_LOGE(TAG, "resident worker start failed (internal RAM low/fragmented)");
-        return;
+        return ESP_ERR_NO_MEM;
     }
     ESP_LOGI(TAG, "resident service started, configured=%d contexts=%u",
              status_.configured, static_cast<unsigned>(status_.context_count));
+    return ESP_OK;
 }
 
 void GlmUsageService::Stop() {

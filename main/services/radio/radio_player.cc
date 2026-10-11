@@ -830,3 +830,46 @@ void RadioSetLast(const std::string& name, const std::string& url) {
     SpawnPersistTask(PersistLastTask, "radio_last",
                      new std::pair<std::string, std::string>(name, url));
 }
+
+// ==================== RadioPlayer (AppService 实现) ====================
+
+RadioPlayer& RadioPlayer::GetInstance() {
+    static RadioPlayer instance;
+    return instance;
+}
+
+ServiceState RadioPlayer::GetState() const {
+    radio_player_snap_t snap;
+    radio_player_snapshot(&snap);
+    switch (snap.state) {
+        case RADIO_PLAYING:
+        case RADIO_CONNECTING:
+            return ServiceState::Running;
+        case RADIO_ERROR:
+            return ServiceState::Error;
+        case RADIO_STOPPED:
+        default:
+            return ServiceState::Stopped;
+    }
+}
+
+esp_err_t RadioPlayer::Init() {
+    RadioCacheInit();
+    return ESP_OK;
+}
+
+esp_err_t RadioPlayer::Start() {
+    return radio_player_start() == 0 ? ESP_OK : ESP_FAIL;
+}
+
+void RadioPlayer::Stop() {
+    radio_stop();
+}
+
+void RadioPlayer::Play(const char* name, const char* url, int catalog_index) {
+    radio_play_indexed(name, url, catalog_index);
+}
+
+void RadioPlayer::Snapshot(radio_player_snap_t* out) {
+    radio_player_snapshot(out);
+}

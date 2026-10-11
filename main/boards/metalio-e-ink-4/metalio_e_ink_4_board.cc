@@ -368,150 +368,6 @@ private:
         BluetoothScreen::ApplyDefaultMode();
     }
 
-    #if 0
-    // ponytail: 全刷 SPI 单测用；测完改 0 恢复正常开机。1=白 0=黑，与 VRAM/LVGL I1 一致。
-    static void FbSetPixel(uint8_t* fb, int w, int h, int x, int y, bool white) {
-        if (x < 0 || y < 0 || x >= w || y >= h) {
-            return;
-        }
-        uint8_t* p = &fb[y * (w / 8) + x / 8];
-        const uint8_t mask = static_cast<uint8_t>(1u << (7 - (x & 7)));
-        if (white) {
-            *p |= mask;
-        } else {
-            *p &= static_cast<uint8_t>(~mask);
-        }
-    }
-
-    static void FbFillRect(uint8_t* fb, int w, int h, int x0, int y0, int x1, int y1, bool white) {
-        if (x0 > x1) {
-            const int t = x0;
-            x0 = x1;
-            x1 = t;
-        }
-        if (y0 > y1) {
-            const int t = y0;
-            y0 = y1;
-            y1 = t;
-        }
-        for (int y = y0; y <= y1; y++) {
-            for (int x = x0; x <= x1; x++) {
-                FbSetPixel(fb, w, h, x, y, white);
-            }
-        }
-    }
-
-    /** 格内粗线几何黑字 A（约占格子 80%）。 */
-    static void StampBigBlackAInCell(uint8_t* fb, int w, int h, int x0, int y0, int cell) {
-        const int m = cell / 10;
-        const int top = y0 + m;
-        const int bot = y0 + cell - 1 - m;
-        const int left = x0 + m;
-        const int right = x0 + cell - 1 - m;
-        const int cx = x0 + cell / 2;
-        const int bar_y = y0 + (cell * 55) / 100;
-        const int thick = (cell / 10) | 1; // 奇数线宽，至少 1
-        const int half = thick / 2;
-
-        auto plot = [&](int x, int y) {
-            FbFillRect(fb, w, h, x - half, y - half, x + half, y + half, false);
-        };
-
-        // 左斜边：顶中 → 左下
-        {
-            const int dy = bot - top;
-            const int dx = left - cx;
-            for (int i = 0; i <= dy; i++) {
-                const int y = top + i;
-                const int x = cx + (dx * i) / dy;
-                plot(x, y);
-            }
-        }
-        // 右斜边：顶中 → 右下
-        {
-            const int dy = bot - top;
-            const int dx = right - cx;
-            for (int i = 0; i <= dy; i++) {
-                const int y = top + i;
-                const int x = cx + (dx * i) / dy;
-                plot(x, y);
-            }
-        }
-        // 横杠
-        FbFillRect(fb, w, h, left + cell / 8, bar_y - half, right - cell / 8, bar_y + half, false);
-    }
-
-    /** 仅白格画黑字 A；黑格保持空白。 */
-    static void StampLetterAInWhiteCells(uint8_t* fb, int w, int h, int cell, bool invert) {
-        for (int cy = 0; cy * cell < h; cy++) {
-            for (int cx = 0; cx * cell < w; cx++) {
-                bool cell_white = ((cx + cy) & 1) != 0;
-                if (invert) {
-                    cell_white = !cell_white;
-                }
-                if (!cell_white) {
-                    continue;
-                }
-                StampBigBlackAInCell(fb, w, h, cx * cell, cy * cell, cell);
-            }
-        }
-    }
-
-    static void FillCheckerboard(uint8_t* fb, int w, int h, int cell, bool invert) {
-        const int stride = w / 8;
-        for (int y = 0; y < h; y++) {
-            for (int bx = 0; bx < stride; bx++) {
-                uint8_t byte = 0;
-                for (int bit = 0; bit < 8; bit++) {
-                    const int x = bx * 8 + bit;
-                    bool white = (((x / cell) + (y / cell)) & 1) != 0;
-                    if (invert) {
-                        white = !white;
-                    }
-                    if (white) {
-                        byte |= static_cast<uint8_t>(1u << (7 - bit));
-                    }
-                }
-                fb[y * stride + bx] = byte;
-            }
-        }
-        StampLetterAInWhiteCells(fb, w, h, cell, invert);
-    }
-
-    /** 上电 init 后：150px 棋盘（白格黑字 A）全刷；每 10s 黑白反相再全刷；不启 LVGL/业务。 */
-    void EpdCheckerboardFullRefreshThenHalt() {
-        constexpr int kCellPx = 150;
-        constexpr int kInvertPeriodMs = 10000;
-        ESP_LOGW(TAG, "EPD SPI test: checkerboard %dpx +A FULL, invert every %dms", kCellPx,
-                 kInvertPeriodMs);
-
-        uint8_t* fb = static_cast<uint8_t*>(
-            heap_caps_malloc(SSD1677_PANEL_BUFFER_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-        if (fb == nullptr) {
-            fb = static_cast<uint8_t*>(heap_caps_malloc(SSD1677_PANEL_BUFFER_SIZE, MALLOC_CAP_DEFAULT));
-        }
-        ESP_ERROR_CHECK(fb ? ESP_OK : ESP_ERR_NO_MEM);
-
-        bool invert = false;
-        while (true) {
-            FillCheckerboard(fb, DISPLAY_WIDTH, DISPLAY_HEIGHT, kCellPx, invert);
-            ESP_LOGI(TAG, "EPD SPI test: FULL checkerboard invert=%d", invert ? 1 : 0);
-
-            // 与 FullRefreshBothSame 同序：0x26=0x24 → FULL 0xC7 → BUSY
-            epaper_panel_set_bitmap_color(panel_, SSD1677_EPAPER_BITMAP_PREVIOUS);
-            ESP_ERROR_CHECK(
-                esp_lcd_panel_draw_bitmap(panel_, 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, fb));
-            epaper_panel_set_bitmap_color(panel_, SSD1677_EPAPER_BITMAP_CURRENT);
-            ESP_ERROR_CHECK(
-                esp_lcd_panel_draw_bitmap(panel_, 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, fb));
-            epaper_panel_set_refresh_mode(panel_, SSD1677_EPAPER_REFRESH_FULL);
-            ESP_ERROR_CHECK(epaper_panel_refresh_screen(panel_));
-
-            invert = !invert;
-            vTaskDelay(pdMS_TO_TICKS(kInvertPeriodMs));
-        }
-    }
-    #endif
 
     // 面板预清:异常断电/崩溃时面板可能正在刷新,掉电后 BUSY 卡死,
     // esp_lcd_panel_init 的 BUSY 等待循环无超时 → 开机永久挂死
@@ -605,9 +461,6 @@ private:
         vTaskDelay(pdMS_TO_TICKS(100));
         ESP_LOGI(TAG, "SSD1677 ready %dx%d", DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
-#if 0 // EPD 全刷 SPI 单测：改 0 恢复正常产品流程
-        EpdCheckerboardFullRefreshThenHalt();
-#endif
     }
 
     // 返回 true 表示触摸可用；检测不到时不崩溃，touch_ 保持 nullptr。
@@ -1121,9 +974,6 @@ public:
             return;
         }
         initialized_ = true;
-#if 0 // EPD 全刷 SPI 单测：只起屏，其它外设/业务全跳过
-        InitializeSsd1677(); // 内部棋盘全刷后挂死，不会返回
-#else
         CreateI2cBus();
         const bool io_ok = InitializeIOExpander();
         InitializeVibrationMotor();
@@ -1151,7 +1001,6 @@ public:
         camera_ = new UvcStillCamera();
         StartSystemMonitor();
         PowerPolicy::GetInstance().Init(this);
-#endif
     }
 
     virtual Camera* GetCamera() override { return camera_; }

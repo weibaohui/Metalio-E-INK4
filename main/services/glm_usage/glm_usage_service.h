@@ -11,6 +11,7 @@
 #include <freertos/task.h>
 
 #include "services/glm_usage/glm_usage.h"
+#include "services/app_service.h"
 
 // A discovered organization/project pair. Usage snapshots are stored per pair,
 // so the dashboard can switch between contexts without refetching.
@@ -52,16 +53,19 @@ struct GlmUsageStatus {
 
 // Resident GLM quota service and MCP tool provider. The LVGL app is only an
 // observer and context switcher.
-class GlmUsageService {
+class GlmUsageService : public AppService {
 public:
     static GlmUsageService& GetInstance();
 
+    const char* GetName() const override { return "GlmUsageService"; }
+    ServiceState GetState() const override;
+
     // boot 期一次性:创建 event group、载入持久化、注册 MCP 工具。不跑 worker,
     // 故不占 16K 任务内存;MCP self.glm_usage.* 在屏幕未开时仍可返回缓存快照。
-    void Init();
+    esp_err_t Init() override;
     // 启动 16K 常驻 worker(进入 GLM 用量屏时调);Stop 配对释放(离屏时调)。
-    void Start();
-    void Stop();
+    esp_err_t Start() override;
+    void Stop() override;
 
     GlmUsageConfig GetConfig();
     std::vector<GlmUsageContext> GetContexts();
