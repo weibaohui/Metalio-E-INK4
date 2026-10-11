@@ -30,11 +30,15 @@ enum class TouchVkEvent : uint8_t {
 };
 
 using TouchVirtualKeyEventCb = bool (*)(const char* name, TouchVkEvent event, void* user_data);
+using TouchPollCallback = esp_err_t (*)(esp_lcd_touch_handle_t touch,
+                                        esp_lcd_touch_point_data_t* points, uint8_t* count,
+                                        uint8_t max_points);
 
 class LVAdapterDisplay : public Display {
 public:
     LVAdapterDisplay(esp_lcd_panel_handle_t panel, esp_lcd_panel_io_handle_t panel_io,
-                     esp_lcd_touch_handle_t touch_handle, int width, int height);
+                     esp_lcd_touch_handle_t touch_handle, int width, int height,
+                     TouchPollCallback touch_poll);
     ~LVAdapterDisplay() override;
 
     // 板级构造期间 Board::GetInstance() 可能重入，屏幕创建请走本接口。

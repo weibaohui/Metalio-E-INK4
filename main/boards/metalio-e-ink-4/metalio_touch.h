@@ -9,6 +9,7 @@
 #include <esp_err.h>
 #include <esp_io_expander.h>
 #include <esp_lcd_touch.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,6 +26,10 @@ esp_err_t metalio_touch_hw_reset_pulse(esp_io_expander_handle_t expander);
  * @return ESP_OK 且 *out_touch 非空；失败时 *out_touch=NULL，返回错误码（不崩溃）
  */
 esp_err_t metalio_touch_init(i2c_master_bus_handle_t i2c_bus, esp_lcd_touch_handle_t* out_touch);
+
+/** 串行执行一次触摸 I2C 读取和点位快照；与休眠/复位操作共享总线所有权。 */
+esp_err_t metalio_touch_poll(esp_lcd_touch_handle_t touch, esp_lcd_touch_point_data_t* points,
+                             uint8_t* count, uint8_t max_points);
 
 /** 写 0xA5=0x03 进入触摸深睡 */
 esp_err_t metalio_touch_enter_sleep(esp_lcd_touch_handle_t touch);

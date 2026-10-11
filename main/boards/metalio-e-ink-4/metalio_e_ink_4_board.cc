@@ -591,7 +591,8 @@ private:
     }
 
     void InitializeDisplay() {
-        display_ = new LVAdapterDisplay(panel_, panel_io_, touch_, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        display_ = new LVAdapterDisplay(panel_, panel_io_, touch_, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                                        metalio_touch_poll);
 
         if (touch_ == nullptr) {
             return;
