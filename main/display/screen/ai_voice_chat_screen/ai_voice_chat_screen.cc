@@ -407,10 +407,8 @@ void RefreshState() {
     const auto st = AiChat_GetState();
     const bool recording = st == AiChatState::Recording;
     if (s_ui.talk_lbl != nullptr) {
-        // 播报中按钮文案提示可打断(按住即停播并开录)
-        lv_label_set_text(s_ui.talk_lbl,
-                          recording ? "松开发送"
-                                    : (st == AiChatState::Speaking ? "按住打断播报" : "按住说话"));
+        // 文案恒为"按住说话":播报中单击=只停止播报,按住=正常说话(服务侧按时长判定)
+        lv_label_set_text(s_ui.talk_lbl, recording ? "松开发送" : "按住说话");
     }
     if (s_ui.talk_btn != nullptr) {
         lv_obj_set_style_bg_color(s_ui.talk_btn, recording ? lv_color_black() : lv_color_white(), 0);
@@ -569,7 +567,7 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     s_ui.user_lbl = ScreenMakeLabel(chat, "", 25, true);
     s_ui.reply_lbl = ScreenMakeLabel(chat, "", 25, true);
 
-    // 按住说话大按钮(屏幕下方;播报中显示"按住打断播报")
+    // 按住说话大按钮(屏幕下方;播报中单击=停播,按住=开录)
     s_ui.talk_btn = lv_obj_create(body);
     lv_obj_remove_style_all(s_ui.talk_btn);
     lv_obj_set_size(s_ui.talk_btn, lv_pct(100), 90);
