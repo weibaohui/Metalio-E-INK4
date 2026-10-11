@@ -15,7 +15,9 @@
 
 #include <cJSON.h>
 
+#include "SdCardManager.hpp"
 #include "application.h"
+#include "boards/common/sd_paths.h"
 #include "utils/psr_worker.h"
 #include "audio_codec.h"
 #include "board.h"
@@ -187,6 +189,33 @@ bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, s
     return true;
 }
 
+// 对话轮存档:JSONL 追加到 SD(/sdcard/metalio/e-ink/aichat/history.jsonl)。
+// PSRAM 栈任务写 SD 合规(纪律只禁内部 flash/NVS);>512KB 轮转保留一代。
+void SaveHistory(const std::string& user, const std::string& reply) {
+    if (!SdCardManager::GetInstance().IsMounted()) {
+        return;   // 无卡静默跳过
+    }
+    SdEnsureDir(SD_PATH_AICHAT);
+    const std::string path = SD_PATH_AICHAT "/history.jsonl";
+    struct stat st;
+    if (stat(path.c_str(), &st) == 0 && st.st_size > 512 * 1024) {
+        const std::string old = SD_PATH_AICHAT "/history.old.jsonl";
+        unlink(old.c_str());
+        rename(path.c_str(), old.c_str());
+    }
+    FILE* f = fopen(path.c_str(), "a");
+    if (f == nullptr) {
+        ESP_LOGW(TAG, "history open failed errno=%d", errno);
+        return;
+    }
+    const std::string line = std::string("{\"ts\":") +
+        std::to_string((long long)(esp_timer_get_time() / 1000000LL)) +
+        ",\"user\":\"" + EscapeJson(user) +
+        "\",\"reply\":\"" + EscapeJson(reply) + "\"}\n";
+    fwrite(line.data(), 1, line.size(), f);
+    fclose(f);
+}
+
 // TTS:MiniMax t2a_v2,返回 16k 单声道 PCM 的 hex 编码 → 解码为样本。
 // 常见小坑:audio 字段是 hex 不是 base64;长回复会到 MB 级 JSON,靠
 // SPIRAM_USE_MALLOC 落 PSRAM。文本截断 300 字符控制耗时与内存。
@@ -324,6 +353,7 @@ void PipelineTask(void*) {
         if (!LlmChat(cfg, text, reply, err)) { ESP_LOGE(TAG, "llm fail: %s", err.c_str()); SetState(AiChatState::Error, err); goto done; }
         ESP_LOGI(TAG, "llm ok: %u chars", (unsigned)reply.size());
         SetReplyText(reply);
+        SaveHistory(text, reply);   // 先落盘再发声,TTS 慢不拖累存档
         SetState(AiChatState::Done);
         if (cfg.auto_tts) {
             SetState(AiChatState::Speaking);
