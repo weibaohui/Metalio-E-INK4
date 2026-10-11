@@ -1143,58 +1143,27 @@ void Application::Start() {
          }},
         {"ota_url",
          [&] {
-             // OTA URL：NVS(wifi/ota_url) 为空则写入 cloudzao 默认（开源版该串为空则跳过）
+             // 清理 NVS 中残留的 ota_url 与激活状态
              Settings settings("wifi", true);
-             std::string ota_url = settings.GetString("ota_url");
-             if (!api::HasDefaultOtaUrl()) {
-                 settings.EraseKey("ota_url");
-                 activation_code_.clear();
-                 activation_message_.clear();
-                 ESP_LOGI(TAG, "blank cloud endpoints: cleared stale ota_url and activation state");
-             } else if (ota_url.empty()) {
-                 ota_url = api::kDefaultOtaUrl;
-                 settings.SetString("ota_url", ota_url);
-                 ESP_LOGD(TAG, "OTA URL empty in NVS, wrote default");
-             } else {
-                 ESP_LOGD(TAG, "OTA URL from NVS");
-             }
+             settings.EraseKey("ota_url");
+             activation_code_.clear();
+             activation_message_.clear();
+             ESP_LOGI(TAG, "cleared stale ota_url and activation state");
          }},
         {"ota_check",
          [&] {
-             // Check for new assets version
-             CheckAssetsVersion();
-             // Check for new firmware version or get the MQTT broker address（OTA 不变）
-             Ota ota;
-             CheckNewVersion(ota);
-             has_server_time_ = ota.HasServerTime();
-             current_version_ = ota.GetCurrentVersion();
-             // 联网且拿到 server_time 后，通知板级回写 RTC（如 PCF8563）
-             if (has_server_time_) {
-                 board.OnNetworkTimeSynced();
-             }
+             // 禁用开机 OTA 检查与激活轮询
+             current_version_ = esp_app_get_description()->version;
+             ESP_LOGI(TAG, "skip ota_check & activation (disabled)");
          }},
         {"post_net_jobs",
          [&] {
-             // 天气：每天开机拉一次，写入 NVS；当天后续走缓存
-             StandbyScreen::EnsureWeatherCached();
              // 壁纸启用：同步灌关机+待机 NVS→缓存，供待机入口路由（勿在 LVGL 任务）
              wallpaper::HydrateFromNvsNow();
              // 阅读快照：显示初始化 / StartNetwork 前已灌；此处幂等补灌
              reader::book_home_snapshot::HydrateFromNvs();
-             // 开机未连上：勿 EnsureNetworkReady 再空等（会硬占网续扫）
-             // 配网 SoftAP / 4G 未真正上网时 IsNetworkReady=false，一律跳过联网任务
-             if (board.IsNetworkReady() && !board.IsWifiConfigMode()) {
-                 if (api::HasHost()) {
-                     TaskScreen::EnsureCacheSynced();
-                     // sync 仅 POST：等 warmup 缓存就绪后组包，不再扫盘 Peek
-                     reader::book_progress_sync::RequestBootReport();
-                     device_wifi_location::RequestBootReport();
-                 } else {
-                     ESP_LOGI(TAG, "skip boot checklist/book sync/wifi-loc: cloud endpoints blank");
-                 }
-             } else {
-                 ESP_LOGW(TAG, "skip boot checklist/book sync/wifi-loc: network not ready");
-             }
+             // 禁用天气拉取、云端待办同步、阅读进度上报与 WiFi 位置上报
+             ESP_LOGI(TAG, "skip weather, checklist, book sync, and wifi-loc (disabled)");
          }},
         {"mcp_services",
          [&] {

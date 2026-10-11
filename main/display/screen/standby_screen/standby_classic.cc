@@ -656,6 +656,9 @@ bool HttpGetWeather(std::string& body_out, std::string& err_out) {
 }
 
 void EnsureWeatherCachedLocked() {
+    if (!api::HasHost() || api::WeatherLatestUrl().empty()) {
+        return;
+    }
     char today[9];
     if (!FormatToday(today, sizeof(today))) {
         ESP_LOGW(TAG, "weather skip: time not ready");
@@ -718,6 +721,9 @@ void EnsureWeatherTask(void* /*arg*/) {
 }
 
 void ScheduleWeatherEnsure() {
+    if (!api::HasHost() || api::WeatherLatestUrl().empty()) {
+        return;
+    }
     if (WeatherRamIsToday()) {
         return;
     }
