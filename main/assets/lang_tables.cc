@@ -509,8 +509,8 @@ enum class LangStringId : size_t {
     SETTINGS_STORAGE_USB_OFF,
     SETTINGS_STORAGE_USB_ON,
     SETTINGS_TAB_ABOUT,
-    SETTINGS_TAB_DEBUG,
     SETTINGS_TAB_BLUETOOTH,
+    SETTINGS_TAB_DEBUG,
     SETTINGS_TAB_HAPTIC,
     SETTINGS_TAB_LANGUAGE,
     SETTINGS_TAB_NETWORK,
@@ -1268,8 +1268,8 @@ static const char* const kLiterals_en_us[] = {
         "Disable USB disk",  /* SETTINGS_STORAGE_USB_OFF */
         "Enable USB disk",  /* SETTINGS_STORAGE_USB_ON */
         "About",  /* SETTINGS_TAB_ABOUT */
-        "Debug",  /* SETTINGS_TAB_DEBUG */
         "Bluetooth",  /* SETTINGS_TAB_BLUETOOTH */
+        "Debug",  /* SETTINGS_TAB_DEBUG */
         "Haptic",  /* SETTINGS_TAB_HAPTIC */
         "Language",  /* SETTINGS_TAB_LANGUAGE */
         "Network",  /* SETTINGS_TAB_NETWORK */
@@ -2025,8 +2025,8 @@ static const char* const kLiterals_zh_cn[] = {
         "停用模拟 U 盘",  /* SETTINGS_STORAGE_USB_OFF */
         "启用模拟 U 盘",  /* SETTINGS_STORAGE_USB_ON */
         "关于",  /* SETTINGS_TAB_ABOUT */
-        "调试",  /* SETTINGS_TAB_DEBUG */
         "蓝牙",  /* SETTINGS_TAB_BLUETOOTH */
+        "调试",  /* SETTINGS_TAB_DEBUG */
         "震动",  /* SETTINGS_TAB_HAPTIC */
         "语言",  /* SETTINGS_TAB_LANGUAGE */
         "网络",  /* SETTINGS_TAB_NETWORK */
@@ -2783,8 +2783,8 @@ void ApplyLiterals(const char* const* literals) {
     Strings::SETTINGS_STORAGE_USB_OFF = literals[static_cast<size_t>(LangStringId::SETTINGS_STORAGE_USB_OFF)];
     Strings::SETTINGS_STORAGE_USB_ON = literals[static_cast<size_t>(LangStringId::SETTINGS_STORAGE_USB_ON)];
     Strings::SETTINGS_TAB_ABOUT = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_ABOUT)];
-    Strings::SETTINGS_TAB_DEBUG = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_DEBUG)];
     Strings::SETTINGS_TAB_BLUETOOTH = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_BLUETOOTH)];
+    Strings::SETTINGS_TAB_DEBUG = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_DEBUG)];
     Strings::SETTINGS_TAB_HAPTIC = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_HAPTIC)];
     Strings::SETTINGS_TAB_LANGUAGE = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_LANGUAGE)];
     Strings::SETTINGS_TAB_NETWORK = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_NETWORK)];
@@ -3558,8 +3558,8 @@ const char* Strings::SETTINGS_STORAGE_USB_HINT_SWITCHING = "";
 const char* Strings::SETTINGS_STORAGE_USB_OFF = "";
 const char* Strings::SETTINGS_STORAGE_USB_ON = "";
 const char* Strings::SETTINGS_TAB_ABOUT = "";
-const char* Strings::SETTINGS_TAB_DEBUG = "";
 const char* Strings::SETTINGS_TAB_BLUETOOTH = "";
+const char* Strings::SETTINGS_TAB_DEBUG = "";
 const char* Strings::SETTINGS_TAB_HAPTIC = "";
 const char* Strings::SETTINGS_TAB_LANGUAGE = "";
 const char* Strings::SETTINGS_TAB_NETWORK = "";

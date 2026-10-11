@@ -741,6 +741,21 @@
         "SETTINGS_TEST_CAMERA_USB_IRQ": "USB中断资源不足",
         "SETTINGS_TEST_CAMERA_USB_BUSY": "USB占用中",
         "SETTINGS_TEST_CAMERA_FAIL": "拍照失败",
-        "SETTINGS_TEST_CAMERA_OK": "成功"
+        "SETTINGS_TEST_CAMERA_OK": "成功",
+        "SETTINGS_TAB_DEBUG": "调试",
+        "SETTINGS_DBG_TITLE": "调试",
+        "SETTINGS_DBG_SYSLOG_TITLE": "日志转发(syslog)",
+        "SETTINGS_DBG_SYSLOG_HINT": "设备日志经 UDP 发送;host/端口用 self.syslog.configure 改",
+        "SETTINGS_DBG_SYSLOG_UCAST": "单播(用已存 IP)",
+        "SETTINGS_DBG_SYSLOG_BCAST": "广播(255.255.255.255)",
+        "SETTINGS_DBG_MON_TITLE": "系统监控打印",
+        "SETTINGS_DBG_MON_HINT": "周期打印 CPU/内存/电池水位",
+        "SETTINGS_DBG_MON_1S": "每 1 秒",
+        "SETTINGS_DBG_MON_5S": "每 5 秒",
+        "SETTINGS_DBG_MON_30S": "每 30 秒",
+        "SETTINGS_DBG_MON_60S": "每 60 秒",
+        "SETTINGS_DBG_MEM_TITLE": "内存报告",
+        "SETTINGS_DBG_MEM_HINT": "每任务占用+堆全景,结果在串口/日志",
+        "SETTINGS_DBG_MEM_BTN": "立即打印"
     }
 }
