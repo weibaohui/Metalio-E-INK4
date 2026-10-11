@@ -303,7 +303,7 @@ static esp_err_t decode_with_hardware_jpeg(const uint8_t* src, size_t src_len, u
     ESP_LOGD(TAG, "Expected %d bytes, got %" PRIu32 " bytes", out_buf_len, out_size);
 
     if (out_size != out_buf_len) {
-        ESP_LOGE(TAG, "Decoded image size mismatch: Expected %zu bytes, got %" PRIu32 " bytes", out_buf_len, out_size);
+        ESP_LOGE(TAG, "Decoded image size mismatch: Expected %u bytes, got %" PRIu32 " bytes", (unsigned)out_buf_len, out_size);
         ret = ESP_ERR_INVALID_SIZE;
         goto jpeg_hw_dec_failed;
     }
@@ -321,7 +321,7 @@ static esp_err_t decode_with_hardware_jpeg(const uint8_t* src, size_t src_len, u
             out_buf[2 * i] = rgb565 & 0xFF;
         } while (i != 0);
         out_size = header_info.width * header_info.height * 2;
-        ESP_LOGD(TAG, "Converted GRAY8 to RGB565, new size: %zu", out_size);
+        ESP_LOGD(TAG, "Converted GRAY8 to RGB565, new size: %u", (unsigned)out_size);
     }
 
     ESP_LOG_BUFFER_HEXDUMP(TAG, out_buf, MIN(out_size, 256), ESP_LOG_DEBUG);

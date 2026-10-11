@@ -51,11 +51,13 @@ void MakeSection(lv_obj_t* parent, const char* title) {
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
 }
 
-void FmtKb(size_t bytes, char* out, size_t out_len) {
-    if (bytes >= 1024 * 1024) {
-        snprintf(out, out_len, "%.1f MB", bytes / 1048576.0);
+void FmtKb(uint64_t bytes, char* out, size_t out_len) {
+    if (bytes >= 1024ULL * 1024ULL * 1024ULL) {
+        snprintf(out, out_len, "%.1f GB", static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0));
+    } else if (bytes >= 1024ULL * 1024ULL) {
+        snprintf(out, out_len, "%.1f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
     } else {
-        snprintf(out, out_len, "%zu KB", bytes / 1024);
+        snprintf(out, out_len, "%u KB", static_cast<unsigned>(bytes / 1024ULL));
     }
 }
 
@@ -109,8 +111,8 @@ void FillStorage(lv_obj_t* parent) {
             const uint64_t total = (uint64_t)(fs->n_fatent - 2) * fs->csize * kSectorSize;
             const uint64_t freeb = (uint64_t)free_clusters * fs->csize * kSectorSize;
             char ta[24], fa[24];
-            FmtKb((size_t)total, ta, sizeof(ta));
-            FmtKb((size_t)freeb, fa, sizeof(fa));
+            FmtKb(total, ta, sizeof(ta));
+            FmtKb(freeb, fa, sizeof(fa));
             snprintf(line, sizeof(line), "SD 卡:已挂载,共 %s,可用 %s", ta, fa);
         } else {
             snprintf(line, sizeof(line), "SD 卡:已挂载(容量查询失败)");
