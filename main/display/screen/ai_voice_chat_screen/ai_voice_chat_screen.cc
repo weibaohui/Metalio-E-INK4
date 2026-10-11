@@ -37,9 +37,13 @@ void DisableScroll(lv_obj_t* o) { lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE); 
 void RefreshState() {
     if (!s_alive || s_ui.status_lbl == nullptr) return;
     lv_label_set_text(s_ui.status_lbl, AiChat_GetStateText().c_str());
-    const bool recording = AiChat_GetState() == AiChatState::Recording;
+    const auto st = AiChat_GetState();
+    const bool recording = st == AiChatState::Recording;
     if (s_ui.talk_lbl != nullptr) {
-        lv_label_set_text(s_ui.talk_lbl, recording ? "松开发送" : "按住说话");
+        // 播报中按钮文案提示可打断(按住即停播并开录)
+        lv_label_set_text(s_ui.talk_lbl,
+                          recording ? "松开发送"
+                                    : (st == AiChatState::Speaking ? "按住打断播报" : "按住说话"));
     }
     if (s_ui.talk_btn != nullptr) {
         lv_obj_set_style_bg_color(s_ui.talk_btn, recording ? lv_color_black() : lv_color_white(), 0);
@@ -78,12 +82,16 @@ void OnTalkReleased(lv_event_t*) {
     RefreshState();
 }
 
-void OnTimer(lv_timer_t*) { RefreshState(); }
+void OnTimer(lv_timer_t*) {
+    AiChat_ResetStaleState();   // 任务已死但状态卡在"播报中"等 → 归位 Idle
+    RefreshState();
+}
 
 void OnScreenUnloaded(lv_event_t*) {
     s_alive = false;
-    // 若还在录音就取消(不跑 STT,直接结束)
-    if (AiChat_GetState() == AiChatState::Recording) AiChat_AbortRecord();
+    // 忙就取消:录音/播报/转写/思考任一进行中都停(播报也立刻断),
+    // 否则退出后任务还在后台跑,"播报中"状态残留到下次进屏
+    if (AiChat_IsBusy()) AiChat_AbortRecord();
     if (s_timer != nullptr) { lv_timer_delete(s_timer); s_timer = nullptr; }
     s_ui = {};
 }
@@ -125,14 +133,17 @@ lv_obj_t* AiVoiceChatScreen::Create() {
         if (codec != nullptr) codec->Start();
     });
 
-    ScreenMakeLabel(body, "AI 语音对话", 30);
+    // 标题行:左标题,右"自动发声"勾选(勾选后回复经 MiniMax TTS 播报;落盘 NVS)
+    lv_obj_t* head = lv_obj_create(body);
+    lv_obj_remove_style_all(head);
+    lv_obj_set_size(head, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    DisableScroll(head);
+    lv_obj_clear_flag(head, LV_OBJ_FLAG_CLICKABLE);
+    ScreenMakeLabel(head, "AI 语音对话", 30);
 
-    s_ui.status_lbl = ScreenMakeLabel(body, "按住说话", 25);
-    lv_obj_set_width(s_ui.status_lbl, lv_pct(100));
-    lv_obj_set_style_text_align(s_ui.status_lbl, LV_TEXT_ALIGN_CENTER, 0);
-
-    // 自动发声勾选(勾选后回复经 MiniMax TTS 从喇叭播报;开关落盘 NVS)
-    s_ui.auto_tts_cb = lv_checkbox_create(body);
+    s_ui.auto_tts_cb = lv_checkbox_create(head);
     lv_checkbox_set_text(s_ui.auto_tts_cb, "自动发声");
     lv_obj_set_style_text_color(s_ui.auto_tts_cb, lv_color_black(), 0);
     lv_obj_add_state(s_ui.auto_tts_cb, AiChat_AutoTts() ? LV_STATE_CHECKED : LV_STATE_DEFAULT);
@@ -141,7 +152,26 @@ lv_obj_t* AiVoiceChatScreen::Create() {
         AiChat_SetAutoTts(lv_obj_has_state(cb, LV_STATE_CHECKED));
     }, LV_EVENT_VALUE_CHANGED, nullptr);
 
-    // 按住说话大按钮
+    s_ui.status_lbl = ScreenMakeLabel(body, "按住说话", 25);
+    lv_obj_set_width(s_ui.status_lbl, lv_pct(100));
+    lv_obj_set_style_text_align(s_ui.status_lbl, LV_TEXT_ALIGN_CENTER, 0);
+
+    // 对话显示区(我 + AI):弹性撑满中间,把按住说话按钮顶到屏幕底部
+    lv_obj_t* chat = lv_obj_create(body);
+    lv_obj_remove_style_all(chat);
+    lv_obj_set_width(chat, lv_pct(100));
+    lv_obj_set_flex_grow(chat, 1);
+    lv_obj_set_flex_flow(chat, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(chat, 8, 0);
+    lv_obj_add_flag(chat, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(chat, LV_DIR_VER);
+    lv_obj_clear_flag(chat, LV_OBJ_FLAG_CLICKABLE);
+    // wrap=true:宽 100% + 长文自动折行,回复再长也不超屏宽;
+    // 超出对话区高度由容器竖向滚动承载(上下滑动看全文)
+    s_ui.user_lbl = ScreenMakeLabel(chat, "", 25, true);
+    s_ui.reply_lbl = ScreenMakeLabel(chat, "", 25, true);
+
+    // 按住说话大按钮(屏幕下方;播报中显示"按住打断播报")
     s_ui.talk_btn = lv_obj_create(body);
     lv_obj_remove_style_all(s_ui.talk_btn);
     lv_obj_set_size(s_ui.talk_btn, lv_pct(100), 90);
@@ -161,10 +191,7 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     lv_obj_center(s_ui.talk_lbl);
     lv_obj_clear_flag(s_ui.talk_lbl, LV_OBJ_FLAG_CLICKABLE);
 
-    // 对话显示:我 + AI
-    s_ui.user_lbl = ScreenMakeLabel(body, "");
-    s_ui.reply_lbl = ScreenMakeLabel(body, "");
-
+    AiChat_ResetStaleState();   // 上次异常残留"播报中"等 → 进屏即归位
     RefreshState();
     s_timer = lv_timer_create(OnTimer, 200, nullptr);   // 200ms 轮询状态,录音指示跟手
     VkKey_AttachScreen(screen, kScreenId, VkKeyScreenDesc{AiVoiceChatScreen::Create, nullptr});
