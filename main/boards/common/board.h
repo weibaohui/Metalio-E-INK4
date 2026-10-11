@@ -62,6 +62,9 @@ public:
     }
 
     virtual ~Board() = default;
+    // Called after GetInstance() has fully published the board singleton.
+    // Hardware/UI bring-up that can re-enter Board::GetInstance belongs here, not in constructors.
+    virtual void Initialize() {}
     virtual std::string GetBoardType() = 0;
     virtual std::string GetUuid() { return uuid_; }
     virtual Backlight* GetBacklight() { return nullptr; }

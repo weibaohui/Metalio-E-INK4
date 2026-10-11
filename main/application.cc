@@ -1057,6 +1057,9 @@ void Application::Start() {
     // "开机慢/某步崩"直接看日志表,不用顺着 150 行顺序调用猜。步骤顺序即
     // 原实现顺序;条件与注释原样保留在各步内。
     auto& board = Board::GetInstance();
+    ESP_LOGI(TAG, "board initialization begin");
+    board.Initialize();
+    ESP_LOGI(TAG, "board initialization complete");
     auto display = board.GetDisplay();
 
     struct BootStep {

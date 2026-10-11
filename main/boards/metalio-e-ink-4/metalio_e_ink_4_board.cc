@@ -169,6 +169,7 @@ private:
     esp_lcd_touch_handle_t touch_ = nullptr;
     Display* display_ = nullptr;
     UvcStillCamera* camera_ = nullptr;
+    bool initialized_ = false;
 
     Button boot_button_;
     Button power_button_;
@@ -1066,7 +1067,13 @@ public:
     MetalioEInk4Board()
         : DualNetworkBoard(NT26_TX_PIN, NT26_RX_PIN, NT26_MRDY_PIN, NT26_SRDY_PIN, 0),
           boot_button_(BOOT_BUTTON_GPIO, false, kBootLongPressMs),
-          power_button_(POWER_BUTTON_GPIO, false, kPowerLongPressMs) {
+          power_button_(POWER_BUTTON_GPIO, false, kPowerLongPressMs) {}
+
+    void Initialize() override {
+        if (initialized_) {
+            return;
+        }
+        initialized_ = true;
 #if 0 // EPD 全刷 SPI 单测：只起屏，其它外设/业务全跳过
         InitializeSsd1677(); // 内部棋盘全刷后挂死，不会返回
 #else
