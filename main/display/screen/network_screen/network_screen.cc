@@ -8,6 +8,7 @@
 #include "ssid_manager.h"
 #include "vk_key_handler.h"
 #include "wifi_station.h"
+#include "utils/psr_worker.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -507,7 +508,6 @@ void ScanTask(void* /*arg*/) {
     s_scan_in_progress = false;
     PostRebuildList();
     PostScanBtnEnabled(true);
-    vTaskDelete(nullptr);
 }
 
 void ScheduleScan() {
@@ -518,7 +518,7 @@ void ScheduleScan() {
         PostStatus(Lang::Strings::NETWORK_BUSY_CONNECT);
         return;
     }
-    if (xTaskCreate(ScanTask, "net_scan", 4096, nullptr, 5, nullptr) != pdPASS) {
+    if (!SpawnPsrWorker("net_scan", 4096, 5, ScanTask)) {
         PostStatus(Lang::Strings::NETWORK_SCAN_TASK_FAIL);
     }
 }

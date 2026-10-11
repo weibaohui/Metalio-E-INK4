@@ -40,7 +40,6 @@ inline void ApplyCommonHeaders(Http* http) {
     if (http == nullptr) {
         return;
     }
-    http->SetHeader("Device-Id", DeviceId());
     http->SetHeader("Accept", "*/*");
     http->SetHeader("Connection", "close");
 }

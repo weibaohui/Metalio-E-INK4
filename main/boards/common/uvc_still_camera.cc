@@ -155,7 +155,6 @@ std::string UvcStillCamera::Explain(const std::string& question) {
     auto http = network->CreateHttp(3);
     const std::string boundary = "----ESP32_CAMERA_BOUNDARY";
 
-    http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
     http->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
     if (!explain_token_.empty()) {
         http->SetHeader("Authorization", "Bearer " + explain_token_);
