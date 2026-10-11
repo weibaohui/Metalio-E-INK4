@@ -73,7 +73,6 @@
         "SETTINGS_LANG_CURRENT_EN": "Current: English",
         "SETTINGS_THEME_TITLE": "Home theme",
         "SETTINGS_THEME_HINT": "Applies when you return home",
-
         "SETTINGS_THEME_WHITE": "White",
         "SETTINGS_THEME_GRAY": "Dotted gray",
         "SETTINGS_THEME_BORDER": "Black border",
@@ -522,7 +521,6 @@
         "NETWORK_CLEARED_OK": "Cleared saved networks",
         "SETTINGS_NET_SIM_TITLE": "SIM",
         "SETTINGS_NET_REBOOT_HINT": "Device reboots after switching",
-
         "SETTINGS_NET_CUR_DASH": "Current: --",
         "SETTINGS_NET_MODE_TITLE": "Network mode",
         "SETTINGS_NET_MODE_4G": "Cellular",
@@ -744,6 +742,21 @@
         "SETTINGS_TEST_CAMERA_USB_IRQ": "USB IRQ resource short",
         "SETTINGS_TEST_CAMERA_USB_BUSY": "USB in use",
         "SETTINGS_TEST_CAMERA_FAIL": "Capture failed",
-        "SETTINGS_TEST_CAMERA_OK": "OK"
+        "SETTINGS_TEST_CAMERA_OK": "OK",
+        "SETTINGS_TAB_DEBUG": "Debug",
+        "SETTINGS_DBG_TITLE": "Debug",
+        "SETTINGS_DBG_SYSLOG_TITLE": "Log forward (syslog)",
+        "SETTINGS_DBG_SYSLOG_HINT": "Device logs via UDP; host/port via self.syslog.configure",
+        "SETTINGS_DBG_SYSLOG_UCAST": "Unicast (saved IP)",
+        "SETTINGS_DBG_SYSLOG_BCAST": "Broadcast (255.255.255.255)",
+        "SETTINGS_DBG_MON_TITLE": "System monitor",
+        "SETTINGS_DBG_MON_HINT": "Periodic CPU/RAM/battery stats",
+        "SETTINGS_DBG_MON_1S": "Every 1s",
+        "SETTINGS_DBG_MON_5S": "Every 5s",
+        "SETTINGS_DBG_MON_30S": "Every 30s",
+        "SETTINGS_DBG_MON_60S": "Every 60s",
+        "SETTINGS_DBG_MEM_TITLE": "Memory report",
+        "SETTINGS_DBG_MEM_HINT": "Per-task usage + heap overview (serial/log)",
+        "SETTINGS_DBG_MEM_BTN": "Print now"
     }
 }
