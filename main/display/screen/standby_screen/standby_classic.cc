@@ -19,7 +19,6 @@
 #include "api_endpoints.h"
 #include "api_http.h"
 #include "board.h"
-#include "checklist_cache.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "screen_common.h"
@@ -39,9 +38,6 @@ constexpr lv_coord_t kCalendarIconW = 62;
 constexpr lv_coord_t kCalendarIconH = 59;
 constexpr lv_coord_t kCalendarGap = 12;
 constexpr lv_coord_t kHomeBtnH = 60;
-constexpr lv_coord_t kTodoRowPad = 10;   // 与 TaskScreen kRowPad 一致
-constexpr lv_coord_t kTodoGap = 8;       // 与 TaskScreen kRowGap 一致
-constexpr lv_coord_t kTodoLineGap = 6;   // 与 TaskScreen kRowLineGap 一致
 constexpr lv_coord_t kSectionGap = 48;
 constexpr lv_coord_t kHeroSectionGap = 20;  // 回首页与猫咪区间距
 constexpr lv_coord_t kHeroInnerGap = 4;     // 气泡与猫咪间距
@@ -53,7 +49,6 @@ constexpr lv_coord_t kBubbleW = 316;  // 原 372 再缩 15%
 constexpr lv_coord_t kBubbleH = 94;
 constexpr lv_coord_t kMenuIcon = 30;
 constexpr lv_coord_t kBorderW = 2;
-constexpr int kMaxTodos = 3;  // 下半有猫咪，条数略减以免撑出屏
 constexpr int kHttpTimeoutMs = 15000;
 constexpr int kWorkerStack = 10 * 1024;
 constexpr const char* kWeatherNs = "weather";
@@ -61,11 +56,6 @@ constexpr const char* kWeatherNs = "weather";
 const lv_font_t* WeatherFont() {
     const lv_font_t* f = fontpack_lv_font_get(30, 2);
     return f != nullptr ? f : fontpack_lv_font_ui();
-}
-
-/** 清单行：与 TaskScreen TaskFont 一致（fontpack UI / 25@2） */
-const lv_font_t* TodoFont() {
-    return fontpack_lv_font_ui();
 }
 
 // 百度地图天气现象编码（对照表 0410）→ ic_s_weather_<code>.spng
@@ -133,13 +123,6 @@ struct WeatherSnap {
     char lunar[24] = {};
 };
 
-struct TodoItem {
-    char title[96] = {};
-    char status[16] = {};
-    char plan_date[16] = {};
-    char plan_time[16] = {};
-};
-
 struct UiState {
     lv_obj_t* date_lbl = nullptr;
     lv_obj_t* lunar_lbl = nullptr;
@@ -148,7 +131,6 @@ struct UiState {
     lv_obj_t* weather_icon = nullptr;
     lv_obj_t* weather_text = nullptr;
     lv_obj_t* weather_temp = nullptr;
-    lv_obj_t* todo_host = nullptr;
     lv_obj_t* home_btn = nullptr;
 };
 
@@ -160,7 +142,6 @@ char s_weather_day[9] = {};
 std::mutex s_weather_mu;
 TaskHandle_t s_fetch_task = nullptr;
 std::atomic<bool> s_busy{false};
-std::vector<TodoItem> s_todos;
 
 constexpr int kMaxWeatherListeners = 2;
 standby_classic::WeatherUiListener s_weather_listeners[kMaxWeatherListeners] = {};
@@ -415,135 +396,6 @@ void PostWeatherUi() {
     }
 }
 
-void FormatTodoPlanMeta(char* out, size_t out_sz, const TodoItem& item) {
-    if (out == nullptr || out_sz == 0) {
-        return;
-    }
-    char time_buf[8] = {};
-    if (item.plan_time[0] != '\0') {
-        std::snprintf(time_buf, sizeof(time_buf), "%.5s", item.plan_time);
-    }
-    if (item.plan_date[0] != '\0' && time_buf[0] != '\0') {
-        std::snprintf(out, out_sz, "%s %s", item.plan_date, time_buf);
-    } else if (item.plan_date[0] != '\0') {
-        std::snprintf(out, out_sz, "%s", item.plan_date);
-    } else if (time_buf[0] != '\0') {
-        std::snprintf(out, out_sz, "%s", time_buf);
-    } else {
-        out[0] = '\0';
-    }
-}
-
-void RebuildTodoList() {
-    if (!s_classic_alive || s_ui.todo_host == nullptr) {
-        return;
-    }
-    lv_obj_clean(s_ui.todo_host);
-
-    const lv_font_t* font = TodoFont();
-    // 与 TaskScreen 普通列表行一致：白底黑框圆角 + 标题/计划时间，无行首勾选图
-    const lv_coord_t text_w =
-        LV_HOR_RES - 2 * kSidePad - 2 * kTodoRowPad - 2 * kBorderW;
-
-    if (s_todos.empty()) {
-        lv_obj_t* empty = lv_label_create(s_ui.todo_host);
-        lv_label_set_text(empty, Lang::Strings::STANDBY_EMPTY_TODO);
-        lv_obj_set_style_text_font(empty, font, 0);
-        lv_obj_set_style_text_color(empty, lv_color_black(), 0);
-        lv_obj_set_width(empty, text_w);
-        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_clear_flag(empty, LV_OBJ_FLAG_CLICKABLE);
-        return;
-    }
-
-    const int n = static_cast<int>(s_todos.size()) < kMaxTodos ? static_cast<int>(s_todos.size())
-                                                               : kMaxTodos;
-    for (int i = 0; i < n; ++i) {
-        const TodoItem& item = s_todos[static_cast<size_t>(i)];
-        lv_obj_t* row = lv_obj_create(s_ui.todo_host);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_width(row, lv_pct(100));
-        lv_obj_set_height(row, LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_color(row, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(row, lv_color_black(), 0);
-        lv_obj_set_style_border_width(row, kBorderW, 0);
-        lv_obj_set_style_radius(row, 8, 0);
-        lv_obj_set_style_pad_all(row, kTodoRowPad, 0);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
-
-        lv_obj_t* text_col = lv_obj_create(row);
-        lv_obj_remove_style_all(text_col);
-        lv_obj_set_flex_grow(text_col, 1);
-        lv_obj_set_height(text_col, LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_opa(text_col, LV_OPA_TRANSP, 0);
-        lv_obj_set_flex_flow(text_col, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(text_col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
-                              LV_FLEX_ALIGN_START);
-        lv_obj_set_style_pad_row(text_col, kTodoLineGap, 0);
-        lv_obj_clear_flag(text_col, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_clear_flag(text_col, LV_OBJ_FLAG_CLICKABLE);
-
-        lv_obj_t* name = lv_label_create(text_col);
-        lv_label_set_text(name, item.title);
-        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(name, text_w);
-        lv_obj_set_style_text_font(name, font, 0);
-        lv_obj_set_style_text_color(name, lv_color_black(), 0);
-        lv_obj_clear_flag(name, LV_OBJ_FLAG_CLICKABLE);
-
-        char meta[72];
-        FormatTodoPlanMeta(meta, sizeof(meta), item);
-        if (meta[0] != '\0') {
-            lv_obj_t* hint = lv_label_create(text_col);
-            lv_label_set_text(hint, meta);
-            lv_label_set_long_mode(hint, LV_LABEL_LONG_DOT);
-            lv_obj_set_width(hint, text_w);
-            lv_obj_set_style_text_font(hint, font, 0);
-            lv_obj_set_style_text_color(hint, lv_color_black(), 0);
-            lv_obj_clear_flag(hint, LV_OBJ_FLAG_CLICKABLE);
-        }
-    }
-}
-
-void SetTodoHint(const char* text) {
-    if (!s_classic_alive || s_ui.todo_host == nullptr) {
-        return;
-    }
-    lv_obj_clean(s_ui.todo_host);
-    lv_obj_t* hint = lv_label_create(s_ui.todo_host);
-    lv_label_set_text(hint, text != nullptr ? text : "");
-    lv_obj_set_style_text_font(hint, TodoFont(), 0);
-    lv_obj_set_style_text_color(hint, lv_color_black(), 0);
-    lv_obj_set_width(hint, LV_HOR_RES - 2 * kSidePad - 2 * kTodoRowPad - 2 * kBorderW);
-    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_clear_flag(hint, LV_OBJ_FLAG_CLICKABLE);
-}
-
-/** 待机页只读 checklist_cache（开机联网 / 百问进页写入）；禁止 HTTP */
-void ApplyTodosFromCache() {
-    s_todos.clear();
-    if (!checklist_cache_ready()) {
-        SetTodoHint(Lang::Strings::STANDBY_NO_TODO_CACHE);
-        return;
-    }
-    checklist_cache_item_t buf[kMaxTodos];
-    const size_t n = checklist_cache_copy_pending(buf, kMaxTodos);
-    for (size_t i = 0; i < n; ++i) {
-        TodoItem item;
-        strlcpy(item.title, buf[i].title, sizeof(item.title));
-        strlcpy(item.status, buf[i].status, sizeof(item.status));
-        strlcpy(item.plan_date, buf[i].plan_date, sizeof(item.plan_date));
-        strlcpy(item.plan_time, buf[i].plan_time, sizeof(item.plan_time));
-        s_todos.push_back(item);
-    }
-    RebuildTodoList();
-}
-
 void OnHomeBtnClicked(lv_event_t* /*e*/) {
     ESP_LOGI(TAG, "home btn -> home");
     lv_async_call(
@@ -729,7 +581,7 @@ void BuildUi(lv_obj_t* root)
     lv_obj_set_style_border_width(root, 0, 0);
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_todos.clear();
+
 
     const lv_coord_t content_w = LV_HOR_RES - 2 * kSidePad;
     const lv_coord_t content_h = LV_VER_RES - kTopPad;
@@ -854,18 +706,7 @@ void BuildUi(lv_obj_t* root)
     lv_obj_set_style_text_color(s_ui.weather_temp, lv_color_black(), 0);
     lv_obj_clear_flag(s_ui.weather_temp, LV_OBJ_FLAG_CLICKABLE);
 
-    s_ui.todo_host = lv_obj_create(center);
-    lv_obj_remove_style_all(s_ui.todo_host);
-    lv_obj_set_width(s_ui.todo_host, lv_pct(100));
-    lv_obj_set_height(s_ui.todo_host, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(s_ui.todo_host, LV_OPA_TRANSP, 0);
-    lv_obj_set_flex_flow(s_ui.todo_host, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(s_ui.todo_host, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(s_ui.todo_host, kTodoGap, 0);
-    lv_obj_set_style_margin_bottom(s_ui.todo_host, kSectionGap, 0);
-    lv_obj_clear_flag(s_ui.todo_host, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(s_ui.todo_host, LV_OBJ_FLAG_CLICKABLE);
+
 
     s_ui.home_btn = lv_obj_create(center);
     lv_obj_remove_style_all(s_ui.home_btn);
@@ -920,7 +761,6 @@ void StartOverlayRuntime()
 {
     RefreshDateOnce();
     ApplyWeatherUi();
-    ApplyTodosFromCache();
     ScheduleWeatherEnsure();
 }
 
@@ -957,7 +797,7 @@ void Teardown()
     StopRuntime();
     s_classic_alive = false;
     s_as_overlay = false;
-    s_todos.clear();
+
     s_ui = UiState{};
 }
 
