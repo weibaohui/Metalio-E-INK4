@@ -7,6 +7,7 @@
 #include "settings_common.h"
 
 #include "SimpleUart.hpp"
+#include "IOExpander.hpp"
 
 #include <atomic>
 #include <cstdio>
@@ -25,9 +26,6 @@ namespace {
 constexpr const char* TAG = "BtScreen";
 
 constexpr int kAddrHexLen = 12;
-
-// e-ink-4 扩展器无 BT_POWER 引脚，电源复位不可用。
-constexpr bool kBtPowerResetSupported = false;
 
 std::atomic<bool> s_mode_cmd_busy{false};
 
@@ -512,12 +510,19 @@ static void async_after_bt_reset(void* /*user_data*/) {
 }
 
 static void bt_reset_task(void* /*param*/) {
-    if (!kBtPowerResetSupported) {
+    auto& io = IOExpander::getInstance();
+    if (!io.isInitialized()) {
         post_status(Lang::Strings::BT_PWR_RESET_UNSUP);
         vTaskDelete(nullptr);
         return;
     }
-    s_active_mode = BtMode::kNone;
+    post_status("正在硬件掉电复位...");
+    io.setLevel(IOExpander::Pin::MAIN_PWR, false);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    io.setLevel(IOExpander::Pin::MAIN_PWR, true);
+    vTaskDelay(pdMS_TO_TICKS(400));
+    BluetoothScreen::ApplyDefaultMode();
+    s_active_mode = BtMode::kMode1;
     s_conn_state = ConnState::kIdle;
     lv_async_call(async_after_bt_reset, nullptr);
     post_status(Lang::Strings::BT_PWR_RESET_OK);
@@ -768,6 +773,9 @@ void BluetoothScreen::ApplyDefaultMode() {
         ESP_LOGE(TAG, "ApplyDefaultMode: UART not initialized");
         return;
     }
+    // 先发回车换行清空可能残留的残缺字符
+    uart.sendString("\r\n");
+    vTaskDelay(pdMS_TO_TICKS(50));
     uart.sendString("AT+RX=2\r\n");
     ESP_LOGI(TAG, "TX: AT+RX=2");
     vTaskDelay(pdMS_TO_TICKS(700));

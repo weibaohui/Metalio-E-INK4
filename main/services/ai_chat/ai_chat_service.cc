@@ -24,6 +24,7 @@
 #include "utils/psr_worker.h"
 #include "audio_codec.h"
 #include "board.h"
+#include "power_policy.h"
 #include "mcp_server.h"
 #include "settings.h"
 
@@ -394,6 +395,9 @@ std::vector<int16_t> RecordWhileHeld() {
     // InputData 契约:按 data.size() 读,必须预 resize(空 vector 读 0 样本即失败)
     const size_t chunk = kSampleRate * 60 / 1000 * (two_ch ? 2 : 1);   // 60ms
     int iters = 0;
+    int64_t ch0_sq = 0, ch1_sq = 0;
+    int16_t ch0_peak = 0, ch1_peak = 0;
+    size_t ch_samples = 0;
     const int64_t deadline = esp_timer_get_time() + (int64_t)kMaxRecordSec * 1000000LL;
     while (s_record_flag.load() && !s_cancel.load() && esp_timer_get_time() < deadline) {
         std::vector<int16_t> raw(chunk);
@@ -403,23 +407,34 @@ std::vector<int16_t> RecordWhileHeld() {
         }
         ++iters;
         if (two_ch) {
-            for (size_t i = 0; i + 1 < raw.size(); i += 2) pcm.push_back(raw[i]);
+            for (size_t i = 0; i + 1 < raw.size(); i += 2) {
+                int16_t s0 = raw[i];
+                int16_t s1 = raw[i + 1];
+                pcm.push_back(s0);
+                ch0_sq += (int64_t)s0 * s0;
+                int16_t a0 = s0 < 0 ? (int16_t)-s0 : s0;
+                if (a0 > ch0_peak) ch0_peak = a0;
+
+                ch1_sq += (int64_t)s1 * s1;
+                int16_t a1 = s1 < 0 ? (int16_t)-s1 : s1;
+                if (a1 > ch1_peak) ch1_peak = a1;
+                ++ch_samples;
+            }
         } else {
-            pcm.insert(pcm.end(), raw.begin(), raw.end());
+            for (int16_t v : raw) {
+                pcm.push_back(v);
+                ch0_sq += (int64_t)v * v;
+                int16_t a0 = v < 0 ? (int16_t)-v : v;
+                if (a0 > ch0_peak) ch0_peak = a0;
+                ++ch_samples;
+            }
         }
     }
     // 能量统计 + 峰值归一化。本板 I2S 32→16 位 >>12 后语音峰值仅数百(实测 512),
     // 直接上传会被 ASR 判为无语音;基线 AudioCodec::SetInputGain 是从未生效的死钩子。
-    int64_t sum_sq = 0;
-    int16_t peak = 0;
-    for (int16_t v : pcm) {
-        sum_sq += (int64_t)v * v;
-        int16_t a = v < 0 ? (int16_t)-v : v;
-        if (a > peak) peak = a;
-    }
     float gain = 1.0f;
-    if (!pcm.empty() && peak > 0 && peak < 14000) {
-        gain = 14000.0f / peak;
+    if (!pcm.empty() && ch0_peak > 0 && ch0_peak < 14000) {
+        gain = 14000.0f / ch0_peak;
         if (gain > 24.0f) gain = 24.0f;   // 防把底噪抬爆
         for (auto& v : pcm) {
             int32_t sv = (int32_t)(v * gain + (v >= 0 ? 0.5f : -0.5f));
@@ -428,9 +443,15 @@ std::vector<int16_t> RecordWhileHeld() {
             v = (int16_t)sv;
         }
     }
-    const unsigned rms = pcm.empty() ? 0 : (unsigned)sqrt((double)sum_sq / pcm.size());
-    ESP_LOGI(TAG, "record done: %u samples (%d iters) rms=%u peak=%d gain=x%.1f",
-             (unsigned)pcm.size(), iters, rms, peak, gain);
+    const unsigned rms0 = ch_samples == 0 ? 0 : (unsigned)sqrt((double)ch0_sq / ch_samples);
+    if (two_ch) {
+        const unsigned rms1 = ch_samples == 0 ? 0 : (unsigned)sqrt((double)ch1_sq / ch_samples);
+        ESP_LOGI(TAG, "record done: %u samples (%d iters) ch0(rms=%u peak=%d gain=x%.1f) ch1(rms=%u peak=%d)",
+                 (unsigned)pcm.size(), iters, rms0, ch0_peak, gain, rms1, ch1_peak);
+    } else {
+        ESP_LOGI(TAG, "record done: %u samples (%d iters) rms=%u peak=%d gain=x%.1f",
+                 (unsigned)pcm.size(), iters, rms0, ch0_peak, gain);
+    }
     return pcm;
 }
 
@@ -479,6 +500,10 @@ void PipelineTask(void*) {
 
         if (cfg.auto_tts && !s_cancel.load()) {
             SetState(AiChatState::Speaking);
+            // 播报拉 PA(aichat 直写 codec 不进语音状态机,不拉就是"解码在走、
+            // I2S 在写、功放关着"的无声;收音机 RadioPlayback 同款问题同款修法)。
+            // 在合成前 Acquire:网络等待期正好覆盖功放爬坡,首字不被裁。
+            PowerPolicy::GetInstance().Acquire(PowerNeed::AiChatTts);
             std::vector<int16_t> tts_pcm;
             if (TtsSynthesize(cfg, reply, tts_pcm, err)) {
                 ESP_LOGI(TAG, "tts ok: %u samples", (unsigned)tts_pcm.size());
@@ -486,6 +511,7 @@ void PipelineTask(void*) {
             } else {
                 ESP_LOGE(TAG, "tts fail: %s", err.c_str());
             }
+            PowerPolicy::GetInstance().Release(PowerNeed::AiChatTts);
             s_interrupt_tts.store(false);
             SetState(AiChatState::Done);
         }
