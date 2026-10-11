@@ -421,7 +421,7 @@ void PipelineTask(void*) {
         if (!Board::GetInstance().IsNetworkReady() &&
             !Board::GetInstance().EnsureNetworkReady(15000)) {
             SetState(AiChatState::Error, "无网络且自动连接失败,请检查 WiFi");
-            goto done;
+            break;
         }
 
         Cfg cfg;
