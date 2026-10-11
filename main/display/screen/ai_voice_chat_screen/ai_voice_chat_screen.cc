@@ -37,9 +37,13 @@ void DisableScroll(lv_obj_t* o) { lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE); 
 void RefreshState() {
     if (!s_alive || s_ui.status_lbl == nullptr) return;
     lv_label_set_text(s_ui.status_lbl, AiChat_GetStateText().c_str());
-    const bool recording = AiChat_GetState() == AiChatState::Recording;
+    const auto st = AiChat_GetState();
+    const bool recording = st == AiChatState::Recording;
     if (s_ui.talk_lbl != nullptr) {
-        lv_label_set_text(s_ui.talk_lbl, recording ? "松开发送" : "按住说话");
+        // 播报中按钮文案提示可打断(按住即停播并开录)
+        lv_label_set_text(s_ui.talk_lbl,
+                          recording ? "松开发送"
+                                    : (st == AiChatState::Speaking ? "按住打断播报" : "按住说话"));
     }
     if (s_ui.talk_btn != nullptr) {
         lv_obj_set_style_bg_color(s_ui.talk_btn, recording ? lv_color_black() : lv_color_white(), 0);
