@@ -29,6 +29,7 @@
 #include "mcp_server.h"
 #include "settings.h"
 #include "tts_decoder.h"
+#include "minimax_speech.h"
 
 namespace {
 
@@ -77,22 +78,7 @@ void SetState(AiChatState st, const std::string& err = "") {
 void SetUserText(const std::string& t) { std::lock_guard<std::mutex> l(s_state_mutex); s_user_text = t; }
 void SetReplyText(const std::string& t) { std::lock_guard<std::mutex> l(s_state_mutex); s_reply_text = t; }
 
-// ---- WAV 打包(16k 单声道 int16 → RIFF/WAVE) ----
-void PutLE32(std::string& s, uint32_t v) { for (int i=0;i<4;i++) s += (char)((v>>(8*i))&0xff); }
-void PutLE16(std::string& s, uint16_t v) { for (int i=0;i<2;i++) s += (char)((v>>(8*i))&0xff); }
-std::string BuildWav(const std::vector<int16_t>& pcm) {
-    const uint32_t data_bytes = (uint32_t)(pcm.size() * sizeof(int16_t));
-    std::string out;
-    out.reserve(44 + data_bytes);
-    out += "RIFF"; PutLE32(out, 36 + data_bytes); out += "WAVE";
-    out += "fmt "; PutLE32(out, 16); PutLE16(out, 1); PutLE16(out, 1);  // PCM, mono
-    PutLE32(out, kSampleRate); PutLE32(out, kSampleRate * 2); PutLE16(out, 2); PutLE16(out, 16);
-    out += "data"; PutLE32(out, data_bytes);
-    out.append(reinterpret_cast<const char*>(pcm.data()), data_bytes);
-    return out;
-}
-
-// ---- HTTP 助手(整段 SetContent,内部栈任务调用) ----
+// ---- HTTP 助手(整段 SetContent,内部栈任务调用,用于大模型对话) ----
 // 返回 HTTP 状态码;resp 填响应体。失败返回 <=0。
 int HttpPost(const std::string& url, const std::string& bearer,
              const std::string& content_type, const std::string& body, std::string& resp) {
@@ -127,36 +113,9 @@ int HttpPost(const std::string& url, const std::string& bearer,
     return status;
 }
 
-// STT:multipart 上传 WAV,取 OpenAI 转写格式 {"text":...}。成功返回 true。
+// STT: 委托给独立 minimax_speech 模块转写 (OpenAI 兼容 multipart WAV 上传)
 bool SttTranscribe(const Cfg& cfg, const std::vector<int16_t>& pcm, std::string& text, std::string& err) {
-    const std::string wav = BuildWav(pcm);
-    const std::string boundary = "----aichat_boundary";
-    std::string body;
-    body.reserve(wav.size() + 512);
-    body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
-    body.append(wav);
-    body += "\r\n--" + boundary + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n" +
-            (cfg.stt_model.empty() ? std::string("whisper-1") : cfg.stt_model) + "\r\n";
-    body += "--" + boundary + "--\r\n";
-    std::string resp;
-    const int status = HttpPost(cfg.stt_url, cfg.stt_key,
-                                "multipart/form-data; boundary=" + boundary, body, resp);
-    if (status < 200 || status >= 300) {
-        err = "转写 HTTP " + std::to_string(status);
-        return false;
-    }
-    cJSON* root = cJSON_Parse(resp.c_str());
-    if (root == nullptr) { err = "转写响应非 JSON"; return false; }
-    const cJSON* t = cJSON_GetObjectItem(root, "text");
-    if (cJSON_IsString(t)) text = t->valuestring;
-    // MiniMax 等可能包一层 {"base_resp":{...},"data":"..."} 或 {"text":...};再兜一层
-    if (text.empty()) {
-        const cJSON* data = cJSON_GetObjectItem(root, "data");
-        if (cJSON_IsString(data)) text = data->valuestring;
-    }
-    cJSON_Delete(root);
-    if (text.empty()) { err = "转写结果为空"; return false; }
-    return true;
+    return minimax_speech::Transcribe(cfg.stt_url, cfg.stt_key, cfg.stt_model, pcm, text, err);
 }
 
 // 对话:OpenAI 兼容 chat completions。成功返回 true。
@@ -447,24 +406,11 @@ void SaveHistory(const std::string& user, const std::string& reply) {
     fclose(f);
 }
 
-// TTS:MiniMax t2a_v2(或兼容端点),响应通过独立解码模块 tts_decoder 自动探测容器与编码并解码为 16k PCM。
-// 文本截断 300 字符控制耗时与内存。
+// TTS: 委托给独立 minimax_speech 模块合成 (使用选定的音色/语速/音量/情绪)
 bool TtsSynthesize(const Cfg& cfg, const std::string& text, std::vector<int16_t>& pcm, std::string& err) {
-    std::string clip = text;
-    if (clip.size() > 600) clip = clip.substr(0, 600);   // 300 汉字上限
-    const std::string body = std::string(
-        "{\"model\":\"speech-02-turbo\",\"text\":\"") + EscapeJson(clip) +
-        "\",\"stream\":false,"
-        "\"voice_setting\":{\"voice_id\":\"male-qn-qingse\",\"speed\":1.0,\"vol\":1.0},"
-        "\"audio_setting\":{\"sample_rate\":16000,\"format\":\"pcm\",\"channel\":1}}";
-    std::string resp;
     const std::string& key = !cfg.stt_key.empty() ? cfg.stt_key : cfg.llm_key;
-    const int status = HttpPost("https://api.minimax.cn/v1/t2a_v2", key,
-                                "application/json", body, resp);
-    if (s_interrupt_tts.load() || s_cancel.load()) { err = "播报已打断"; return false; }
-    if (status < 200 || status >= 300) { err = "TTS HTTP " + std::to_string(status); return false; }
-
-    return tts_decoder::DecodeTtsResponse(resp, pcm, err);
+    const auto voice_cfg = minimax_speech::GetVoiceConfig();
+    return minimax_speech::Synthesize(key, text, voice_cfg, pcm, err, &s_interrupt_tts, &s_cancel);
 }
 
 // 播放:直写 codec 输出(16k 单声道)。进屏时已 Schedule codec->Start(),
@@ -704,6 +650,7 @@ void AiChat_Init() {
         s_cfg = LoadCfgFromNvs();
         s_cfg_loaded = true;
     }
+    minimax_speech::InitVoiceConfig();
     ESP_LOGI(TAG, "AiChat 初始化 stt配置=%d llm配置=%d",
              (int)AiChat_SttConfigured(), (int)AiChat_LlmConfigured());
 }
@@ -797,7 +744,10 @@ void AiChat_RegisterMcpTools() {
                       Property("llm_base", kPropertyTypeString, std::string("")),
                       Property("llm_model", kPropertyTypeString, std::string("")),
                       Property("auto_tts", kPropertyTypeString, std::string("")),
-                      Property("history_rounds", kPropertyTypeString, std::string(""))}),
+                      Property("history_rounds", kPropertyTypeString, std::string("")),
+                      Property("voice_id", kPropertyTypeString, std::string("")),
+                      Property("speed", kPropertyTypeString, std::string("")),
+                      Property("emotion", kPropertyTypeString, std::string(""))}),
         [](const PropertyList& p) -> ReturnValue {
             Cfg c;
             { std::lock_guard<std::mutex> l(s_cfg_mutex); c = s_cfg; }
@@ -815,10 +765,19 @@ void AiChat_RegisterMcpTools() {
                 c.history_rounds = std::max(0, std::min(10, std::atoi(v.c_str())));
             }
             SetCfg(c);
+
+            auto vcfg = minimax_speech::GetVoiceConfig();
+            bool v_changed = false;
+            if (!(v = p["voice_id"].value<std::string>()).empty()) { vcfg.voice_id = v; v_changed = true; }
+            if (!(v = p["speed"].value<std::string>()).empty()) { vcfg.speed = std::strtof(v.c_str(), nullptr); v_changed = true; }
+            if (!(v = p["emotion"].value<std::string>()).empty()) { vcfg.emotion = v; v_changed = true; }
+            if (v_changed) minimax_speech::SaveVoiceConfig(vcfg);
+
             return std::string("AI 对话配置已保存:stt_key ") +
                    (c.stt_key.empty() ? "空" : "已设") + ", llm_key " +
                    (c.llm_key.empty() ? "空" : "已设") + ", llm_base=" + c.llm_base +
                    ", 自动发声=" + (c.auto_tts ? "开" : "关") +
+                   ", 音色=" + vcfg.voice_id +
                    ", 多轮历史=" + std::to_string(c.history_rounds) + "轮(PSRAM)";
         });
 
@@ -834,9 +793,11 @@ void AiChat_RegisterMcpTools() {
         "Get AI voice-chat config/state: whether STT/LLM keys are set, current state.",
         PropertyList(),
         [](const PropertyList&) -> ReturnValue {
+            auto vcfg = minimax_speech::GetVoiceConfig();
             return std::string("stt_key ") + (AiChat_SttConfigured() ? "已设" : "未设") +
                    " | llm_key " + (AiChat_LlmConfigured() ? "已设" : "未设") +
                    " | 自动发声 " + (AiChat_AutoTts() ? "开" : "关") +
+                   " | 音色 " + vcfg.voice_id +
                    " | 历史 " + std::to_string(AiChat_GetHistoryCount()) + "/" +
                    std::to_string(AiChat_GetHistoryRounds()) + " 轮(PSRAM)" +
                    " | 状态 " + AiChat_GetStateText();
