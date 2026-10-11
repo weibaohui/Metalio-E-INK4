@@ -3,7 +3,9 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -160,6 +162,30 @@ std::string EscapeJson(const std::string& in) {
     return out;
 }
 
+// 语音助手 system prompt:设备身份 + 工具使用规则 + 口语化约束。
+// 没有它,模型不知道自己能调工具,容易用嘴"假装执行"(纯文本描述 curl 之类)。
+const char* kSystemPrompt =
+    "你是 Metalio 墨水屏设备上的语音助手,用户通过语音与你对话,你的回复会被语音播报。\n"
+    "规则:\n"
+    "1. 用户要求操作设备功能(日程/日历、收音机、对时、音量、系统信息、日志等)时,\n"
+    "   必须调用对应工具(tool)完成,不允许只口头承诺或编造执行结果;\n"
+    "2. 工具返回结果后,用简短口语告知用户结果;\n"
+    "3. 回复要简短、口语化,不要用 markdown、表情符号、代码块;\n"
+    "4. 用户说\"今天/明天/下周\"等相对时间时,先参照今天日期换算成 YYYY-MM-DD 再调工具。";
+
+// 今天日期(本地历元模型,TZ=GMT+0;未对时则标注,让模型改问用户明确日期)
+std::string TodayLine() {
+    time_t now = time(nullptr);
+    struct tm tmv = {};
+    localtime_r(&now, &tmv);
+    if (tmv.tm_year + 1900 < 2025) return "今天日期未知(设备未对时),相对时间请向用户问清具体日期。";
+    static const char* kWday[] = {"日", "一", "二", "三", "四", "五", "六"};
+    char buf[64];
+    snprintf(buf, sizeof(buf), "今天是 %04d-%02d-%02d 周%s。",
+             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, kWday[tmv.tm_wday % 7]);
+    return buf;
+}
+
 bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, std::string& err) {
     const std::string url = cfg.llm_base + "/chat/completions";
     const std::string model = cfg.llm_model.empty() ? "gpt-4o-mini" : cfg.llm_model;
@@ -169,7 +195,10 @@ bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, s
     if (has_tools) ESP_LOGI(TAG, "tools schema %u bytes", (unsigned)tools.size());
 
     struct ToolReq { std::string id, name, args; };
-    std::string messages = "[{\"role\":\"user\",\"content\":\"" + EscapeJson(user_text) + "\"}]";
+    // system 在前:设备身份 + 工具规则 + 今天日期(相对时间换算锚点)
+    std::string messages = "[{\"role\":\"system\",\"content\":\"" +
+                           EscapeJson(std::string(kSystemPrompt) + "\n" + TodayLine()) +
+                           "\"},{\"role\":\"user\",\"content\":\"" + EscapeJson(user_text) + "\"}]";
     for (int round = 0; round < 4; ++round) {
         std::string body = std::string("{\"model\":\"") + model + "\",\"messages\":" + messages;
         if (has_tools) body += ",\"tools\":" + tools;
