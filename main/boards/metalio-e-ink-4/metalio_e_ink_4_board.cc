@@ -487,7 +487,37 @@ private:
     }
     #endif
 
+    // 面板预清:异常断电/崩溃时面板可能正在刷新,掉电后 BUSY 卡死,
+    // esp_lcd_panel_init 的 BUSY 等待循环无超时 → 开机永久挂死
+    // (2026-10-11 真机案:panel_reset ok 后 panel_init 永静,复现 100%)。
+    // 手动 RST 脉冲复位面板 FSM + 限时等 BUSY 释放,再交组件正常初始化。
+    void PreClearSsd1677Panel() {
+        gpio_config_t out_cfg = {};
+        out_cfg.pin_bit_mask = (1ULL << EPD_PIN_RST);
+        out_cfg.mode = GPIO_MODE_OUTPUT;
+        out_cfg.pull_up_en = GPIO_PULLUP_ENABLE;
+        gpio_config(&out_cfg);
+        gpio_set_level((gpio_num_t)EPD_PIN_RST, 0);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        gpio_set_level((gpio_num_t)EPD_PIN_RST, 1);
+
+        gpio_config_t in_cfg = {};
+        in_cfg.pin_bit_mask = (1ULL << EPD_PIN_BUSY);
+        in_cfg.mode = GPIO_MODE_INPUT;
+        in_cfg.pull_up_en = GPIO_PULLUP_ENABLE;
+        gpio_config(&in_cfg);
+        int waited_ms = 0;
+        while (gpio_get_level((gpio_num_t)EPD_PIN_BUSY) != 0 && waited_ms < 2000) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            waited_ms += 10;
+        }
+        ESP_LOGW(TAG, "panel pre-clear: BUSY released in %d ms", waited_ms);
+        gpio_reset_pin((gpio_num_t)EPD_PIN_RST);    // 交还组件(带默认配置)
+        gpio_reset_pin((gpio_num_t)EPD_PIN_BUSY);
+    }
+
     void InitializeSsd1677() {
+        PreClearSsd1677Panel();
         spi_bus_config_t buscfg = {
             .mosi_io_num = EPD_PIN_MOSI,
             .miso_io_num = -1,
