@@ -9,7 +9,6 @@ namespace home_hero {
 lv_obj_t* Mount(lv_obj_t* parent, lv_coord_t y_offset);
 
 // 挂载斜切风格 Hero；可重复调用，内部会先 teardown 再重建。
-lv_obj_t* MountSlash(lv_obj_t* parent, lv_coord_t y_offset);
 
 // 启动时钟/天气更新和 listener，需在 Mount 后调用。
 void Start();

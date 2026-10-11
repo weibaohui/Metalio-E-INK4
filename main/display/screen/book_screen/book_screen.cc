@@ -26,7 +26,6 @@
 
 #include "SdCardManager.hpp"
 #include "assets/lang_config.h"
-#include "assistant_screen/assistant_screen.h"
 #include "book_screen/book_cover_loader.h"
 #include "book_screen/book_reader_prefs.h"
 #include "reader/book_cover_sidecar.h"
@@ -1357,28 +1356,11 @@ lv_obj_t* ResumeDetailScreen() {
 }
 
 void OpenAssistantFromReaderAsync(void* /*user_data*/) {
-    ReleaseReaderSessionForLeave();
-    if (AssistantScreen::IsActive()) {
-        ESP_LOGI(TAG, "assistant from reader: already active");
-        return;
-    }
-    HapticPulseIfEnabled();
-    ESP_LOGI(TAG, "assistant from reader -> ScreenNavigateTo (resume via .pos)");
-    ScreenNavigateTo(AssistantScreen::Create);
+    // 助手模块已移除
 }
 
 void RequestOpenAssistantFromReader() {
-    if (!esp_lv_adapter_is_initialized()) {
-        return;
-    }
-    if (esp_lv_adapter_lock(-1) != ESP_OK) {
-        ESP_LOGW(TAG, "assistant from reader: adapter lock failed");
-        return;
-    }
-    if (lv_async_call(OpenAssistantFromReaderAsync, nullptr) != LV_RESULT_OK) {
-        ESP_LOGW(TAG, "assistant from reader: lv_async_call failed");
-    }
-    esp_lv_adapter_unlock();
+    // 助手模块已移除
 }
 
 /** 盖板键在 touch_feed：须 ScreenLvAsync，禁止同步 lv_obj_clean/create（否则 tlsf 双释放）。 */
@@ -6713,15 +6695,9 @@ void RenderBookshelfPage() {
 
 void RequestOpenAssistantFromBook() {
     const char* screen = VkKey_ActiveScreen();
-    if (screen != nullptr && std::strcmp(screen, kScreenRead) == 0) {
-        ESP_LOGI(TAG, "AI long (%s) -> release session, assistant", screen);
-        RequestOpenAssistantFromReader();
-        return;
-    }
     CancelDetailCoverLoad();
     CancelListCoverFill();
-    ESP_LOGI(TAG, "AI long (%s) -> assistant", screen != nullptr ? screen : "?");
-    AssistantScreen::RequestOpen();
+    ESP_LOGI(TAG, "AI long (%s) -> ignored (assistant removed)", screen != nullptr ? screen : "?");
 }
 
 }  // namespace

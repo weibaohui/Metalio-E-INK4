@@ -30,34 +30,7 @@ constexpr lv_coord_t kCalendarIconH = 59;
 constexpr lv_coord_t kCalendarGap = 12;
 constexpr uint32_t kClockTickMs = 1000;
 
-// 斜切主题 Hero
-constexpr lv_coord_t kSlashSidePad = 28;
-constexpr lv_coord_t kSlashTimeDateGap = 20;
-constexpr lv_coord_t kSlashDateRuleW = 64;
-constexpr lv_coord_t kSlashDateRuleH = 3;
-constexpr lv_coord_t kSlashDateGap = 10;
-constexpr lv_coord_t kSlashTimeW = 212;    // 「00」adv 约 203px；200 会挤换行
-constexpr lv_coord_t kSlashSlashGapH = 44; // 时/分空隙高
-constexpr lv_coord_t kSlashLineHalfW = 72; // 斜线半宽（总长约 144，缓于竖切）
-constexpr lv_coord_t kSlashLinePadY = 6;
-constexpr lv_coord_t kSlashWeatherIcon = 48; // 斜切右侧天气图标（小于经典 70，避免挤宽度）
-constexpr lv_coord_t kSlashWeatherGap = 8;
-constexpr lv_coord_t kSlashMinuteNudgeX = 20; // 分相对时略右移
-
-const lv_font_t* SlashTimeFont() {
-    // 160 字 bitmap 高约 124，原行高 214；收紧后完整显示且不再叠出空白横线
-    static lv_font_t font;
-    static bool inited = false;
-    if (!inited) {
-        font = font_misans_regular_160_2;
-        font.line_height = 134;
-        font.base_line = 10;
-        inited = true;
-    }
-    return &font;
-}
-
-enum class HeroKind : uint8_t { Classic = 0, Slash = 1 };
+enum class HeroKind : uint8_t { Classic = 0 };
 
 const lv_font_t* WeatherFont() {
     const lv_font_t* f = fontpack_lv_font_get(30, 2);
@@ -88,12 +61,9 @@ const char* WeekdayName(int wday) {
 struct UiState {
     HeroKind kind = HeroKind::Classic;
     lv_obj_t* root = nullptr;
-    lv_obj_t* time_lbl = nullptr;      // classic：HH:MM；slash 不用
-    lv_obj_t* hour_lbl = nullptr;      // slash：HH
-    lv_obj_t* minute_lbl = nullptr;    // slash：MM
+    lv_obj_t* time_lbl = nullptr;      // classic：HH:MM
     lv_obj_t* date_lbl = nullptr;
     lv_obj_t* lunar_lbl = nullptr;
-    lv_obj_t* weekday_lbl = nullptr;   // slash
     lv_obj_t* meta_split = nullptr;
     lv_obj_t* weather_row = nullptr;
     lv_obj_t* weather_icon = nullptr;
@@ -122,55 +92,8 @@ void FormatClassicClock(char* time_buf, size_t time_len, char* date_buf, size_t 
     std::snprintf(date_buf, date_len, Lang::Strings::HOME_DATE_FMT, tm_info.tm_mon + 1, tm_info.tm_mday);
 }
 
-void FormatSlashClock(char* hour_buf, size_t hour_len, char* min_buf, size_t min_len,
-                      char* date_buf, size_t date_len, char* wday_buf, size_t wday_len) {
-    time_t now = time(nullptr);
-    struct tm tm_info = {};
-    if (localtime_r(&now, &tm_info) == nullptr || tm_info.tm_year < (2020 - 1900)) {
-        std::snprintf(hour_buf, hour_len, "00");
-        std::snprintf(min_buf, min_len, "00");
-        std::snprintf(date_buf, date_len, Lang::Strings::HOME_DATE_SLASH_PLACEHOLDER);
-        std::snprintf(wday_buf, wday_len, "%s", "");
-        return;
-    }
-    std::snprintf(hour_buf, hour_len, "%02d", tm_info.tm_hour);
-    std::snprintf(min_buf, min_len, "%02d", tm_info.tm_min);
-    std::snprintf(date_buf, date_len, Lang::Strings::HOME_DATE_SLASH_FMT, tm_info.tm_year + 1900,
-                  tm_info.tm_mon + 1, tm_info.tm_mday);
-    std::snprintf(wday_buf, wday_len, "%s", WeekdayName(tm_info.tm_wday));
-}
-
 void RefreshClock(bool force) {
     if (!s_alive) {
-        return;
-    }
-
-    if (s_ui.kind == HeroKind::Slash) {
-        if (s_ui.hour_lbl == nullptr || s_ui.minute_lbl == nullptr || s_ui.date_lbl == nullptr) {
-            return;
-        }
-        char hour[4];
-        char minute[4];
-        char date_str[48];
-        char wday[24];
-        FormatSlashClock(hour, sizeof(hour), minute, sizeof(minute), date_str, sizeof(date_str), wday,
-                         sizeof(wday));
-        char time_key[8];
-        std::snprintf(time_key, sizeof(time_key), "%s%s", hour, minute);
-        if (force || std::strcmp(time_key, s_ui.last_time) != 0) {
-            lv_label_set_text(s_ui.hour_lbl, hour);
-            lv_label_set_text(s_ui.minute_lbl, minute);
-            std::snprintf(s_ui.last_time, sizeof(s_ui.last_time), "%s", time_key);
-        }
-        if (force || std::strcmp(date_str, s_ui.last_date) != 0) {
-            lv_label_set_text(s_ui.date_lbl, date_str);
-            std::snprintf(s_ui.last_date, sizeof(s_ui.last_date), "%s", date_str);
-        }
-        if (s_ui.weekday_lbl != nullptr &&
-            (force || std::strcmp(wday, s_ui.last_weekday) != 0)) {
-            lv_label_set_text(s_ui.weekday_lbl, wday);
-            std::snprintf(s_ui.last_weekday, sizeof(s_ui.last_weekday), "%s", wday);
-        }
         return;
     }
 
@@ -225,36 +148,6 @@ void ApplyWeatherUi() {
     standby_classic::WeatherView snap;
     const bool weather_ok = standby_classic::CopyWeatherView(&snap) && snap.valid;
 
-    if (s_ui.kind == HeroKind::Slash) {
-        if (s_ui.lunar_lbl != nullptr) {
-            char lunar[24] = {};
-            // 英文等语言农历位会填成星期，与 weekday_lbl 重复；仅中文显示农历
-            if (weather_ok && std::strcmp(Lang::CODE, "zh-CN") == 0) {
-                standby_classic::FormatLunarOrWeekday(lunar, sizeof(lunar), snap.lunar);
-            }
-            if (std::strcmp(lunar, s_ui.last_lunar) != 0) {
-                lv_label_set_text(s_ui.lunar_lbl, lunar);
-                std::snprintf(s_ui.last_lunar, sizeof(s_ui.last_lunar), "%s", lunar);
-            }
-            if (lunar[0] == '\0') {
-                lv_obj_add_flag(s_ui.lunar_lbl, LV_OBJ_FLAG_HIDDEN);
-            } else {
-                lv_obj_remove_flag(s_ui.lunar_lbl, LV_OBJ_FLAG_HIDDEN);
-            }
-        }
-
-        if (s_ui.weather_row == nullptr) {
-            return;
-        }
-        if (!weather_ok) {
-            lv_obj_add_flag(s_ui.weather_row, LV_OBJ_FLAG_HIDDEN);
-            return;
-        }
-        FillWeatherWidgets(snap);
-        lv_obj_remove_flag(s_ui.weather_row, LV_OBJ_FLAG_HIDDEN);
-        return;
-    }
-
     if (s_ui.weather_row == nullptr) {
         return;
     }
@@ -287,42 +180,6 @@ void OnWeatherListener() {
 
 void OnClockTimer(lv_timer_t* /*timer*/) {
     RefreshClock(false);
-}
-
-void OnSlashGapDraw(lv_event_t* e) {
-    if (lv_event_get_code(e) != LV_EVENT_DRAW_MAIN_END) {
-        return;
-    }
-    lv_obj_t* obj = static_cast<lv_obj_t*>(lv_event_get_target(e));
-    lv_layer_t* layer = lv_event_get_layer(e);
-    if (obj == nullptr || layer == nullptr) {
-        return;
-    }
-    lv_area_t a;
-    lv_obj_get_content_coords(obj, &a);
-    // 斜线居中于时宽，长度适中、斜率缓于竖线
-    const lv_coord_t mid_x = (a.x1 + a.x2) / 2;
-    lv_draw_line_dsc_t dsc;
-    lv_draw_line_dsc_init(&dsc);
-    dsc.color = lv_color_black();
-    dsc.opa = LV_OPA_COVER;
-    dsc.width = 2;
-    dsc.round_start = 0;
-    dsc.round_end = 0;
-    dsc.p1.x = mid_x - kSlashLineHalfW;
-    dsc.p1.y = a.y2 - kSlashLinePadY;
-    dsc.p2.x = mid_x + kSlashLineHalfW;
-    dsc.p2.y = a.y1 + kSlashLinePadY;
-    lv_draw_line(layer, &dsc);
-}
-
-void StyleSlashTimeLabel(lv_obj_t* lbl) {
-    lv_obj_set_style_text_font(lbl, SlashTimeFont(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_width(lbl, kSlashTimeW);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP); // 防宽度不足时第二位换行
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
 }
 
 void BuildClassicUi(lv_obj_t* parent, lv_coord_t y_offset) {
@@ -447,147 +304,6 @@ void BuildClassicUi(lv_obj_t* parent, lv_coord_t y_offset) {
     lv_obj_clear_flag(s_ui.weather_temp, LV_OBJ_FLAG_CLICKABLE);
 }
 
-void BuildSlashUi(lv_obj_t* parent, lv_coord_t y_offset) {
-    lv_obj_t* box = lv_obj_create(parent);
-    s_ui.root = box;
-    lv_obj_remove_style_all(box);
-    lv_obj_set_width(box, LV_HOR_RES - 2 * kSlashSidePad);
-    lv_obj_set_height(box, LV_SIZE_CONTENT);
-    lv_obj_align(box, LV_ALIGN_TOP_MID, 0, y_offset + kHeroPadTop);
-    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
-    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_ROW);
-    // 底对齐：日期块落在分针一带，星期一行才看得见
-    lv_obj_set_flex_align(box, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_END,
-                          LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_column(box, kSlashTimeDateGap, 0);
-    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(box, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
-
-    lv_obj_t* time_col = lv_obj_create(box);
-    lv_obj_remove_style_all(time_col);
-    lv_obj_set_size(time_col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(time_col, LV_OPA_TRANSP, 0);
-    lv_obj_set_flex_flow(time_col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(time_col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(time_col, 0, 0);
-    lv_obj_clear_flag(time_col, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(time_col, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(time_col, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
-
-    s_ui.hour_lbl = lv_label_create(time_col);
-    lv_label_set_text(s_ui.hour_lbl, "00");
-    StyleSlashTimeLabel(s_ui.hour_lbl);
-
-    lv_obj_t* slash_gap = lv_obj_create(time_col);
-    lv_obj_remove_style_all(slash_gap);
-    lv_obj_set_size(slash_gap, kSlashTimeW, kSlashSlashGapH);
-    lv_obj_set_style_bg_opa(slash_gap, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(slash_gap, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(slash_gap, OnSlashGapDraw, LV_EVENT_DRAW_MAIN_END, nullptr);
-
-    s_ui.minute_lbl = lv_label_create(time_col);
-    lv_label_set_text(s_ui.minute_lbl, "00");
-    StyleSlashTimeLabel(s_ui.minute_lbl);
-    lv_obj_set_style_translate_x(s_ui.minute_lbl, kSlashMinuteNudgeX, 0);
-
-    lv_obj_t* date_col = lv_obj_create(box);
-    lv_obj_remove_style_all(date_col);
-    lv_obj_set_size(date_col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(date_col, LV_OPA_TRANSP, 0);
-    lv_obj_set_flex_flow(date_col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(date_col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-    lv_obj_set_style_pad_row(date_col, kSlashDateGap, 0);
-    lv_obj_clear_flag(date_col, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(date_col, LV_OBJ_FLAG_CLICKABLE);
-
-    // 公历/星期常规；农历 30@4 半粗
-    const lv_font_t* date_font = fontpack_lv_font_get(30, 2);
-    if (date_font == nullptr) {
-        date_font = fontpack_lv_font_ui();
-    }
-    const lv_font_t* lunar_font = fontpack_lv_font_get(30, 4);
-    if (lunar_font == nullptr) {
-        lunar_font = date_font;
-    }
-
-    // 天气在日期横线上方
-    s_ui.weather_row = lv_obj_create(date_col);
-    lv_obj_remove_style_all(s_ui.weather_row);
-    lv_obj_set_size(s_ui.weather_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(s_ui.weather_row, LV_OPA_TRANSP, 0);
-    lv_obj_set_flex_flow(s_ui.weather_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(s_ui.weather_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(s_ui.weather_row, kSlashWeatherGap, 0);
-    lv_obj_clear_flag(s_ui.weather_row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(s_ui.weather_row, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(s_ui.weather_row, LV_OBJ_FLAG_HIDDEN);
-
-    s_ui.weather_icon = lv_image_create(s_ui.weather_row);
-    lv_obj_set_size(s_ui.weather_icon, kSlashWeatherIcon, kSlashWeatherIcon);
-    lv_obj_clear_flag(s_ui.weather_icon, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* weather_meta = lv_obj_create(s_ui.weather_row);
-    lv_obj_remove_style_all(weather_meta);
-    lv_obj_set_size(weather_meta, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(weather_meta, LV_OPA_TRANSP, 0);
-    lv_obj_set_flex_flow(weather_meta, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(weather_meta, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-    lv_obj_set_style_pad_row(weather_meta, 2, 0);
-    lv_obj_clear_flag(weather_meta, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(weather_meta, LV_OBJ_FLAG_CLICKABLE);
-
-    s_ui.weather_text = lv_label_create(weather_meta);
-    lv_label_set_text(s_ui.weather_text, "");
-    // 天气描述半粗；温度保持常规
-    const lv_font_t* weather_text_font = fontpack_lv_font_get(30, 4);
-    if (weather_text_font == nullptr) {
-        weather_text_font = date_font;
-    }
-    lv_obj_set_style_text_font(s_ui.weather_text, weather_text_font, 0);
-    lv_obj_set_style_text_color(s_ui.weather_text, lv_color_black(), 0);
-    lv_obj_set_style_text_align(s_ui.weather_text, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_clear_flag(s_ui.weather_text, LV_OBJ_FLAG_CLICKABLE);
-
-    s_ui.weather_temp = lv_label_create(weather_meta);
-    lv_label_set_text(s_ui.weather_temp, "");
-    lv_obj_set_style_text_font(s_ui.weather_temp, date_font, 0);
-    lv_obj_set_style_text_color(s_ui.weather_temp, lv_color_black(), 0);
-    lv_obj_set_style_text_align(s_ui.weather_temp, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_clear_flag(s_ui.weather_temp, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* rule = lv_obj_create(date_col);
-    lv_obj_remove_style_all(rule);
-    lv_obj_set_size(rule, kSlashDateRuleW, kSlashDateRuleH);
-    lv_obj_set_style_bg_color(rule, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(rule, LV_OBJ_FLAG_CLICKABLE);
-
-    s_ui.date_lbl = lv_label_create(date_col);
-    lv_label_set_text(s_ui.date_lbl, Lang::Strings::HOME_DATE_SLASH_PLACEHOLDER);
-    lv_obj_set_style_text_font(s_ui.date_lbl, date_font, 0);
-    lv_obj_set_style_text_color(s_ui.date_lbl, lv_color_black(), 0);
-    lv_obj_set_style_text_align(s_ui.date_lbl, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_clear_flag(s_ui.date_lbl, LV_OBJ_FLAG_CLICKABLE);
-
-    s_ui.lunar_lbl = lv_label_create(date_col);
-    lv_label_set_text(s_ui.lunar_lbl, "");
-    lv_obj_add_flag(s_ui.lunar_lbl, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_text_font(s_ui.lunar_lbl, lunar_font, 0);
-    lv_obj_set_style_text_color(s_ui.lunar_lbl, lv_color_black(), 0);
-    lv_obj_set_style_text_align(s_ui.lunar_lbl, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_clear_flag(s_ui.lunar_lbl, LV_OBJ_FLAG_CLICKABLE);
-
-    s_ui.weekday_lbl = lv_label_create(date_col);
-    lv_label_set_text(s_ui.weekday_lbl, "");
-    lv_obj_set_style_text_font(s_ui.weekday_lbl, date_font, 0);
-    lv_obj_set_style_text_color(s_ui.weekday_lbl, lv_color_black(), 0);
-    lv_obj_set_style_text_align(s_ui.weekday_lbl, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_clear_flag(s_ui.weekday_lbl, LV_OBJ_FLAG_CLICKABLE);
-}
-
 }  // namespace
 
 lv_obj_t* Mount(lv_obj_t* parent, lv_coord_t y_offset) {
@@ -600,19 +316,6 @@ lv_obj_t* Mount(lv_obj_t* parent, lv_coord_t y_offset) {
     s_alive = true;
     BuildClassicUi(parent, y_offset);
     ESP_LOGI(TAG, "mounted classic y_offset=%d", static_cast<int>(y_offset));
-    return s_ui.root;
-}
-
-lv_obj_t* MountSlash(lv_obj_t* parent, lv_coord_t y_offset) {
-    if (parent == nullptr) {
-        return nullptr;
-    }
-    Teardown();
-    s_ui = UiState{};
-    s_ui.kind = HeroKind::Slash;
-    s_alive = true;
-    BuildSlashUi(parent, y_offset);
-    ESP_LOGI(TAG, "mounted slash y_offset=%d", static_cast<int>(y_offset));
     return s_ui.root;
 }
 

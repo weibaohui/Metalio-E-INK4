@@ -7,7 +7,6 @@
 #include "dual_network_board.h"
 #include "settings.h"
 #include "standby_screen/standby_screen.h"
-#include "cloud_screen/cloud_screen.h"
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -262,7 +261,6 @@ void RestoreProvisioningUiAsync(void* /*arg*/)
 /** 与 boot_key EnterStandbyAsync 同形：无 lambda；进待机前先停传输 */
 void EnterStandbyUiShowCb(void* /*arg*/)
 {
-    CloudScreen::StopTransfer();
     StandbyScreen::Show();
 }
 

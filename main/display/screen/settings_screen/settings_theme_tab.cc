@@ -16,17 +16,14 @@ struct ThemeOption {
 const char* ThemeTitleWhite() { return Lang::Strings::SETTINGS_THEME_WHITE; }
 const char* ThemeTitleGray() { return Lang::Strings::SETTINGS_THEME_GRAY; }
 const char* ThemeTitleBorder() { return Lang::Strings::SETTINGS_THEME_BORDER; }
-const char* ThemeTitleSlash() { return Lang::Strings::SETTINGS_THEME_SLASH; }
 const char* ThemeCurWhite() { return Lang::Strings::SETTINGS_THEME_CURRENT_WHITE; }
 const char* ThemeCurGray() { return Lang::Strings::SETTINGS_THEME_CURRENT_GRAY; }
 const char* ThemeCurBorder() { return Lang::Strings::SETTINGS_THEME_CURRENT_BORDER; }
-const char* ThemeCurSlash() { return Lang::Strings::SETTINGS_THEME_CURRENT_SLASH; }
 
 constexpr ThemeOption kThemeOptions[] = {
     {HomeScreen::kCardStyleWhite, ThemeTitleWhite, ThemeCurWhite},
     {HomeScreen::kCardStyleGray, ThemeTitleGray, ThemeCurGray},
     {HomeScreen::kCardStyleBorder, ThemeTitleBorder, ThemeCurBorder},
-    {HomeScreen::kCardStyleSlash, ThemeTitleSlash, ThemeCurSlash},
 };
 constexpr int kThemeOptionCount = sizeof(kThemeOptions) / sizeof(kThemeOptions[0]);
 
