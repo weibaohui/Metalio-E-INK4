@@ -54,14 +54,35 @@ void radio_player_snapshot(radio_player_snap_t* out);
 #ifdef __cplusplus
 }
 
+#include "services/app_service.h"
+#include <string>
+#include <vector>
+
+class RadioPlayer : public AppService {
+public:
+    static RadioPlayer& GetInstance();
+
+    const char* GetName() const override { return "RadioPlayer"; }
+    ServiceState GetState() const override;
+    esp_err_t Init() override;
+    esp_err_t Start() override;
+    void Stop() override;
+
+    void Play(const char* name, const char* url, int catalog_index = -1);
+    void Snapshot(radio_player_snap_t* out);
+
+private:
+    RadioPlayer() = default;
+    ~RadioPlayer() override = default;
+    RadioPlayer(const RadioPlayer&) = delete;
+    RadioPlayer& operator=(const RadioPlayer&) = delete;
+};
+
 // ---- NVS 持久化数据(收藏/上次台)的 RAM 缓存 —— 仅 C++ ----
 // 铁律:LVGL worker 栈在 PSRAM(lv_adapter_display.cc stack_in_psram=true),
 // NVS 读写都要关 flash cache,在 PSRAM 栈任务上执行即 cache_utils 断言。
 // 故 NVS 只允许出现在:(a) 开机时 main 任务加载,(b) 内部 RAM 栈的短命持久化任务。
 // 界面/MCP 一律走这里的 RAM 缓存。
-#include <string>
-#include <vector>
-
 void RadioCacheInit();                                   // 开机 main 任务调一次
 std::vector<std::string> RadioGetFavs();
 void RadioToggleFav(const std::string& name);            // 有则删,无则加
