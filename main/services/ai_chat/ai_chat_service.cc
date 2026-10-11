@@ -244,9 +244,15 @@ bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, s
                     reqs.push_back(r);
                 }
             }
-            assistant_json = std::string("{\"role\":\"assistant\",\"content\":") +
-                (cJSON_IsString(content) ? cJSON_PrintUnformatted(content) : "null") +
-                ",\"tool_calls\":" + tcs + "}";
+            assistant_json = std::string("{\"role\":\"assistant\",\"content\":");
+            if (cJSON_IsString(content)) {
+                char* printed = cJSON_PrintUnformatted(content);
+                assistant_json += printed;
+                cJSON_free(printed);   // 不 free 会被工具轮数放大成泄漏
+            } else {
+                assistant_json += "null";
+            }
+            assistant_json += ",\"tool_calls\":" + tcs + "}";
         } else if (cJSON_IsString(content) && content->valuestring != nullptr) {
             reply = content->valuestring;
         }
