@@ -53,8 +53,10 @@ std::mutex s_cfg_mutex;
 Cfg s_cfg;
 bool s_cfg_loaded = false;
 
-const char* kDefaultSttUrl = "https://api.minimax.cn/v1/audio/transcriptions";
+const char* kDefaultSttUrl = "https://api.minimax.cn/v1/speech_to_text";  // curl 实测 200(2026-10-11);/v1/audio/transcriptions 两域名均 404
 const char* kDefaultLlmBase = "https://api.minimax.cn/v1";
+const char* kDefaultSttModel = "asr-1.0";  // speech_to_text 唯一合法模型(服务端 400 实证)
+const char* kDefaultLlmModel = "MiniMax-M3.1-Flash-Preview";  // MiniMax 默认对话模型;空值曾兜底 gpt-4o-mini 致 400(2026-10-11)
 
 // ---- 运行状态 ----
 std::mutex s_state_mutex;
@@ -269,7 +271,7 @@ std::string TodayLine() {
 
 bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, std::string& err) {
     const std::string url = cfg.llm_base + "/chat/completions";
-    const std::string model = cfg.llm_model.empty() ? "gpt-4o-mini" : cfg.llm_model;
+    const std::string model = cfg.llm_model.empty() ? kDefaultLlmModel : cfg.llm_model;
     // 设备 MCP 工具表(排除 aichat 自身防递归);为空则退化为纯聊天
     const std::string tools = mcp_bridge::ToolsListForOpenAi("self.aichat");
     const bool has_tools = tools.size() > 2;
@@ -291,7 +293,12 @@ bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, s
         std::string resp;
         const int status = HttpPost(url, cfg.llm_key, "application/json", body, resp);
         if (status < 200 || status >= 300) {
-            err = "对话 HTTP " + std::to_string(status);
+            // 带出服务端错误体:400 的 message 直接写明原因(model/参数/JSON),
+            // 只报状态码等于盲猜(2026-10-11 STT 400 排查教训)
+            err = "对话 HTTP " + std::to_string(status) + ": " +
+                  (resp.size() > 200 ? resp.substr(0, 200) : resp);
+            ESP_LOGE(TAG, "llm http %d body=%u resp=%.200s",
+                     status, (unsigned)body.size(), resp.c_str());
             return false;
         }
         cJSON* root = cJSON_Parse(resp.c_str());
@@ -583,23 +590,38 @@ Cfg LoadCfgFromNvs() {
     Cfg c;
     c.stt_url = st.GetString("stt_url", kDefaultSttUrl);
     c.stt_key = st.GetString("stt_key", "");
-    c.stt_model = st.GetString("stt_model", "");
+    c.stt_model = st.GetString("stt_model", kDefaultSttModel);
     c.llm_base = st.GetString("llm_base", kDefaultLlmBase);
+    // 空字符串会覆盖默认值(GetString 语义):NVS 里存在过空写入(2026-10-11
+    // 实测 stt_url 最新一代为空 → "STT URL 或 Key 为空")。凡空一律回退默认,
+    // STT/LLM 端点是内置事实,不该被空值废掉。
+    if (c.stt_url.empty()) c.stt_url = kDefaultSttUrl;
+    if (c.llm_base.empty()) c.llm_base = kDefaultLlmBase;
+    if (c.stt_model.empty()) c.stt_model = kDefaultSttModel;
+    if (c.llm_model.empty()) c.llm_model = kDefaultLlmModel;
     // 域名迁移(2026-10-11,用户要求全部用国内站 minimax.cn):configure 曾把
     // 旧国际站域名无条件写进 NVS,只改默认值不生效 —— 读出含旧域名的存量值
     // 就地改写并回写一次(NVS 写在 main 任务/内部栈,本函数仅 AiChat_Init 调用)。
     bool migrated = false;
+    if (c.stt_url.find("/v1/audio/transcriptions") != std::string::npos) {
+        // 两域名该路径均 404(curl 实证);唯一可用的 STT 端点是 speech_to_text
+        c.stt_url.replace(c.stt_url.find("/v1/audio/transcriptions"), 25, "/v1/speech_to_text");
+        migrated = true;
+    }
     if (c.stt_url.find("api.minimaxi.com") != std::string::npos) {
         c.stt_url.replace(c.stt_url.find("api.minimaxi.com"), 16, "api.minimax.cn");
-        st.SetString("stt_url", c.stt_url);
         migrated = true;
     }
     if (c.llm_base.find("api.minimaxi.com") != std::string::npos) {
         c.llm_base.replace(c.llm_base.find("api.minimaxi.com"), 16, "api.minimax.cn");
-        st.SetString("llm_base", c.llm_base);
         migrated = true;
     }
     if (migrated) {
+        // Settings(ns,false) 是只读句柄——旧版在这里对它 SetString 静默失败,
+        // 迁移从未落盘。必须开可写句柄(本函数仅在 main 任务 AiChat_Init 调用)。
+        Settings w(kNvsNs, true);
+        w.SetString("stt_url", c.stt_url);
+        w.SetString("llm_base", c.llm_base);
         ESP_LOGI(TAG, "cfg migrated to minimax.cn: stt_url=%s llm_base=%s",
                  c.stt_url.c_str(), c.llm_base.c_str());
     }
@@ -775,9 +797,13 @@ void AiChat_RegisterMcpTools() {
 
             return std::string("AI 对话配置已保存:stt_key ") +
                    (c.stt_key.empty() ? "空" : "已设") + ", llm_key " +
-                   (c.llm_key.empty() ? "空" : "已设") + ", llm_base=" + c.llm_base +
-                   ", 自动发声=" + (c.auto_tts ? "开" : "关") +
-                   ", 音色=" + vcfg.voice_id +
+                   (c.llm_key.empty() ? "空" : "已设") +
+                   "\nstt_url=" + c.stt_url +
+                   "\nstt_model=" + c.stt_model +
+                   "\nllm_base=" + c.llm_base +
+                   "\nllm_model=" + c.llm_model +
+                   "\n自动发声=" + (c.auto_tts ? "开" : "关") +
+                   "\n音色=" + vcfg.voice_id +
                    ", 多轮历史=" + std::to_string(c.history_rounds) + "轮(PSRAM)";
         });
 

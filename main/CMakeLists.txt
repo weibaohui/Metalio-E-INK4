@@ -51,6 +51,8 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/power_screen/power_screen.cc"
             "display/screen/system_info_screen/system_info_screen.cc"
             "display/screen/ai_voice_chat_screen/ai_voice_chat_screen.cc"
+            "display/screen/backup_screen/backup_screen.cc"
+            "display/screen/backup_screen/nvs_backup_service.cc"
             "services/radio/radio_catalog.c"
             "services/radio/appfw_icy.c"
             "services/radio/appfw_hls.c"
@@ -136,7 +138,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services")
+set(INCLUDE_DIRS "." "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/backup_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services")
 
 # Add board common files explicitly (replaces GLOB to avoid cache issues and unwanted sources)
 list(APPEND SOURCES

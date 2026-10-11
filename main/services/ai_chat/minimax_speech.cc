@@ -232,7 +232,8 @@ bool Transcribe(const std::string& url,
     body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
     body.append(wav);
     body += "\r\n--" + boundary + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n" +
-            (model.empty() ? std::string("whisper-1") : model) + "\r\n";
+            // asr-1.0 = speech_to_text 唯一合法模型(服务端 400 实证)
+            (model.empty() ? std::string("asr-1.0") : model) + "\r\n";
     body += "--" + boundary + "--\r\n";
     std::string resp;
     const int status = HttpPostRaw(url, key, "multipart/form-data; boundary=" + boundary, body, resp, nullptr, nullptr);
