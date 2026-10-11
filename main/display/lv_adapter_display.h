@@ -101,7 +101,6 @@ private:
     void RestoreStatusWidgetsLocked();
     // 喇叭图标+音量数字同步(持锁上下文调);音量 0=静音叉,>0=喇叭+数字
     void SyncVolumeWidgetsLocked();
-
     lv_obj_t* network_label_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* notification_label_ = nullptr;

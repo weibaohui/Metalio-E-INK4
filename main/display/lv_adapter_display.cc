@@ -1435,6 +1435,7 @@ void LVAdapterDisplay::SyncVolumeWidgetsLocked() {
 }
 
 void LVAdapterDisplay::RestoreStatusWidgetsLocked() {
+
     // 切页只换控件指针，图标/静音/时钟缓存跨页保留，首帧与页面内容同一次局刷画出。
     // 局刷已改为启动后立刻 flush_ready（BUSY 延后到下次 Drain），状态栏合并刷新仍有助于少刷。
     if (network_label_ != nullptr) {
@@ -1446,9 +1447,9 @@ void LVAdapterDisplay::RestoreStatusWidgetsLocked() {
     if (battery_pct_label_ != nullptr) {
         lv_label_set_text(battery_pct_label_, battery_pct_cache_);
     }
-    if (mute_label_ != nullptr || volume_label_ != nullptr) {
-        SyncVolumeWidgetsLocked();   // 喇叭图标+音量数字从缓存/实况恢复
-    }
+    // SetupUI 会在 Board::GetInstance() 尚未完成单例构造时绑定首屏。
+    // 此处不能再调用 Board::GetInstance() 读取音量；后续 UpdateStatusBar
+    // 在单例构造完成后会同步音量缓存与控件。
     if (status_label_ != nullptr) {
         // 无缓存时勿回退「待命」：首页 Idle 应以时钟为准，由 ApplyIdleStatusBar 写入
         const char* body = status_body_cache_[0] != '\0' ? status_body_cache_ : "--:--";
