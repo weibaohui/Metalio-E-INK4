@@ -15,6 +15,8 @@
 #include <string>
 
 #include <esp_log.h>
+#include <esp_netif.h>
+#include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "fontpack_lvgl.h"
@@ -42,6 +44,7 @@ struct NetworkUi {
     lv_obj_t* overlay = nullptr;
     lv_obj_t* overlay_msg = nullptr;
     lv_timer_t* reboot_timer = nullptr;
+    lv_timer_t* netinfo_timer = nullptr;
     int reboot_remaining = 0;
     std::string reboot_headline;
 };
@@ -231,14 +234,42 @@ void SetWifiConfigSectionVisible(bool visible) {
     }
 }
 
+// 每次现读 esp_wifi/esp_netif 拿真实 SSID/IP(不走 GOT_IP 事件的缓存值——
+// 换网/待机恢复后缓存会陈旧),netinfo_timer 每秒刷新。
 void UpdateIpAddressLabel(bool is_wifi) {
     if (s_ui.ip_lbl == nullptr) {
         return;
     }
-    const std::string ip = is_wifi ? WifiStation::GetInstance().GetIpAddress() : "";
-    char text[32];
-    snprintf(text, sizeof(text), "IP: %s", ip.empty() ? "--" : ip.c_str());
+    if (!is_wifi) {
+        lv_label_set_text(s_ui.ip_lbl, "WiFi: -- (当前 4G)\nIP: --");
+        return;
+    }
+    char text[96];
+    wifi_config_t sta_cfg = {};
+    std::string ssid;
+    if (esp_wifi_get_config(WIFI_IF_STA, &sta_cfg) == ESP_OK) {
+        const char* raw = reinterpret_cast<const char*>(sta_cfg.sta.ssid);
+        if (raw[0] != '\0') ssid = raw;
+    }
+    std::string ip;
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip_info = {};
+    if (netif != nullptr && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK &&
+        ip_info.ip.addr != 0) {
+        char buf[16];
+        esp_ip4addr_ntoa(&ip_info.ip, buf, sizeof(buf));
+        ip = buf;
+    }
+    snprintf(text, sizeof(text), "WiFi: %s\nIP: %s",
+             ssid.empty() ? "--" : ssid.c_str(), ip.empty() ? "--" : ip.c_str());
     lv_label_set_text(s_ui.ip_lbl, text);
+}
+
+void NetInfoTimerCb(lv_timer_t* /*timer*/) {
+    if (!s_tab_alive) {
+        return;
+    }
+    UpdateIpAddressLabel(!IsCellNetwork());
 }
 
 void RefreshNetworkOptions() {
@@ -666,6 +697,10 @@ void BuildSimSection(lv_obj_t* page) {
 void SettingsNetworkTab_Reset() {
     CloseOverlay();
     s_tab_alive = false;
+    if (s_ui.netinfo_timer != nullptr) {
+        lv_timer_delete(s_ui.netinfo_timer);
+        s_ui.netinfo_timer = nullptr;
+    }
     s_sim_switch_pending = false;
     s_ui = {};
 }
@@ -734,9 +769,11 @@ void SettingsNetworkTab_Build(lv_obj_t* page) {
 
     // Keep the live IPv4 address visible at the bottom of the network page.
     s_ui.ip_lbl = lv_label_create(page);
-    lv_label_set_text(s_ui.ip_lbl, "IP: --");
+    lv_label_set_text(s_ui.ip_lbl, "WiFi: --\nIP: --");
     lv_obj_set_style_text_font(s_ui.ip_lbl, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(s_ui.ip_lbl, lv_color_black(), 0);
     lv_obj_clear_flag(s_ui.ip_lbl, LV_OBJ_FLAG_CLICKABLE);
+    // 网络信息每秒现读刷新(SSID/IP 动态真实值;离开 tab 随 Reset 销毁)
+    s_ui.netinfo_timer = lv_timer_create(NetInfoTimerCb, 1000, nullptr);
     UpdateIpAddressLabel(!IsCellNetwork());
 }

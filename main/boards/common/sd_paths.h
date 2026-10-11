@@ -53,6 +53,7 @@ extern "C" {
 #define SD_PATH_AICHAT      SD_APP_ROOT "/aichat"
 #define SD_PATH_WALLPAPER    SD_APP_ROOT "/wallpaper"
 #define SD_PATH_CALENDAR     SD_APP_ROOT "/calendar"
+#define SD_PATH_BACKUP       SD_APP_ROOT "/backup"
 
 /** Reading fonts (BookScreen). */
 #define SD_PATH_BOOK_FONT      SD_PATH_FONTS "/misans_25_2.ef"
@@ -117,6 +118,7 @@ static inline int SdEnsureAppLayout(void) {
     (void)SdEnsureDir(SD_PATH_CHAT_LOG);
     (void)SdEnsureDir(SD_PATH_AICHAT);
     (void)SdEnsureDir(SD_PATH_WALLPAPER);
+    (void)SdEnsureDir(SD_PATH_BACKUP);
     return 1;
 }
 

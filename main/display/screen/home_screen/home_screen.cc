@@ -19,6 +19,7 @@
 #include "settings_screen/settings_screen.h"
 #include "system_info_screen/system_info_screen.h"
 #include "time_sync_screen/time_sync_screen.h"
+#include "backup_screen/backup_screen.h"
 #include "vk_key_handler.h"
 #include "vk_page_repeat.h"
 
@@ -146,6 +147,7 @@ namespace
     const char *AppNamePower() { return "电源"; }   // 新 APP 暂不走 i18n
     const char *AppNameSysInfo() { return "系统信息"; }   // 新 APP 暂不走 i18n
     const char *AppNameAiChat() { return "AI 对话"; }   // 新 APP 暂不走 i18n
+    const char *AppNameBackup() { return "备份恢复"; }
 
     constexpr AppEntry kApps[] = {
         {"glm", "A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
@@ -157,6 +159,7 @@ namespace
         {"power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
         {"info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create},
         {"aichat", "A:ic_app_home_buddy.spng", AppNameAiChat, AiVoiceChatScreen::Create, AiChat_BootRegister},
+        {"backup", "A:ic_app_home_cloud.spng", AppNameBackup, BackupScreen::Create},
         {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
     };
 
