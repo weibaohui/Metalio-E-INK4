@@ -407,6 +407,14 @@ void PipelineTask(void*) {
             goto done;
         }
 
+        // 无网自动拉起(需求:没 WiFi 时不会自动连):拉不起再干净报错,
+        // 别让 STT 直接撞"连接失败"。GLM 页同款 EnsureNetworkReady 先例。
+        if (!Board::GetInstance().IsNetworkReady() &&
+            !Board::GetInstance().EnsureNetworkReady(15000)) {
+            SetState(AiChatState::Error, "无网络且自动连接失败,请检查 WiFi");
+            goto done;
+        }
+
         Cfg cfg;
         { std::lock_guard<std::mutex> l(s_cfg_mutex); cfg = s_cfg; }
 
@@ -521,6 +529,18 @@ void AiChat_AbortRecord() {
 }
 
 AiChatState AiChat_GetState() { std::lock_guard<std::mutex> l(s_state_mutex); return s_state; }
+
+bool AiChat_IsBusy() { return s_task != nullptr; }
+
+void AiChat_ResetStaleState() {
+    if (s_task != nullptr) return;   // 真在跑,别动
+    const AiChatState st = AiChat_GetState();
+    if (st == AiChatState::Recording || st == AiChatState::Transcribing ||
+        st == AiChatState::Thinking || st == AiChatState::Speaking) {
+        ESP_LOGW(TAG, "stale state %d without live task, reset to idle", (int)st);
+        SetState(AiChatState::Idle);
+    }
+}
 std::string AiChat_GetUserText() { std::lock_guard<std::mutex> l(s_state_mutex); return s_user_text; }
 std::string AiChat_GetReplyText() { std::lock_guard<std::mutex> l(s_state_mutex); return s_reply_text; }
 std::string AiChat_GetError() { std::lock_guard<std::mutex> l(s_state_mutex); return s_error; }
