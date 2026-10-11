@@ -20,7 +20,8 @@ constexpr const char* kScreenId = "ai_voice_chat";
 
 struct AvcUi {
     lv_obj_t* screen = nullptr;
-    lv_obj_t* status_lbl = nullptr;   // 状态(录音中/识别中/思考中/出错)
+    lv_obj_t* status_lbl = nullptr;   // 状态(录音中/识别中/思考中/播报中/出错)
+    lv_obj_t* auto_tts_cb = nullptr;  // 自动发声勾选框
     lv_obj_t* talk_btn = nullptr;     // 按住说话
     lv_obj_t* talk_lbl = nullptr;
     lv_obj_t* user_lbl = nullptr;     // 我: <识别文本>
@@ -129,6 +130,16 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     s_ui.status_lbl = ScreenMakeLabel(body, "按住说话", 25);
     lv_obj_set_width(s_ui.status_lbl, lv_pct(100));
     lv_obj_set_style_text_align(s_ui.status_lbl, LV_TEXT_ALIGN_CENTER, 0);
+
+    // 自动发声勾选(勾选后回复经 MiniMax TTS 从喇叭播报;开关落盘 NVS)
+    s_ui.auto_tts_cb = lv_checkbox_create(body);
+    lv_checkbox_set_text(s_ui.auto_tts_cb, "自动发声");
+    lv_obj_set_style_text_color(s_ui.auto_tts_cb, lv_color_black(), 0);
+    lv_obj_add_state(s_ui.auto_tts_cb, AiChat_AutoTts() ? LV_STATE_CHECKED : LV_STATE_DEFAULT);
+    lv_obj_add_event_cb(s_ui.auto_tts_cb, [](lv_event_t* e) {
+        auto* cb = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        AiChat_SetAutoTts(lv_obj_has_state(cb, LV_STATE_CHECKED));
+    }, LV_EVENT_VALUE_CHANGED, nullptr);
 
     // 按住说话大按钮
     s_ui.talk_btn = lv_obj_create(body);
