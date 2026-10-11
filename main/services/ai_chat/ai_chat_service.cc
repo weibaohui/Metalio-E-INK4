@@ -68,6 +68,7 @@ std::string s_error;
 std::atomic<bool> s_record_flag{false};   // 按住=true
 std::atomic<bool> s_cancel{false};
 std::atomic<bool> s_interrupt_tts{false};   // 播报中按住说话=打断播报(需求)
+std::atomic<bool> s_barge_record{false};    // 本轮录音由"播报中按下"发起(区分单击/按住)
 TaskHandle_t s_task = nullptr;
 
 void SetState(AiChatState st, const std::string& err = "") {
@@ -520,8 +521,16 @@ void PipelineTask(void*) {
     if (!codec->input_enabled()) codec->EnableInput(true);
 
     while (!s_cancel.load()) {
+        const bool barge = s_barge_record.exchange(false);
         std::vector<int16_t> pcm = RecordWhileHeld();
         if (s_cancel.load()) break;
+        // 播报中按下但 <0.6s 就松手 = 单击:用户只想停止播报,静默回 Idle
+        // (不进 STT、不报"录音太短");按住 ≥0.6s 才算"按住说话"
+        if (barge && pcm.size() < (size_t)kSampleRate * 6 / 10) {
+            ESP_LOGI(TAG, "barge tap: tts stopped only (%u samples)", (unsigned)pcm.size());
+            SetState(AiChatState::Idle);
+            break;
+        }
         if (pcm.size() < kSampleRate / 4) {  // 太短(<0.25s)
             SetState(AiChatState::Error, "录音太短");
             break;
@@ -682,6 +691,7 @@ void AiChat_BeginRecord() {
         // 播报中按住说话:打断播报(TTS 逐块查标志即停),管线循环回录音段直接开录
         if (AiChat_GetState() == AiChatState::Speaking) {
             s_interrupt_tts.store(true);
+            s_barge_record.store(true);   // 本轮源自播报中按下:松手太快视为单击停播
             s_record_flag.store(true);
             ESP_LOGI(TAG, "barge-in: interrupt tts, back to recording");
         }
@@ -689,6 +699,7 @@ void AiChat_BeginRecord() {
     }
     s_cancel.store(false);
     s_interrupt_tts.store(false);   // 清陈旧打断标志(新一轮)
+    s_barge_record.store(false);
     s_record_flag.store(true);
     SetState(AiChatState::Recording);
     // 按下即起管线任务开录(内部栈;HTTPS/TLS 读 CA 证书碰 flash,禁 PSRAM 栈)。
