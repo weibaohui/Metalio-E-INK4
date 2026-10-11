@@ -37,6 +37,7 @@ struct Cfg {
     std::string llm_base;   // OpenAI 兼容 base(如 https://api.openai.com/v1)
     std::string llm_key;    // 通用 OpenAI 格式 Key
     std::string llm_model;  // 对话模型
+    bool auto_tts = false;  // 回复自动发声(MiniMax TTS)
 };
 std::mutex s_cfg_mutex;
 Cfg s_cfg;
@@ -186,6 +187,63 @@ bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, s
     return true;
 }
 
+// TTS:MiniMax t2a_v2,返回 16k 单声道 PCM 的 hex 编码 → 解码为样本。
+// 常见小坑:audio 字段是 hex 不是 base64;长回复会到 MB 级 JSON,靠
+// SPIRAM_USE_MALLOC 落 PSRAM。文本截断 300 字符控制耗时与内存。
+bool TtsSynthesize(const Cfg& cfg, const std::string& text, std::vector<int16_t>& pcm, std::string& err) {
+    std::string clip = text;
+    if (clip.size() > 600) clip = clip.substr(0, 600);   // 300 汉字上限
+    const std::string body = std::string(
+        "{\"model\":\"speech-02-turbo\",\"text\":\"") + EscapeJson(clip) +
+        "\",\"stream\":false,"
+        "\"voice_setting\":{\"voice_id\":\"male-qn-qingse\",\"speed\":1.0,\"vol\":1.0},"
+        "\"audio_setting\":{\"sample_rate\":16000,\"format\":\"pcm\",\"channel\":1}}";
+    std::string resp;
+    const int status = HttpPost("https://api.minimax.cn/v1/t2a_v2", cfg.llm_key,
+                                "application/json", body, resp);
+    if (status < 200 || status >= 300) { err = "TTS HTTP " + std::to_string(status); return false; }
+    cJSON* root = cJSON_Parse(resp.c_str());
+    if (root == nullptr) { err = "TTS 响应非 JSON"; return false; }
+    const cJSON* data = cJSON_GetObjectItem(root, "data");
+    const cJSON* audio = data ? cJSON_GetObjectItem(data, "audio") : nullptr;
+    std::string hex;
+    if (cJSON_IsString(audio) && audio->valuestring != nullptr) hex = audio->valuestring;
+    cJSON_Delete(root);
+    if (hex.size() < 2) { err = "TTS 音频为空"; return false; }
+    auto hexval = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    if (hex.size() % 2 != 0) hex.pop_back();
+    pcm.reserve(hex.size() / 2 / sizeof(int16_t));
+    for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+        const int hi = hexval(hex[i]), lo = hexval(hex[i + 1]);
+        if (hi < 0 || lo < 0) continue;
+        const uint16_t v = (uint16_t)((hi << 8) | lo);
+        int16_t sample;
+        memcpy(&sample, &v, 2);
+        pcm.push_back(sample);
+    }
+    if (pcm.empty()) { err = "TTS 解码为空"; return false; }
+    return true;
+}
+
+// 播放:直写 codec 输出(16k 单声道)。进屏时已 Schedule codec->Start(),
+// 音频服务已停,无争抢。OutputData 阻塞写 I2S,天然按 16k 节奏走。
+void PlayPcm(std::vector<int16_t>& pcm) {
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    if (codec == nullptr) return;
+    codec->EnableOutput(true);
+    std::vector<int16_t> chunk;
+    chunk.reserve(960);
+    for (size_t i = 0; i < pcm.size(); i += 960) {
+        chunk.assign(pcm.begin() + i, pcm.begin() + std::min(i + 960, pcm.size()));
+        codec->OutputData(chunk);
+    }
+}
+
 // 录音(在管线任务上跑,内部栈):阻塞读 mic 直到 s_record_flag 清(松手)或超时。
 std::vector<int16_t> RecordWhileHeld() {
     std::vector<int16_t> pcm;
@@ -267,6 +325,17 @@ void PipelineTask(void*) {
         ESP_LOGI(TAG, "llm ok: %u chars", (unsigned)reply.size());
         SetReplyText(reply);
         SetState(AiChatState::Done);
+        if (cfg.auto_tts) {
+            SetState(AiChatState::Speaking);
+            std::vector<int16_t> tts_pcm;
+            if (TtsSynthesize(cfg, reply, tts_pcm, err)) {
+                ESP_LOGI(TAG, "tts ok: %u samples", (unsigned)tts_pcm.size());
+                PlayPcm(tts_pcm);
+            } else {
+                ESP_LOGE(TAG, "tts fail: %s", err.c_str());
+            }
+            SetState(AiChatState::Done);
+        }
     }
 
 done:
@@ -282,6 +351,7 @@ Cfg LoadCfgFromNvs() {
     c.llm_base = st.GetString("llm_base", kDefaultLlmBase);
     c.llm_key = st.GetString("llm_key", "");
     c.llm_model = st.GetString("llm_model", "");
+    c.auto_tts = st.GetBool("auto_tts", false);
     return c;
 }
 
@@ -295,6 +365,7 @@ void PersistCfgTask(void* arg) {
     st.SetString("llm_base", c->llm_base);
     st.SetString("llm_key", c->llm_key);
     st.SetString("llm_model", c->llm_model);
+    st.SetBool("auto_tts", c->auto_tts);
     delete c;
     vTaskDelete(nullptr);
 }
@@ -361,6 +432,7 @@ std::string AiChat_GetStateText() {
         case AiChatState::Recording: return "录音中… 松手发送";
         case AiChatState::Transcribing: return "语音转文字中…";
         case AiChatState::Thinking: return "思考中…";
+        case AiChatState::Speaking: return "播报中…";
         case AiChatState::Done: return "完成";
         case AiChatState::Error: return "出错";
     }
@@ -368,19 +440,30 @@ std::string AiChat_GetStateText() {
 }
 
 bool AiChat_SttConfigured() { std::lock_guard<std::mutex> l(s_cfg_mutex); return !s_cfg.stt_key.empty(); }
+
+bool AiChat_AutoTts() { std::lock_guard<std::mutex> l(s_cfg_mutex); return s_cfg.auto_tts; }
+
+void AiChat_SetAutoTts(bool enable) {
+    Cfg c;
+    { std::lock_guard<std::mutex> l(s_cfg_mutex); c = s_cfg; }
+    if (c.auto_tts == enable) return;
+    c.auto_tts = enable;
+    SetCfg(c);   // 更新 RAM 缓存 + 内部栈短任务落盘(SafeSettings 兜底守卫)
+}
 bool AiChat_LlmConfigured() { std::lock_guard<std::mutex> l(s_cfg_mutex); return !s_cfg.llm_key.empty(); }
 
 void AiChat_RegisterMcpTools() {
     auto& mcp = McpServer::GetInstance();
 
     mcp.AddTool("self.aichat.configure",
-        "Configure AI voice-chat credentials. stt_key=MiniMax API key(语音转文字); llm_key=OpenAI-format key(对话大模型). Optional: stt_url, stt_model, llm_base, llm_model.",
+        "Configure AI voice-chat credentials. stt_key=MiniMax API key(语音转文字); llm_key=OpenAI-format key(对话大模型). Optional: stt_url, stt_model, llm_base, llm_model, auto_tts(bool,回复自动发声).",
         PropertyList({Property("stt_key", kPropertyTypeString, std::string("")),
                       Property("llm_key", kPropertyTypeString, std::string("")),
                       Property("stt_url", kPropertyTypeString, std::string("")),
                       Property("stt_model", kPropertyTypeString, std::string("")),
                       Property("llm_base", kPropertyTypeString, std::string("")),
-                      Property("llm_model", kPropertyTypeString, std::string(""))}),
+                      Property("llm_model", kPropertyTypeString, std::string("")),
+                      Property("auto_tts", kPropertyTypeString, std::string(""))}),
         [](const PropertyList& p) -> ReturnValue {
             Cfg c;
             { std::lock_guard<std::mutex> l(s_cfg_mutex); c = s_cfg; }
@@ -391,10 +474,14 @@ void AiChat_RegisterMcpTools() {
             if (!(v = p["stt_model"].value<std::string>()).empty()) c.stt_model = v;
             if (!(v = p["llm_base"].value<std::string>()).empty()) c.llm_base = v;
             if (!(v = p["llm_model"].value<std::string>()).empty()) c.llm_model = v;
+            if (!(v = p["auto_tts"].value<std::string>()).empty()) {
+                c.auto_tts = (v == "true" || v == "1" || v == "开");
+            }
             SetCfg(c);
             return std::string("AI 对话配置已保存:stt_key ") +
                    (c.stt_key.empty() ? "空" : "已设") + ", llm_key " +
-                   (c.llm_key.empty() ? "空" : "已设") + ", llm_base=" + c.llm_base;
+                   (c.llm_key.empty() ? "空" : "已设") + ", llm_base=" + c.llm_base +
+                   ", 自动发声=" + (c.auto_tts ? "开" : "关");
         });
 
     mcp.AddTool("self.aichat.status",
@@ -403,6 +490,7 @@ void AiChat_RegisterMcpTools() {
         [](const PropertyList&) -> ReturnValue {
             return std::string("stt_key ") + (AiChat_SttConfigured() ? "已设" : "未设") +
                    " | llm_key " + (AiChat_LlmConfigured() ? "已设" : "未设") +
+                   " | 自动发声 " + (AiChat_AutoTts() ? "开" : "关") +
                    " | 状态 " + AiChat_GetStateText();
         });
 

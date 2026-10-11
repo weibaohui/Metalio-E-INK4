@@ -17,6 +17,7 @@ enum class AiChatState {
     Recording,    // 录音中(按住)
     Transcribing, // 语音转文字中
     Thinking,     // 大模型思考中
+    Speaking,     // TTS 合成/播报中
     Done,         // 完成(有回复)
     Error,        // 出错(见 AiChat_GetError)
 };
@@ -39,6 +40,10 @@ std::string AiChat_GetStateText();  // 状态的中文短描述
 // 配置查询(供 MCP/状态显示)
 bool AiChat_SttConfigured();
 bool AiChat_LlmConfigured();
+
+// 自动发声开关(MiniMax TTS 播报回复)。LVGL 任务可调,落盘走 SafeSettings。
+bool AiChat_AutoTts();
+void AiChat_SetAutoTts(bool enable);
 
 // 注册 MCP 工具(self.aichat.*)。main 任务调用一次。
 void AiChat_RegisterMcpTools();
