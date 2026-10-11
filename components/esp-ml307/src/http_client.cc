@@ -739,32 +739,19 @@ void HttpClient::AddBodyData(std::string&& data) {
 }
 
 std::string HttpClient::ReadAll() {
-    std::unique_lock<std::mutex> lock(mutex_);
-
-    // 等待完成或出错
-    auto timeout = std::chrono::milliseconds(timeout_ms_);
-    bool completed = cv_.wait_for(lock, timeout, [this] {
-        return eof_ || connection_error_;
-    });
-
-    if (!completed) {
-        ESP_LOGE(TAG, "Wait for HTTP content receive complete timeout");
-        return "";  // 超时返回空字符串
-    }
-
-    // 如果连接异常断开，返回空字符串并记录错误
-    if (connection_error_) {
-        ESP_LOGE(TAG, "Cannot read all data: connection closed prematurely");
-        return "";
-    }
-
-    // 收集所有数据
     std::string result;
-    std::lock_guard<std::mutex> read_lock(read_mutex_);
-    for (const auto& chunk : body_chunks_) {
-        result.append(chunk.data);
+    char buffer[2048];
+    while (true) {
+        int bytes = Read(buffer, sizeof(buffer));
+        if (bytes < 0) {
+            ESP_LOGE(TAG, "Read error in ReadAll");
+            return "";
+        }
+        if (bytes == 0) {
+            break;
+        }
+        result.append(buffer, bytes);
     }
-
     return result;
 }
 

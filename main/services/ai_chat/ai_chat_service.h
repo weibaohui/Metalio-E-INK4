@@ -51,6 +51,11 @@ bool AiChat_LlmConfigured();
 bool AiChat_AutoTts();
 void AiChat_SetAutoTts(bool enable);
 
+// 多轮对话历史(严格保存在 PSRAM 中, 默认携带最近 5 轮)
+size_t AiChat_GetHistoryCount();
+int AiChat_GetHistoryRounds();
+void AiChat_ClearHistory();
+
 // 注册 MCP 工具(self.aichat.*)。main 任务调用一次。
 void AiChat_RegisterMcpTools();
 // boot 期 APP 注册表钩子(kApps.register_mcp):仅当本 APP 开启时被调;

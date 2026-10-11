@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
@@ -27,6 +28,7 @@
 #include "power_policy.h"
 #include "mcp_server.h"
 #include "settings.h"
+#include "tts_decoder.h"
 
 namespace {
 
@@ -44,13 +46,14 @@ struct Cfg {
     std::string llm_key;    // 通用 OpenAI 格式 Key
     std::string llm_model;  // 对话模型
     bool auto_tts = false;  // 回复自动发声(MiniMax TTS)
+    int history_rounds = 5; // 多轮对话历史轮数(默认 5 轮, 存储在 PSRAM)
 };
 std::mutex s_cfg_mutex;
 Cfg s_cfg;
 bool s_cfg_loaded = false;
 
-const char* kDefaultSttUrl = "https://api.minimaxi.com/v1/audio/transcriptions";
-const char* kDefaultLlmBase = "https://api.minimaxi.com/v1";
+const char* kDefaultSttUrl = "https://api.minimax.cn/v1/audio/transcriptions";
+const char* kDefaultLlmBase = "https://api.minimax.cn/v1";
 
 // ---- 运行状态 ----
 std::mutex s_state_mutex;
@@ -109,7 +112,16 @@ int HttpPost(const std::string& url, const std::string& bearer,
     }
     const int status = http->GetStatusCode();
     ESP_LOGI(TAG, "http: status %d, reading", status);
-    resp = http->ReadAll();
+    char chunk[2048];
+    while (true) {
+        if (s_interrupt_tts.load() || s_cancel.load()) {
+            ESP_LOGI(TAG, "http: read interrupted by user");
+            break;
+        }
+        int r = http->Read(chunk, sizeof(chunk));
+        if (r <= 0) break;
+        resp.append(chunk, r);
+    }
     http->Close();
     ESP_LOGI(TAG, "http: done %u bytes", (unsigned)resp.size());
     return status;
@@ -163,6 +175,115 @@ std::string EscapeJson(const std::string& in) {
     return out;
 }
 
+// ---- 多轮对话历史管理 (严格保存在 PSRAM 中, 杜绝占用宝贵的内部 SRAM) ----
+struct ChatHistoryTurn {
+    char* user = nullptr;
+    char* reply = nullptr;
+};
+
+class ChatHistoryManager {
+public:
+    static constexpr size_t kMaxCapacity = 10;
+
+    ChatHistoryManager() = default;
+    ~ChatHistoryManager() { Clear(); }
+
+    void Clear() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (size_t i = 0; i < count_; ++i) {
+            FreeTurn(turns_[i]);
+        }
+        count_ = 0;
+    }
+
+    void AddTurn(const std::string& user, const std::string& reply, size_t max_rounds = 5) {
+        if (user.empty() || reply.empty()) return;
+        if (max_rounds == 0) {
+            Clear();
+            return;
+        }
+        if (max_rounds > kMaxCapacity) max_rounds = kMaxCapacity;
+
+        // 截断过长文本(防单轮超长膨胀上下文, 各截断前 1500 字符)
+        std::string u_clip = user.size() > 1500 ? user.substr(0, 1500) : user;
+        std::string r_clip = reply.size() > 1500 ? reply.substr(0, 1500) : reply;
+
+        char* u_copy = AllocPsramStr(u_clip);
+        char* r_copy = AllocPsramStr(r_clip);
+        if (!u_copy || !r_copy) {
+            if (u_copy) heap_caps_free(u_copy);
+            if (r_copy) heap_caps_free(r_copy);
+            ESP_LOGW(TAG, "history: PSRAM 分配失败");
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (count_ >= max_rounds) {
+            // 队列已满: 释放最老的一轮, 其余前移
+            FreeTurn(turns_[0]);
+            for (size_t i = 0; i + 1 < count_; ++i) {
+                turns_[i] = turns_[i + 1];
+            }
+            turns_[count_ - 1] = {u_copy, r_copy};
+        } else {
+            turns_[count_++] = {u_copy, r_copy};
+        }
+        ESP_LOGI(TAG, "history: 新增 1 轮, 当前在 PSRAM 中保留 %u/%u 轮",
+                 (unsigned)count_, (unsigned)max_rounds);
+    }
+
+    // 格式化历史为 JSON 消息块:
+    // {"role":"user","content":"..."},{"role":"assistant","content":"..."},
+    std::string BuildMessagesJson(size_t max_rounds) const {
+        if (max_rounds == 0) return "";
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (count_ == 0) return "";
+
+        size_t take = std::min(count_, max_rounds);
+        size_t start_idx = count_ - take;
+
+        std::string out;
+        for (size_t i = start_idx; i < count_; ++i) {
+            if (turns_[i].user && turns_[i].reply) {
+                out += "{\"role\":\"user\",\"content\":\"" + EscapeJson(turns_[i].user) + "\"},";
+                out += "{\"role\":\"assistant\",\"content\":\"" + EscapeJson(turns_[i].reply) + "\"},";
+            }
+        }
+        return out;
+    }
+
+    size_t GetCount() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return count_;
+    }
+
+private:
+    static char* AllocPsramStr(const std::string& s) {
+        char* p = static_cast<char*>(heap_caps_malloc(s.size() + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (p) {
+            memcpy(p, s.c_str(), s.size() + 1);
+        }
+        return p;
+    }
+
+    static void FreeTurn(ChatHistoryTurn& turn) {
+        if (turn.user) {
+            heap_caps_free(turn.user);
+            turn.user = nullptr;
+        }
+        if (turn.reply) {
+            heap_caps_free(turn.reply);
+            turn.reply = nullptr;
+        }
+    }
+
+    mutable std::mutex mutex_;
+    ChatHistoryTurn turns_[kMaxCapacity] = {};
+    size_t count_ = 0;
+};
+
+ChatHistoryManager s_history;
+
 // 语音助手 system prompt:设备身份 + 工具使用规则 + 口语化约束。
 // 没有它,模型不知道自己能调工具,容易用嘴"假装执行"(纯文本描述 curl 之类)。
 const char* kSystemPrompt =
@@ -197,9 +318,13 @@ bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, s
 
     struct ToolReq { std::string id, name, args; };
     // system 在前:设备身份 + 工具规则 + 今天日期(相对时间换算锚点)
+    // 接着注入 PSRAM 中的最近 N 轮历史对话
+    // 最后是当前用户的输入
     std::string messages = "[{\"role\":\"system\",\"content\":\"" +
                            EscapeJson(std::string(kSystemPrompt) + "\n" + TodayLine()) +
-                           "\"},{\"role\":\"user\",\"content\":\"" + EscapeJson(user_text) + "\"}]";
+                           "\"}," +
+                           s_history.BuildMessagesJson(cfg.history_rounds) +
+                           "{\"role\":\"user\",\"content\":\"" + EscapeJson(user_text) + "\"}]";
     for (int round = 0; round < 4; ++round) {
         std::string body = std::string("{\"model\":\"") + model + "\",\"messages\":" + messages;
         if (has_tools) body += ",\"tools\":" + tools;
@@ -322,9 +447,8 @@ void SaveHistory(const std::string& user, const std::string& reply) {
     fclose(f);
 }
 
-// TTS:MiniMax t2a_v2,返回 16k 单声道 PCM 的 hex 编码 → 解码为样本。
-// 常见小坑:audio 字段是 hex 不是 base64;长回复会到 MB 级 JSON,靠
-// SPIRAM_USE_MALLOC 落 PSRAM。文本截断 300 字符控制耗时与内存。
+// TTS:MiniMax t2a_v2(或兼容端点),响应通过独立解码模块 tts_decoder 自动探测容器与编码并解码为 16k PCM。
+// 文本截断 300 字符控制耗时与内存。
 bool TtsSynthesize(const Cfg& cfg, const std::string& text, std::vector<int16_t>& pcm, std::string& err) {
     std::string clip = text;
     if (clip.size() > 600) clip = clip.substr(0, 600);   // 300 汉字上限
@@ -334,35 +458,13 @@ bool TtsSynthesize(const Cfg& cfg, const std::string& text, std::vector<int16_t>
         "\"voice_setting\":{\"voice_id\":\"male-qn-qingse\",\"speed\":1.0,\"vol\":1.0},"
         "\"audio_setting\":{\"sample_rate\":16000,\"format\":\"pcm\",\"channel\":1}}";
     std::string resp;
-    const int status = HttpPost("https://api.minimax.cn/v1/t2a_v2", cfg.llm_key,
+    const std::string& key = !cfg.stt_key.empty() ? cfg.stt_key : cfg.llm_key;
+    const int status = HttpPost("https://api.minimax.cn/v1/t2a_v2", key,
                                 "application/json", body, resp);
+    if (s_interrupt_tts.load() || s_cancel.load()) { err = "播报已打断"; return false; }
     if (status < 200 || status >= 300) { err = "TTS HTTP " + std::to_string(status); return false; }
-    cJSON* root = cJSON_Parse(resp.c_str());
-    if (root == nullptr) { err = "TTS 响应非 JSON"; return false; }
-    const cJSON* data = cJSON_GetObjectItem(root, "data");
-    const cJSON* audio = data ? cJSON_GetObjectItem(data, "audio") : nullptr;
-    std::string hex;
-    if (cJSON_IsString(audio) && audio->valuestring != nullptr) hex = audio->valuestring;
-    cJSON_Delete(root);
-    if (hex.size() < 2) { err = "TTS 音频为空"; return false; }
-    auto hexval = [](char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        return -1;
-    };
-    if (hex.size() % 2 != 0) hex.pop_back();
-    pcm.reserve(hex.size() / 2 / sizeof(int16_t));
-    for (size_t i = 0; i + 1 < hex.size(); i += 2) {
-        const int hi = hexval(hex[i]), lo = hexval(hex[i + 1]);
-        if (hi < 0 || lo < 0) continue;
-        const uint16_t v = (uint16_t)((hi << 8) | lo);
-        int16_t sample;
-        memcpy(&sample, &v, 2);
-        pcm.push_back(sample);
-    }
-    if (pcm.empty()) { err = "TTS 解码为空"; return false; }
-    return true;
+
+    return tts_decoder::DecodeTtsResponse(resp, pcm, err);
 }
 
 // 播放:直写 codec 输出(16k 单声道)。进屏时已 Schedule codec->Start(),
@@ -495,6 +597,7 @@ void PipelineTask(void*) {
         if (!LlmChat(cfg, text, reply, err)) { ESP_LOGE(TAG, "llm fail: %s", err.c_str()); SetState(AiChatState::Error, err); break; }
         ESP_LOGI(TAG, "llm ok: %u chars", (unsigned)reply.size());
         SetReplyText(reply);
+        s_history.AddTurn(text, reply, cfg.history_rounds);
         SaveHistory(text, reply);   // 先落盘再发声,TTS 慢不拖累存档
         SetState(AiChatState::Done);
 
@@ -536,9 +639,29 @@ Cfg LoadCfgFromNvs() {
     c.stt_key = st.GetString("stt_key", "");
     c.stt_model = st.GetString("stt_model", "");
     c.llm_base = st.GetString("llm_base", kDefaultLlmBase);
+    // 域名迁移(2026-10-11,用户要求全部用国内站 minimax.cn):configure 曾把
+    // 旧国际站域名无条件写进 NVS,只改默认值不生效 —— 读出含旧域名的存量值
+    // 就地改写并回写一次(NVS 写在 main 任务/内部栈,本函数仅 AiChat_Init 调用)。
+    bool migrated = false;
+    if (c.stt_url.find("api.minimaxi.com") != std::string::npos) {
+        c.stt_url.replace(c.stt_url.find("api.minimaxi.com"), 16, "api.minimax.cn");
+        st.SetString("stt_url", c.stt_url);
+        migrated = true;
+    }
+    if (c.llm_base.find("api.minimaxi.com") != std::string::npos) {
+        c.llm_base.replace(c.llm_base.find("api.minimaxi.com"), 16, "api.minimax.cn");
+        st.SetString("llm_base", c.llm_base);
+        migrated = true;
+    }
+    if (migrated) {
+        ESP_LOGI(TAG, "cfg migrated to minimax.cn: stt_url=%s llm_base=%s",
+                 c.stt_url.c_str(), c.llm_base.c_str());
+    }
     c.llm_key = st.GetString("llm_key", "");
     c.llm_model = st.GetString("llm_model", "");
     c.auto_tts = st.GetBool("auto_tts", false);
+    c.history_rounds = st.GetInt("hist_rounds", 5);
+    if (c.history_rounds < 0 || c.history_rounds > 10) c.history_rounds = 5;
     return c;
 }
 
@@ -553,6 +676,7 @@ void PersistCfgTask(void* arg) {
     st.SetString("llm_key", c->llm_key);
     st.SetString("llm_model", c->llm_model);
     st.SetBool("auto_tts", c->auto_tts);
+    st.SetInt("hist_rounds", c->history_rounds);
     delete c;
     vTaskDelete(nullptr);
 }
@@ -672,7 +796,8 @@ void AiChat_RegisterMcpTools() {
                       Property("stt_model", kPropertyTypeString, std::string("")),
                       Property("llm_base", kPropertyTypeString, std::string("")),
                       Property("llm_model", kPropertyTypeString, std::string("")),
-                      Property("auto_tts", kPropertyTypeString, std::string(""))}),
+                      Property("auto_tts", kPropertyTypeString, std::string("")),
+                      Property("history_rounds", kPropertyTypeString, std::string(""))}),
         [](const PropertyList& p) -> ReturnValue {
             Cfg c;
             { std::lock_guard<std::mutex> l(s_cfg_mutex); c = s_cfg; }
@@ -686,11 +811,23 @@ void AiChat_RegisterMcpTools() {
             if (!(v = p["auto_tts"].value<std::string>()).empty()) {
                 c.auto_tts = (v == "true" || v == "1" || v == "开");
             }
+            if (!(v = p["history_rounds"].value<std::string>()).empty()) {
+                c.history_rounds = std::max(0, std::min(10, std::atoi(v.c_str())));
+            }
             SetCfg(c);
             return std::string("AI 对话配置已保存:stt_key ") +
                    (c.stt_key.empty() ? "空" : "已设") + ", llm_key " +
                    (c.llm_key.empty() ? "空" : "已设") + ", llm_base=" + c.llm_base +
-                   ", 自动发声=" + (c.auto_tts ? "开" : "关");
+                   ", 自动发声=" + (c.auto_tts ? "开" : "关") +
+                   ", 多轮历史=" + std::to_string(c.history_rounds) + "轮(PSRAM)";
+        });
+
+    mcp.AddTool("self.aichat.clear_history",
+        "Clear in-memory/PSRAM multi-turn conversation history.",
+        PropertyList(),
+        [](const PropertyList&) -> ReturnValue {
+            AiChat_ClearHistory();
+            return std::string("AI 对话多轮历史已清空 (PSRAM)");
         });
 
     mcp.AddTool("self.aichat.status",
@@ -700,10 +837,26 @@ void AiChat_RegisterMcpTools() {
             return std::string("stt_key ") + (AiChat_SttConfigured() ? "已设" : "未设") +
                    " | llm_key " + (AiChat_LlmConfigured() ? "已设" : "未设") +
                    " | 自动发声 " + (AiChat_AutoTts() ? "开" : "关") +
+                   " | 历史 " + std::to_string(AiChat_GetHistoryCount()) + "/" +
+                   std::to_string(AiChat_GetHistoryRounds()) + " 轮(PSRAM)" +
                    " | 状态 " + AiChat_GetStateText();
         });
 
     ESP_LOGI(TAG, "aichat MCP tools registered");
+}
+
+size_t AiChat_GetHistoryCount() {
+    return s_history.GetCount();
+}
+
+int AiChat_GetHistoryRounds() {
+    std::lock_guard<std::mutex> l(s_cfg_mutex);
+    return s_cfg.history_rounds;
+}
+
+void AiChat_ClearHistory() {
+    s_history.Clear();
+    ESP_LOGI(TAG, "history: cleared (PSRAM)");
 }
 
 void AiChat_BootRegister() {
