@@ -253,5 +253,21 @@ menu "Camera Configuration"
     endif
 endmenu
 
+menu "System Monitor Configuration"
+    config SYSTEM_MONITOR_ENABLE
+        bool "Enable System Monitor Task"
+        default y
+        help
+            Enable periodic system monitor task logging CPU usage, RAM stats, and battery status.
+
+    config SYSTEM_MONITOR_INTERVAL_SECONDS
+        int "System Monitor Interval (Seconds)"
+        default 30
+        range 1 3600
+        depends on SYSTEM_MONITOR_ENABLE
+        help
+            Interval in seconds for periodic system monitor logging.
+            Higher values (e.g. 30s or 60s) reduce CPU wakeups and conserve battery power.
+endmenu
 
 endmenu

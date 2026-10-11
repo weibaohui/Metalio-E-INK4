@@ -885,10 +885,19 @@ private:
         UsbVirtualDisk::GetInstance().Init();
     }
 
-    // 每秒打印双核 CPU 占用与内部 SRAM 剩余（依赖
+    // 周期打印双核 CPU 占用与内部 SRAM 剩余（依赖
     // CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS + USE_TRACE_FACILITY +
     // RUN_TIME_STATS_USING_ESP_TIMER）。
     void StartSystemMonitor() {
+#if !defined(CONFIG_SYSTEM_MONITOR_ENABLE) || CONFIG_SYSTEM_MONITOR_ENABLE
+#ifndef CONFIG_SYSTEM_MONITOR_INTERVAL_SECONDS
+#define CONFIG_SYSTEM_MONITOR_INTERVAL_SECONDS 30
+#endif
+        constexpr int kIntervalSec = CONFIG_SYSTEM_MONITOR_INTERVAL_SECONDS;
+        if (kIntervalSec <= 0) {
+            ESP_LOGI("Board", "system monitor disabled");
+            return;
+        }
         xTaskCreate(
             [](void*) {
                 constexpr int kCoreCount = portNUM_PROCESSORS;
@@ -900,7 +909,7 @@ private:
                 // int cx25601n_log_tick = 0;
 
                 while (true) {
-                    vTaskDelay(pdMS_TO_TICKS(1000));
+                    vTaskDelay(pdMS_TO_TICKS(kIntervalSec * 1000));
 
                     const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
                     const uint64_t dt_us = now_us - prev_us;
