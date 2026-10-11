@@ -1410,6 +1410,30 @@ void LVAdapterDisplay::RegisterTouchVirtualKeys(const TouchVirtualKey* keys, siz
     ESP_LOGI(TAG, "registered %u touch virtual keys", static_cast<unsigned>(s_vk_count));
 }
 
+// 喇叭图标 + 音量数字同步(需求:音量数值提示)。喇叭常驻:>0 喇叭,=0 静音叉;
+// 数字跟在图标后。音量键/播报/切页后由 UpdateStatusBar/ShowNotification 调到这里。
+// 须在持锁上下文调用。
+void LVAdapterDisplay::SyncVolumeWidgetsLocked() {
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    const int vol = codec != nullptr ? codec->output_volume() : 0;
+    const bool want_mute = (vol <= 0);
+#ifdef FONT_AWESOME_VOLUME_HIGH
+    const char* icon = want_mute ? FONT_AWESOME_VOLUME_XMARK : FONT_AWESOME_VOLUME_HIGH;
+#else
+    const char* icon = want_mute ? FONT_AWESOME_VOLUME_XMARK : "";
+#endif
+    if (mute_label_ != nullptr && (want_mute != muted_ || volume_cache_ != vol)) {
+        muted_ = want_mute;
+        lv_label_set_text(mute_label_, icon);
+    }
+    if (volume_label_ != nullptr && volume_cache_ != vol) {
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "%d", vol);
+        lv_label_set_text(volume_label_, buf);
+    }
+    volume_cache_ = vol;
+}
+
 void LVAdapterDisplay::RestoreStatusWidgetsLocked() {
     // 切页只换控件指针，图标/静音/时钟缓存跨页保留，首帧与页面内容同一次局刷画出。
     // 局刷已改为启动后立刻 flush_ready（BUSY 延后到下次 Drain），状态栏合并刷新仍有助于少刷。
@@ -1422,8 +1446,8 @@ void LVAdapterDisplay::RestoreStatusWidgetsLocked() {
     if (battery_pct_label_ != nullptr) {
         lv_label_set_text(battery_pct_label_, battery_pct_cache_);
     }
-    if (mute_label_ != nullptr) {
-        lv_label_set_text(mute_label_, muted_ ? FONT_AWESOME_VOLUME_XMARK : "");
+    if (mute_label_ != nullptr || volume_label_ != nullptr) {
+        SyncVolumeWidgetsLocked();   // 喇叭图标+音量数字从缓存/实况恢复
     }
     if (status_label_ != nullptr) {
         // 无缓存时勿回退「待命」：首页 Idle 应以时钟为准，由 ApplyIdleStatusBar 写入
@@ -1438,11 +1462,12 @@ void LVAdapterDisplay::RestoreStatusWidgetsLocked() {
     }
 }
 
-void LVAdapterDisplay::BindStatusWidgets(lv_obj_t* network, lv_obj_t* mute, lv_obj_t* battery,
-                                         lv_obj_t* status, lv_obj_t* notification,
+void LVAdapterDisplay::BindStatusWidgets(lv_obj_t* network, lv_obj_t* mute, lv_obj_t* volume,
+                                         lv_obj_t* battery, lv_obj_t* status, lv_obj_t* notification,
                                          lv_obj_t* low_battery_popup, lv_obj_t* battery_pct) {
     network_label_ = network;
     mute_label_ = mute;
+    volume_label_ = volume;
     battery_label_ = battery;
     battery_pct_label_ = battery_pct;
     status_label_ = status;
@@ -1647,7 +1672,7 @@ void LVAdapterDisplay::ShowPoweredOffScreen() {
     // 若待机曾冻结 flush，先恢复再画关机图
     WakeEpdFromStandby();
     DisplayLockGuard lock(this);
-    BindStatusWidgets(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+    BindStatusWidgets(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 
     // 直接往 EPD 帧缓冲画 A2I1，再关机全刷（0xC7）。
     // 加载链：NVS 源文件 →（失败/坏图）内置 mmap →（再失败）「已关机」文字
@@ -1805,14 +1830,8 @@ void LVAdapterDisplay::ShowNotification(const char* notification, int duration_m
     if (status_label_) {
         lv_obj_add_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
     }
-    // 音量键通知后同步顶栏静音图标
-    if (auto* codec = Board::GetInstance().GetAudioCodec()) {
-        const bool want_mute = (codec->output_volume() == 0);
-        if (want_mute != muted_ && mute_label_ != nullptr) {
-            muted_ = want_mute;
-            lv_label_set_text(mute_label_, muted_ ? FONT_AWESOME_VOLUME_XMARK : "");
-        }
-    }
+    // 音量键通知后同步顶栏喇叭图标+音量数字
+    SyncVolumeWidgetsLocked();
     if (notification_timer_) {
         esp_timer_stop(notification_timer_);
         ESP_ERROR_CHECK(esp_timer_start_once(notification_timer_, duration_ms * 1000ULL));
@@ -1829,10 +1848,9 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
     auto& app = Application::GetInstance();
     auto& board = Board::GetInstance();
     auto* codec = board.GetAudioCodec();
+    (void)codec;   // 音量/静音改由 SyncVolumeWidgetsLocked 自持读取(锁内)
 
     // I2C / 业务读取放锁外；所有 label 改动合并进一次 DisplayLock，减少无效局刷。
-    const bool want_mute = (codec != nullptr && codec->output_volume() == 0);
-
     char time_str[16] = {};
     bool set_time = false;
     const bool assistant_page = AssistantScreen::IsActive();
@@ -1899,10 +1917,7 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
             return;
         }
 
-        if (want_mute != muted_) {
-            muted_ = want_mute;
-            lv_label_set_text(mute_label_, muted_ ? FONT_AWESOME_VOLUME_XMARK : "");
-        }
+        SyncVolumeWidgetsLocked();   // 喇叭图标+音量数字(音量键/播报后更新)
 
         if (set_time && status_label_ != nullptr) {
             ApplyStatusTextLocked(time_str);

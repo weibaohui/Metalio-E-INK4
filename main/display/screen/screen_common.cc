@@ -175,6 +175,15 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     lv_obj_set_style_text_color(out.mute_label, lv_color_black(), 0);
     lv_obj_clear_flag(out.mute_label, LV_OBJ_FLAG_CLICKABLE);
 
+    // 喇叭图标后的音量数字(小字 UI 字体,与电池百分比同风格)
+    out.volume_label = lv_label_create(right_icons);
+    lv_label_set_text(out.volume_label, "");
+    lv_obj_set_style_text_font(out.volume_label, ui_font, 0);
+    lv_obj_set_style_text_color(out.volume_label, lv_color_black(), 0);
+    lv_obj_set_style_margin_left(out.volume_label, 2, 0);
+    lv_obj_set_style_translate_y(out.volume_label, 2, 0);
+    lv_obj_clear_flag(out.volume_label, LV_OBJ_FLAG_CLICKABLE);
+
     out.battery_pct_label = lv_label_create(right_icons);
     lv_label_set_text(out.battery_pct_label, "");
     lv_obj_set_style_text_font(out.battery_pct_label, ui_font, 0);
@@ -241,7 +250,7 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     lv_obj_add_flag(out.low_battery_popup, LV_OBJ_FLAG_HIDDEN);
 
     if (auto* disp = GetAdapterDisplay()) {
-        disp->BindStatusWidgets(out.network_label, out.mute_label, out.battery_label, out.status_label,
+        disp->BindStatusWidgets(out.network_label, out.mute_label, out.volume_label, out.battery_label, out.status_label,
                                 out.notification_label, out.low_battery_popup, out.battery_pct_label);
     }
     return out;

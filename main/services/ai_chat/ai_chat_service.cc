@@ -58,6 +58,7 @@ std::string s_error;
 
 std::atomic<bool> s_record_flag{false};   // 按住=true
 std::atomic<bool> s_cancel{false};
+std::atomic<bool> s_interrupt_tts{false};   // 播报中按住说话=打断播报(需求)
 TaskHandle_t s_task = nullptr;
 
 void SetState(AiChatState st, const std::string& err = "") {
@@ -337,6 +338,12 @@ void PlayPcm(std::vector<int16_t>& pcm) {
     std::vector<int16_t> chunk;
     chunk.reserve(960);
     for (size_t i = 0; i < pcm.size(); i += 960) {
+        // 打断(播报中按住说话)/取消(离屏):立即停播,别整段念完
+        if (s_interrupt_tts.load() || s_cancel.load()) {
+            ESP_LOGI(TAG, "tts playback interrupted at %u/%u samples",
+                     (unsigned)i, (unsigned)pcm.size());
+            return;
+        }
         chunk.assign(pcm.begin() + i, pcm.begin() + std::min(i + 960, pcm.size()));
         codec->OutputData(chunk);
     }
@@ -392,19 +399,21 @@ std::vector<int16_t> RecordWhileHeld() {
     return pcm;
 }
 
-// 管线:录音→STT→对话。在内部栈任务上(HTTPS/TLS 读 CA 证书碰 flash,禁 PSRAM 栈)。
+// 管线:录音→STT→对话(→TTS 播报),循环体。播报中按住说话=打断播报并直接
+// 开录(不新建任务,本任务循环回录音段)。在内部栈任务上(HTTPS/TLS 读 CA 证书
+// 碰 flash,禁 PSRAM 栈)。
 void PipelineTask(void*) {
     ESP_LOGI(TAG, "pipeline start (hold to record)");
     auto* codec = Board::GetInstance().GetAudioCodec();
     if (codec == nullptr) { SetState(AiChatState::Error, "无音频编解码器"); ESP_LOGE(TAG, "no codec"); goto done; }
     if (!codec->input_enabled()) codec->EnableInput(true);
 
-    {
+    while (!s_cancel.load()) {
         std::vector<int16_t> pcm = RecordWhileHeld();
-        if (s_cancel.load()) goto done;
+        if (s_cancel.load()) break;
         if (pcm.size() < kSampleRate / 4) {  // 太短(<0.25s)
             SetState(AiChatState::Error, "录音太短");
-            goto done;
+            break;
         }
 
         Cfg cfg;
@@ -413,28 +422,38 @@ void PipelineTask(void*) {
         SetState(AiChatState::Transcribing);
         ESP_LOGI(TAG, "stt: %u bytes wav uploading", (unsigned)(pcm.size() * 2 + 44));
         std::string text, err;
-        if (!SttTranscribe(cfg, pcm, text, err)) { ESP_LOGE(TAG, "stt fail: %s", err.c_str()); SetState(AiChatState::Error, err); goto done; }
+        if (!SttTranscribe(cfg, pcm, text, err)) { ESP_LOGE(TAG, "stt fail: %s", err.c_str()); SetState(AiChatState::Error, err); break; }
         ESP_LOGI(TAG, "stt ok: %s", text.c_str());
         SetUserText(text);
 
         SetState(AiChatState::Thinking);
         std::string reply;
-        if (!LlmChat(cfg, text, reply, err)) { ESP_LOGE(TAG, "llm fail: %s", err.c_str()); SetState(AiChatState::Error, err); goto done; }
+        if (!LlmChat(cfg, text, reply, err)) { ESP_LOGE(TAG, "llm fail: %s", err.c_str()); SetState(AiChatState::Error, err); break; }
         ESP_LOGI(TAG, "llm ok: %u chars", (unsigned)reply.size());
         SetReplyText(reply);
         SaveHistory(text, reply);   // 先落盘再发声,TTS 慢不拖累存档
         SetState(AiChatState::Done);
-        if (cfg.auto_tts) {
+
+        if (cfg.auto_tts && !s_cancel.load()) {
             SetState(AiChatState::Speaking);
             std::vector<int16_t> tts_pcm;
             if (TtsSynthesize(cfg, reply, tts_pcm, err)) {
                 ESP_LOGI(TAG, "tts ok: %u samples", (unsigned)tts_pcm.size());
-                PlayPcm(tts_pcm);
+                PlayPcm(tts_pcm);   // 逐块查打断标志,播报中按住即停
             } else {
                 ESP_LOGE(TAG, "tts fail: %s", err.c_str());
             }
+            s_interrupt_tts.store(false);
             SetState(AiChatState::Done);
         }
+
+        // 播报中(或播报刚结束)用户已按住说话 → 循环回录音段直接开录,
+        // 不等任务退出重建,打断跟手;未按住则正常收工。
+        if (s_record_flag.load() && !s_cancel.load()) {
+            SetState(AiChatState::Recording);
+            continue;
+        }
+        break;
     }
 
 done:
@@ -497,8 +516,17 @@ void AiChat_Init() {
 }
 
 void AiChat_BeginRecord() {
-    if (s_task != nullptr) return;   // 一轮未结束
+    if (s_task != nullptr) {
+        // 播报中按住说话:打断播报(TTS 逐块查标志即停),管线循环回录音段直接开录
+        if (AiChat_GetState() == AiChatState::Speaking) {
+            s_interrupt_tts.store(true);
+            s_record_flag.store(true);
+            ESP_LOGI(TAG, "barge-in: interrupt tts, back to recording");
+        }
+        return;   // 其它阶段(转写/思考)一轮未结束,忽略
+    }
     s_cancel.store(false);
+    s_interrupt_tts.store(false);   // 清陈旧打断标志(新一轮)
     s_record_flag.store(true);
     SetState(AiChatState::Recording);
     // 按下即起管线任务开录(内部栈;HTTPS/TLS 读 CA 证书碰 flash,禁 PSRAM 栈)。
@@ -517,6 +545,7 @@ void AiChat_ReleaseRecord() {
 
 void AiChat_AbortRecord() {
     s_cancel.store(true);
+    s_interrupt_tts.store(true);   // 播报也立刻停(PlayPcm 逐块查)
     s_record_flag.store(false);   // 管线在下一个检查点直接结束,不跑 STT
 }
 
