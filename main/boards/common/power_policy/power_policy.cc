@@ -586,7 +586,7 @@ void ApplyLocked(Mode next)
         const bool want_pa =
             !NeedHeld(PowerNeed::UiKeepNet) &&
             ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)) ||
-             NeedHeld(PowerNeed::RadioPlayback));
+             NeedHeld(PowerNeed::RadioPlayback) || NeedHeld(PowerNeed::AiChatTts));
         if (!NeedHeld(PowerNeed::UiKeepNet)) {
             power_hw_pa_set(want_pa);
         }
@@ -616,11 +616,11 @@ void ApplyLocked(Mode next)
     }
 
     const int want_mhz = (next == Mode::AppIdle) ? idle_cpu_mhz : CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
-    // RadioPlayback 持有时拉 PA（收音机不进语音状态机，见上一处注释）
+    // RadioPlayback/AiChatTts 持有时拉 PA（两者都直写 codec，不进语音状态机，见上一处注释）
     const bool want_pa =
         !NeedHeld(PowerNeed::UiKeepNet) &&
         ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)) ||
-         NeedHeld(PowerNeed::RadioPlayback));
+         NeedHeld(PowerNeed::RadioPlayback) || NeedHeld(PowerNeed::AiChatTts));
     // 待机须 Overlay 已起来再停网（电源键短按就是先 Show 再 Reevaluate）
     const bool want_wifi_off =
         (next == Mode::AppIdle) ||

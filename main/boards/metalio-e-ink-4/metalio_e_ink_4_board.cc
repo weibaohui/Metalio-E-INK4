@@ -264,7 +264,12 @@ private:
                      esp_err_to_name(err));
             return false;
         }
-        // 先开总电源，再开屏幕卡座供电（begin 后输出锁存默认高，此处显式钉住）
+        // 外设总电源冷复位：软复位/崩溃重启时主板 3.3V 与 TCA9555 锁存保持，外挂 BT 音频芯片/4G 模组不断电。
+        // 若此前发生崩溃或异常，外挂芯片状态机（I2S Master 时钟/AT 模式/ADC 采样）持续处于污染态。
+        // 在此主动拉低 MAIN_PWR 200ms 彻底断电泄放，再拉高冷启动，保证每次重启都是硬件级冷复位。
+        ESP_LOGI(TAG, "cold reset peripheral rail (MAIN_PWR)...");
+        ESP_ERROR_CHECK(io.setLevel(IOExpander::Pin::MAIN_PWR, false));
+        vTaskDelay(pdMS_TO_TICKS(200));
         ESP_ERROR_CHECK(io.setLevel(IOExpander::Pin::MAIN_PWR, true));
         ESP_ERROR_CHECK(io.setLevel(IOExpander::Pin::SCREEN_SOCKET_PWR, true));
         // 功放路由给 ESP32；PA 由 PowerPolicy 按 Speaking/通话 按需开，不在开机强开
@@ -332,6 +337,9 @@ private:
     }
 
     void InitializeBTAudio() {
+        // 等待 MAIN_PWR 上电后 BT 模组冷启稳定（与 power_hw.cc kMainRailBtSettleMs 保持一致）
+        vTaskDelay(pdMS_TO_TICKS(400));
+
         SimpleUart& uart = SimpleUart::getInstance();
         if (!uart.begin(BT_AUDIO_TX_PIN, BT_AUDIO_RX_PIN, 115200, UART_NUM_2)) {
             ESP_LOGE(TAG, "BT audio UART init failed (TX=%d RX=%d)", BT_AUDIO_TX_PIN,

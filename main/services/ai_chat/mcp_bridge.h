@@ -7,14 +7,19 @@
 // JSON-RPC 响应,不新增服务器内部 API。工具回调可能碰 NVS/flash,统一 Schedule
 // 到 main 任务(内部栈)执行;管线任务(PSRAM 栈)信号量等待。
 //
-// 生命周期:与 settings.cc 的 SafeSettings 同款双方接力——超时方置 timed_out
-// 立即脱手,迟到方收尾;正常路径双方 fetch_add 最后一个清理。main 15s 未执行
-// (病态卡死)时整体泄漏换绝对无 UAF。工具不取消,迟到执行完仍会完成自身动作。
+// 生命周期:shared_ptr 全权管理(2026-10-11 崩溃修复)。旧手写 timed_out/
+// finished 双方接力协议有洞:DoToolCall 内部再 Schedule 的工具 lambda 持有
+// sink 副本(即 st 指针),不被 finished 计数 —— 工具稍慢的时序下 st 已被
+// delete 而 sink 仍执行 captured += resp,向已释放内存写入 = 堆破坏
+// (实测 LoadProhibited 崩溃于本文件捕获 sink 处,与 2026-10-11 晨 aichat
+// free(0x2b) 堆破坏同源)。现 main 侧 lambda 与 sink 全部按值持有 shared_ptr,
+// 最后释放方析构状态(信号量在析构里删),超时路径无需特殊回收。
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
 #include <atomic>
+#include <memory>
 #include <string>
 
 #include <cJSON.h>
@@ -33,26 +38,21 @@ struct BridgeState {
     SemaphoreHandle_t done = nullptr;
     std::string req_json;
     std::string captured;
-    std::atomic<bool> timed_out{false};
-    std::atomic<int> finished{0};
 
-    void FinishOne() {
-        if (finished.fetch_add(1) == 1) {
+    ~BridgeState() {
+        if (done != nullptr) {
             vSemaphoreDelete(done);
-            delete this;
         }
     }
 };
 
 // 在 main 任务上同步执行一段 JSON-RPC 请求,捕获响应。返回 false = 超时
-// (captured 不可信;状态交 main 侧回收)。
+// (captured 不可信;main 侧持有的 shared_ptr 会自行释放,无泄漏)。
 inline bool ExecOnMain(const std::string& req_json, std::string& captured) {
-    auto* st = new (std::nothrow) BridgeState();
-    if (st == nullptr) return false;
+    auto st = std::make_shared<BridgeState>();
     st->req_json = req_json;
     st->done = xSemaphoreCreateBinary();
     if (st->done == nullptr) {
-        delete st;
         return false;
     }
     Application::GetInstance().Schedule([st]() {
@@ -64,18 +64,12 @@ inline bool ExecOnMain(const std::string& req_json, std::string& captured) {
             cJSON_Delete(req);
         }
         xSemaphoreGive(st->done);
-        if (st->timed_out.load() || st->finished.fetch_add(1) == 1) {
-            vSemaphoreDelete(st->done);
-            delete st;
-        }
     });
     if (xSemaphoreTake(st->done, kExecTimeoutTicks) == pdTRUE) {
         captured = st->captured;
-        st->FinishOne();
         return true;
     }
-    st->timed_out.store(true);
-    ESP_LOGW(kTag, "main 15s 未完成 MCP 请求,状态交 main 侧回收");
+    ESP_LOGW(kTag, "main 15s 未完成 MCP 请求(shared_ptr 自动回收,无泄漏)");
     return false;
 }
 
