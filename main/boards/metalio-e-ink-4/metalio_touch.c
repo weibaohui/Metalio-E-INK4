@@ -71,6 +71,9 @@ esp_err_t metalio_touch_init(i2c_master_bus_handle_t i2c_bus, esp_lcd_touch_hand
     tp_io_cfg.lcd_param_bits = 0;
     tp_io_cfg.flags.disable_control_phase = 1;
     tp_io_cfg.scl_speed_hz = TOUCH_I2C_HZ;
+    /* Never let a missing/stuck touch controller block the UI or power-policy
+     * mutex forever. The panel-IO default (zero) means an infinite wait. */
+    tp_io_cfg.transaction_timeout_ms = 250;
     esp_err_t ret = esp_lcd_new_panel_io_i2c(i2c_bus, &tp_io_cfg, &tp_io);
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "touch panel_io create failed: %s", esp_err_to_name(ret));
