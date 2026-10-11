@@ -412,6 +412,20 @@ enum class LangStringId : size_t {
     SETTINGS_CONV_TITLE,
     SETTINGS_CONV_TTS_OFF,
     SETTINGS_CONV_TTS_ON,
+    SETTINGS_DBG_MEM_BTN,
+    SETTINGS_DBG_MEM_HINT,
+    SETTINGS_DBG_MEM_TITLE,
+    SETTINGS_DBG_MON_1S,
+    SETTINGS_DBG_MON_30S,
+    SETTINGS_DBG_MON_5S,
+    SETTINGS_DBG_MON_60S,
+    SETTINGS_DBG_MON_HINT,
+    SETTINGS_DBG_MON_TITLE,
+    SETTINGS_DBG_SYSLOG_BCAST,
+    SETTINGS_DBG_SYSLOG_HINT,
+    SETTINGS_DBG_SYSLOG_TITLE,
+    SETTINGS_DBG_SYSLOG_UCAST,
+    SETTINGS_DBG_TITLE,
     SETTINGS_HAPTIC_CURRENT_OFF,
     SETTINGS_HAPTIC_CURRENT_ON,
     SETTINGS_HAPTIC_HINT,
@@ -495,6 +509,7 @@ enum class LangStringId : size_t {
     SETTINGS_STORAGE_USB_OFF,
     SETTINGS_STORAGE_USB_ON,
     SETTINGS_TAB_ABOUT,
+    SETTINGS_TAB_DEBUG,
     SETTINGS_TAB_BLUETOOTH,
     SETTINGS_TAB_HAPTIC,
     SETTINGS_TAB_LANGUAGE,
@@ -1156,6 +1171,20 @@ static const char* const kLiterals_en_us[] = {
         "Voice playback",  /* SETTINGS_CONV_TITLE */
         "TTS off",  /* SETTINGS_CONV_TTS_OFF */
         "TTS on",  /* SETTINGS_CONV_TTS_ON */
+        "Print now",  /* SETTINGS_DBG_MEM_BTN */
+        "Per-task usage + heap overview (serial/log)",  /* SETTINGS_DBG_MEM_HINT */
+        "Memory report",  /* SETTINGS_DBG_MEM_TITLE */
+        "Every 1s",  /* SETTINGS_DBG_MON_1S */
+        "Every 30s",  /* SETTINGS_DBG_MON_30S */
+        "Every 5s",  /* SETTINGS_DBG_MON_5S */
+        "Every 60s",  /* SETTINGS_DBG_MON_60S */
+        "Periodic CPU/RAM/battery stats",  /* SETTINGS_DBG_MON_HINT */
+        "System monitor",  /* SETTINGS_DBG_MON_TITLE */
+        "Broadcast (255.255.255.255)",  /* SETTINGS_DBG_SYSLOG_BCAST */
+        "Device logs via UDP; host/port via self.syslog.configure",  /* SETTINGS_DBG_SYSLOG_HINT */
+        "Log forward (syslog)",  /* SETTINGS_DBG_SYSLOG_TITLE */
+        "Unicast (saved IP)",  /* SETTINGS_DBG_SYSLOG_UCAST */
+        "Debug",  /* SETTINGS_DBG_TITLE */
         "Current: Off",  /* SETTINGS_HAPTIC_CURRENT_OFF */
         "Current: On",  /* SETTINGS_HAPTIC_CURRENT_ON */
         "UI buttons and cover keys",  /* SETTINGS_HAPTIC_HINT */
@@ -1239,6 +1268,7 @@ static const char* const kLiterals_en_us[] = {
         "Disable USB disk",  /* SETTINGS_STORAGE_USB_OFF */
         "Enable USB disk",  /* SETTINGS_STORAGE_USB_ON */
         "About",  /* SETTINGS_TAB_ABOUT */
+        "Debug",  /* SETTINGS_TAB_DEBUG */
         "Bluetooth",  /* SETTINGS_TAB_BLUETOOTH */
         "Haptic",  /* SETTINGS_TAB_HAPTIC */
         "Language",  /* SETTINGS_TAB_LANGUAGE */
@@ -1898,6 +1928,20 @@ static const char* const kLiterals_zh_cn[] = {
         "语音播报",  /* SETTINGS_CONV_TITLE */
         "关闭 TTS",  /* SETTINGS_CONV_TTS_OFF */
         "开启 TTS",  /* SETTINGS_CONV_TTS_ON */
+        "立即打印",  /* SETTINGS_DBG_MEM_BTN */
+        "每任务占用+堆全景,结果在串口/日志",  /* SETTINGS_DBG_MEM_HINT */
+        "内存报告",  /* SETTINGS_DBG_MEM_TITLE */
+        "每 1 秒",  /* SETTINGS_DBG_MON_1S */
+        "每 30 秒",  /* SETTINGS_DBG_MON_30S */
+        "每 5 秒",  /* SETTINGS_DBG_MON_5S */
+        "每 60 秒",  /* SETTINGS_DBG_MON_60S */
+        "周期打印 CPU/内存/电池水位",  /* SETTINGS_DBG_MON_HINT */
+        "系统监控打印",  /* SETTINGS_DBG_MON_TITLE */
+        "广播(255.255.255.255)",  /* SETTINGS_DBG_SYSLOG_BCAST */
+        "设备日志经 UDP 发送;host/端口用 self.syslog.configure 改",  /* SETTINGS_DBG_SYSLOG_HINT */
+        "日志转发(syslog)",  /* SETTINGS_DBG_SYSLOG_TITLE */
+        "单播(用已存 IP)",  /* SETTINGS_DBG_SYSLOG_UCAST */
+        "调试",  /* SETTINGS_DBG_TITLE */
         "当前：关闭",  /* SETTINGS_HAPTIC_CURRENT_OFF */
         "当前：开启",  /* SETTINGS_HAPTIC_CURRENT_ON */
         "界面按钮与盖板虚拟键",  /* SETTINGS_HAPTIC_HINT */
@@ -1981,6 +2025,7 @@ static const char* const kLiterals_zh_cn[] = {
         "停用模拟 U 盘",  /* SETTINGS_STORAGE_USB_OFF */
         "启用模拟 U 盘",  /* SETTINGS_STORAGE_USB_ON */
         "关于",  /* SETTINGS_TAB_ABOUT */
+        "调试",  /* SETTINGS_TAB_DEBUG */
         "蓝牙",  /* SETTINGS_TAB_BLUETOOTH */
         "震动",  /* SETTINGS_TAB_HAPTIC */
         "语言",  /* SETTINGS_TAB_LANGUAGE */
@@ -2641,6 +2686,20 @@ void ApplyLiterals(const char* const* literals) {
     Strings::SETTINGS_CONV_TITLE = literals[static_cast<size_t>(LangStringId::SETTINGS_CONV_TITLE)];
     Strings::SETTINGS_CONV_TTS_OFF = literals[static_cast<size_t>(LangStringId::SETTINGS_CONV_TTS_OFF)];
     Strings::SETTINGS_CONV_TTS_ON = literals[static_cast<size_t>(LangStringId::SETTINGS_CONV_TTS_ON)];
+    Strings::SETTINGS_DBG_MEM_BTN = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_MEM_BTN)];
+    Strings::SETTINGS_DBG_MEM_HINT = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_MEM_HINT)];
+    Strings::SETTINGS_DBG_MEM_TITLE = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_MEM_TITLE)];
+    Strings::SETTINGS_DBG_MON_1S = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_MON_1S)];
+    Strings::SETTINGS_DBG_MON_30S = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_MON_30S)];
+    Strings::SETTINGS_DBG_MON_5S = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_MON_5S)];
+    Strings::SETTINGS_DBG_MON_60S = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_MON_60S)];
+    Strings::SETTINGS_DBG_MON_HINT = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_MON_HINT)];
+    Strings::SETTINGS_DBG_MON_TITLE = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_MON_TITLE)];
+    Strings::SETTINGS_DBG_SYSLOG_BCAST = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_SYSLOG_BCAST)];
+    Strings::SETTINGS_DBG_SYSLOG_HINT = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_SYSLOG_HINT)];
+    Strings::SETTINGS_DBG_SYSLOG_TITLE = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_SYSLOG_TITLE)];
+    Strings::SETTINGS_DBG_SYSLOG_UCAST = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_SYSLOG_UCAST)];
+    Strings::SETTINGS_DBG_TITLE = literals[static_cast<size_t>(LangStringId::SETTINGS_DBG_TITLE)];
     Strings::SETTINGS_HAPTIC_CURRENT_OFF = literals[static_cast<size_t>(LangStringId::SETTINGS_HAPTIC_CURRENT_OFF)];
     Strings::SETTINGS_HAPTIC_CURRENT_ON = literals[static_cast<size_t>(LangStringId::SETTINGS_HAPTIC_CURRENT_ON)];
     Strings::SETTINGS_HAPTIC_HINT = literals[static_cast<size_t>(LangStringId::SETTINGS_HAPTIC_HINT)];
@@ -2724,6 +2783,7 @@ void ApplyLiterals(const char* const* literals) {
     Strings::SETTINGS_STORAGE_USB_OFF = literals[static_cast<size_t>(LangStringId::SETTINGS_STORAGE_USB_OFF)];
     Strings::SETTINGS_STORAGE_USB_ON = literals[static_cast<size_t>(LangStringId::SETTINGS_STORAGE_USB_ON)];
     Strings::SETTINGS_TAB_ABOUT = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_ABOUT)];
+    Strings::SETTINGS_TAB_DEBUG = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_DEBUG)];
     Strings::SETTINGS_TAB_BLUETOOTH = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_BLUETOOTH)];
     Strings::SETTINGS_TAB_HAPTIC = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_HAPTIC)];
     Strings::SETTINGS_TAB_LANGUAGE = literals[static_cast<size_t>(LangStringId::SETTINGS_TAB_LANGUAGE)];
@@ -3401,6 +3461,20 @@ const char* Strings::SETTINGS_CONV_REQUEST_FAIL = "";
 const char* Strings::SETTINGS_CONV_TITLE = "";
 const char* Strings::SETTINGS_CONV_TTS_OFF = "";
 const char* Strings::SETTINGS_CONV_TTS_ON = "";
+const char* Strings::SETTINGS_DBG_MEM_BTN = "";
+const char* Strings::SETTINGS_DBG_MEM_HINT = "";
+const char* Strings::SETTINGS_DBG_MEM_TITLE = "";
+const char* Strings::SETTINGS_DBG_MON_1S = "";
+const char* Strings::SETTINGS_DBG_MON_30S = "";
+const char* Strings::SETTINGS_DBG_MON_5S = "";
+const char* Strings::SETTINGS_DBG_MON_60S = "";
+const char* Strings::SETTINGS_DBG_MON_HINT = "";
+const char* Strings::SETTINGS_DBG_MON_TITLE = "";
+const char* Strings::SETTINGS_DBG_SYSLOG_BCAST = "";
+const char* Strings::SETTINGS_DBG_SYSLOG_HINT = "";
+const char* Strings::SETTINGS_DBG_SYSLOG_TITLE = "";
+const char* Strings::SETTINGS_DBG_SYSLOG_UCAST = "";
+const char* Strings::SETTINGS_DBG_TITLE = "";
 const char* Strings::SETTINGS_HAPTIC_CURRENT_OFF = "";
 const char* Strings::SETTINGS_HAPTIC_CURRENT_ON = "";
 const char* Strings::SETTINGS_HAPTIC_HINT = "";
@@ -3484,6 +3558,7 @@ const char* Strings::SETTINGS_STORAGE_USB_HINT_SWITCHING = "";
 const char* Strings::SETTINGS_STORAGE_USB_OFF = "";
 const char* Strings::SETTINGS_STORAGE_USB_ON = "";
 const char* Strings::SETTINGS_TAB_ABOUT = "";
+const char* Strings::SETTINGS_TAB_DEBUG = "";
 const char* Strings::SETTINGS_TAB_BLUETOOTH = "";
 const char* Strings::SETTINGS_TAB_HAPTIC = "";
 const char* Strings::SETTINGS_TAB_LANGUAGE = "";

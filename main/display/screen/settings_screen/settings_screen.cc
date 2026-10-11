@@ -11,6 +11,7 @@
 #include "settings_bluetooth_tab.h"
 #include "settings_common.h"
 #include "settings_haptic_tab.h"
+#include "settings_debug_tab.h"
 #include "settings_language_tab.h"
 #include "settings_mcp_tab.h"
 #include "settings_network_tab.h"
@@ -41,7 +42,8 @@ enum class SettingsTab : int {
     kTest = 8,
     kApps = 10,
     kMcp = 11,
-    kAbout = 12,  // 关于始终放最后
+    kDebug = 12,
+    kAbout = 13,  // 关于始终放最后
 };
 
 // Tab 描述表驱动(分析文档 §3.5):新增 Tab 只加一行,不再改三个 switch。
@@ -64,6 +66,7 @@ const char* TabNameStorage() { return Lang::Strings::SETTINGS_TAB_STORAGE; }
 const char* TabNameBluetooth() { return Lang::Strings::SETTINGS_TAB_BLUETOOTH; }
 const char* TabNameTest() { return Lang::Strings::SETTINGS_TAB_TEST; }
 const char* TabNameMcp() { return "MCP"; }  // 新 Tab 暂不走 i18n(避免重新生成语言表)
+const char* TabNameDebug() { return Lang::Strings::SETTINGS_TAB_DEBUG; }
 const char* TabNameApps() { return "应用"; }  // 新 Tab 暂不走 i18n(避免重新生成语言表)
 const char* TabNameAbout() { return Lang::Strings::SETTINGS_TAB_ABOUT; }
 
@@ -81,6 +84,7 @@ constexpr TabEntry kTabs[] = {
      SettingsTestTab_OnActivated, SettingsTestTab_OnDeactivated},
     {SettingsTab::kApps, TabNameApps, SettingsAppsTab_Build, SettingsAppsTab_Reset, nullptr, nullptr},
     {SettingsTab::kMcp, TabNameMcp, SettingsMcpTab_Build, SettingsMcpTab_Reset, nullptr, nullptr},
+    {SettingsTab::kDebug, TabNameDebug, SettingsDebugTab_Build, SettingsDebugTab_Reset, nullptr, nullptr},
     {SettingsTab::kAbout, TabNameAbout, SettingsAboutTab_Build, SettingsAboutTab_Reset, nullptr, nullptr},
 };
 constexpr int kTabCount = sizeof(kTabs) / sizeof(kTabs[0]);

@@ -160,6 +160,23 @@ static button_handle_t CreateIoExpanderButton(IOExpander::Pin pin, bool active_h
     return handle;
 }
 
+// 系统监控打印间隔(秒,0=关)。StartSystemMonitor(main 任务)从 NVS 载入;
+// 设置→调试页经 BoardDebug_SetMonitorInterval(main 任务,NVS 写)修改。
+static std::atomic<int> s_monitor_interval_sec{30};
+
+void BoardDebug_SetMonitorInterval(int sec) {
+    if (sec < 0) sec = 0;
+    if (sec > 3600) sec = 3600;
+    s_monitor_interval_sec.store(sec);
+    Settings settings("dbg", true);
+    settings.SetInt("mon_iv", sec);
+    ESP_LOGI(TAG, "monitor interval set to %d s", sec);
+}
+
+int BoardDebug_GetMonitorInterval() {
+    return s_monitor_interval_sec.load();
+}
+
 // 关机：POWER 长按满 kPowerLongPressMs / 策略超时 → PowerPolicy::RequestPowerOff()
 class MetalioEInk4Board : public DualNetworkBoard {
 private:
@@ -893,11 +910,13 @@ private:
 #ifndef CONFIG_SYSTEM_MONITOR_INTERVAL_SECONDS
 #define CONFIG_SYSTEM_MONITOR_INTERVAL_SECONDS 30
 #endif
-        constexpr int kIntervalSec = CONFIG_SYSTEM_MONITOR_INTERVAL_SECONDS;
-        if (kIntervalSec <= 0) {
-            ESP_LOGI("Board", "system monitor disabled");
-            return;
+        // 间隔运行时可调(设置→调试页,NVS "dbg/mon_iv",0=关);任务每轮读原子量
+        int interval_sec = CONFIG_SYSTEM_MONITOR_INTERVAL_SECONDS;
+        {
+            Settings settings("dbg", false);
+            interval_sec = settings.GetInt("mon_iv", interval_sec);
         }
+        s_monitor_interval_sec.store(interval_sec);
         xTaskCreate(
             [](void*) {
                 constexpr int kCoreCount = portNUM_PROCESSORS;
@@ -909,7 +928,13 @@ private:
                 // int cx25601n_log_tick = 0;
 
                 while (true) {
-                    vTaskDelay(pdMS_TO_TICKS(kIntervalSec * 1000));
+                    const int interval_sec = s_monitor_interval_sec.load();
+                    if (interval_sec <= 0) {
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+                        prev_us = static_cast<uint64_t>(esp_timer_get_time());
+                        continue;
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(interval_sec * 1000));
 
                     const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
                     const uint64_t dt_us = now_us - prev_us;
