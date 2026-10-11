@@ -116,6 +116,22 @@ void* s_vk_user = nullptr;
 bool s_vk_instant_was_down = false;
 bool s_finger_was_down = false;
 
+// 触摸 slop(Android touch slop 同义,issue #43):按下原点起算,位移超阈值即视为
+// "滑动中"。此时 vk 不认领新键(滑动路过底栏不再误触),LVGL 不中途起新 press
+// (从底栏滑进内容区不再点开控件)。取 18px:CST816S 抖动容限之上、指腹误移之下。
+constexpr int kTouchSlopPx = 18;
+int16_t s_touch_origin_x = -1;
+int16_t s_touch_origin_y = -1;
+
+bool TouchBeyondSlop(int x, int y) {
+    if (s_touch_origin_x < 0 || s_touch_origin_y < 0) {
+        return false;
+    }
+    const int dx = x - s_touch_origin_x;
+    const int dy = y - s_touch_origin_y;
+    return (dx * dx + dy * dy) > kTouchSlopPx * kTouchSlopPx;
+}
+
 // long_press_ms>0：完整按住生命周期（无堆分配，无定时器句柄）。
 struct TouchVkHoldState {
     const char* name = nullptr;
@@ -254,6 +270,8 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
         }
         s_finger_was_down = false;
         s_vk_instant_was_down = false;
+        s_touch_origin_x = -1;
+        s_touch_origin_y = -1;
         EndHoldPress(true);
         bool kick = false;
         uint8_t pend_d = 0, pend_u = 0, live = 0;
@@ -279,6 +297,8 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
 
     if (!s_finger_was_down) {
         s_finger_was_down = true;
+        s_touch_origin_x = static_cast<int16_t>(x);
+        s_touch_origin_y = static_cast<int16_t>(y);
         const TouchVirtualKey* early_hit = HitVirtualKey(x, y);
         ESP_LOGI(TAG, "touch down x=%d y=%d %s", x, y,
                  early_hit != nullptr ? early_hit->name : "ui");
@@ -306,7 +326,11 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
         portENTER_CRITICAL(&s_touch_snap_mux);
         s_touch_snap.suppress_lvgl = false;
         if (s_touch_snap.live_count == 0) {
-            kick = TouchFeedUiPressLocked(ux, uy);
+            // 滑动中(slop 外)不中途起新 LVGL press:否则"从底栏滑进内容区"会在
+            // 手指当前位置按下一个控件,抬起即误触(issue #43 穿透路径之二)
+            if (!TouchBeyondSlop(x, y)) {
+                kick = TouchFeedUiPressLocked(ux, uy);
+            }
         } else {
             s_touch_snap.live_x = ux;
             s_touch_snap.live_y = uy;
@@ -339,6 +363,14 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
     portEXIT_CRITICAL(&s_touch_snap_mux);
     if (kick) {
         TouchFeedKickLvgl("ui_to_vk", pend_d, pend_u, live, lvgl_d, lx, ly);
+    }
+
+    // 滑动中路过 vk 区:只补上面的 UI 抬起,不认领 vk(否则滑过底栏=误触键,
+    // issue #43 穿透路径之一)。vk 只在"按下原点就在 vk 区"时才可认领。
+    if (TouchBeyondSlop(x, y)) {
+        s_vk_instant_was_down = false;
+        EndHoldPress(true);
+        return;
     }
 
     if (hit->long_press_ms == 0) {
