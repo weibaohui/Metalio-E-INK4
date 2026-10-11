@@ -381,6 +381,14 @@ namespace
     {
         lv_indev_t *indev = lv_indev_active();
         if (indev == nullptr) return;
+        // 手势已被本屏认领(位移超手势阈值):claim-then-cancel(issue #43,
+        // Android ACTION_CANCEL / iOS touchesCancelled 同义)。LVGL 9 的 release
+        // 路径只被真 scroll 抑制 CLICKED,纯手势后照样派发 → 这里必须主动取消:
+        // 1) lv_indev_reset 清 act_obj 并给原按压对象发 INDEV_RESET;
+        // 2) lv_indev_wait_release 冻结后续 move 样本的重命中(reset 后 act_obj
+        //    为空,indev_proc_press 会重新搜索手指下对象,不冻结则换目标再点)。
+        lv_indev_reset(indev, nullptr);
+        lv_indev_wait_release(indev);
         switch (lv_indev_get_gesture_dir(indev))
         {
             case LV_DIR_LEFT:  HomeGoPageDelta(+1); break;
