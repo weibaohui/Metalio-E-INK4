@@ -393,6 +393,12 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us)
 {
     #if CONFIG_PM_ENABLE
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    // S3 静电 erratum workaround(ESP_SLEEP_GPIO_RESET_WORKAROUND)会 select
+    // PM_SLP_DISABLE_GPIO,睡眠时隔离数字 pad → 按键唤醒源失效(设备一待机
+    // 就"死")。两个按键脚有上拉、非浮空,不满足 erratum 触发条件,对这两脚
+    // 解除睡眠隔离,保住低电平唤醒。其余脚维持隔离防静电。
+    gpio_sleep_sel_dis((gpio_num_t)BOOT_BUTTON_GPIO);
+    gpio_sleep_sel_dis((gpio_num_t)POWER_BUTTON_GPIO);
     esp_err_t err = gpio_wakeup_enable(BOOT_BUTTON_GPIO, GPIO_INTR_LOW_LEVEL);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "BOOT wake cfg failed: %s", esp_err_to_name(err));
