@@ -18,6 +18,7 @@
 #include "SdCardManager.hpp"
 #include "application.h"
 #include "boards/common/sd_paths.h"
+#include "mcp_bridge.h"
 #include "utils/psr_worker.h"
 #include "audio_codec.h"
 #include "board.h"
@@ -161,32 +162,100 @@ std::string EscapeJson(const std::string& in) {
 bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, std::string& err) {
     const std::string url = cfg.llm_base + "/chat/completions";
     const std::string model = cfg.llm_model.empty() ? "gpt-4o-mini" : cfg.llm_model;
-    const std::string body = std::string("{\"model\":\"") + model +
-        "\",\"messages\":[{\"role\":\"user\",\"content\":\"" + EscapeJson(user_text) + "\"}]}";
-    std::string resp;
-    const int status = HttpPost(url, cfg.llm_key, "application/json", body, resp);
-    if (status < 200 || status >= 300) {
-        err = "对话 HTTP " + std::to_string(status);
-        return false;
+    // 设备 MCP 工具表(排除 aichat 自身防递归);为空则退化为纯聊天
+    const std::string tools = mcp_bridge::ToolsListForOpenAi("self.aichat");
+    const bool has_tools = tools.size() > 2;
+    if (has_tools) ESP_LOGI(TAG, "tools schema %u bytes", (unsigned)tools.size());
+
+    struct ToolReq { std::string id, name, args; };
+    std::string messages = "[{\"role\":\"user\",\"content\":\"" + EscapeJson(user_text) + "\"}]";
+    for (int round = 0; round < 4; ++round) {
+        std::string body = std::string("{\"model\":\"") + model + "\",\"messages\":" + messages;
+        if (has_tools) body += ",\"tools\":" + tools;
+        body += "}";
+        std::string resp;
+        const int status = HttpPost(url, cfg.llm_key, "application/json", body, resp);
+        if (status < 200 || status >= 300) {
+            err = "对话 HTTP " + std::to_string(status);
+            return false;
+        }
+        cJSON* root = cJSON_Parse(resp.c_str());
+        if (root == nullptr) { err = "对话响应非 JSON"; return false; }
+        const cJSON* choices = cJSON_GetObjectItem(root, "choices");
+        const cJSON* first = cJSON_IsArray(choices) ? cJSON_GetArrayItem(choices, 0) : nullptr;
+        const cJSON* message = first ? cJSON_GetObjectItem(first, "message") : nullptr;
+        const cJSON* tool_calls = message ? cJSON_GetObjectItem(message, "tool_calls") : nullptr;
+        const cJSON* content = message ? cJSON_GetObjectItem(message, "content") : nullptr;
+
+        // ---- root 存活期内完成全部 JSON 重组 ----
+        std::vector<ToolReq> reqs;
+        std::string assistant_json;   // 回填用 assistant 消息(含原样 tool_calls)
+        if (cJSON_IsArray(tool_calls) && cJSON_GetArraySize(tool_calls) > 0) {
+            std::string tcs = "[";
+            bool tfirst = true;
+            const cJSON* tc = nullptr;
+            cJSON_ArrayForEach(tc, tool_calls) {
+                char* tc_raw = cJSON_PrintUnformatted(tc);
+                if (tc_raw != nullptr) {
+                    if (!tfirst) tcs += ",";
+                    tcs += tc_raw;
+                    cJSON_free(tc_raw);
+                    tfirst = false;
+                }
+                ToolReq r;
+                const cJSON* fn = cJSON_GetObjectItem(tc, "function");
+                const cJSON* tc_name = fn ? cJSON_GetObjectItem(fn, "name") : nullptr;
+                const cJSON* tc_args = fn ? cJSON_GetObjectItem(fn, "arguments") : nullptr;
+                const cJSON* tc_id = cJSON_GetObjectItem(tc, "id");
+                if (cJSON_IsString(tc_name) && tc_name->valuestring != nullptr) {
+                    r.name = tc_name->valuestring;
+                    r.args = cJSON_IsString(tc_args) && tc_args->valuestring ? tc_args->valuestring : "{}";
+                    if (cJSON_IsString(tc_id) && tc_id->valuestring != nullptr) r.id = tc_id->valuestring;
+                    reqs.push_back(r);
+                }
+            }
+            assistant_json = std::string("{\"role\":\"assistant\",\"content\":") +
+                (cJSON_IsString(content) ? cJSON_PrintUnformatted(content) : "null") +
+                ",\"tool_calls\":" + tcs + "}";
+        } else if (cJSON_IsString(content) && content->valuestring != nullptr) {
+            reply = content->valuestring;
+        }
+        cJSON_Delete(root);   // 此后只使用上面重组出的字符串
+
+        if (reqs.empty()) {
+            // 无工具调用:最终回答
+            if (reply.rfind("<think>", 0) == 0) {
+                const size_t end = reply.find("</think>");
+                reply = end == std::string::npos ? "" : reply.substr(end + 8);
+            }
+            while (!reply.empty() && (reply.front() == '\n' || reply.front() == ' ')) reply.erase(reply.begin());
+            while (!reply.empty() && (reply.back() == '\n' || reply.back() == ' ')) reply.pop_back();
+            if (reply.empty()) { err = "对话结果为空"; return false; }
+            return true;
+        }
+
+        // ---- 执行工具并回填(纯字符串,与 root 生命周期解耦) ----
+        std::string tool_results;
+        int executed = 0;
+        for (const auto& r : reqs) {
+            if (++executed > 6) break;   // 单轮工具数上限
+            bool ok = false;
+            ESP_LOGI(TAG, "tool call: %s(%s)", r.name.c_str(), r.args.c_str());
+            std::string result = mcp_bridge::CallTool(r.name, r.args, ok);
+            ESP_LOGI(TAG, "tool %s -> %s: %u bytes", r.name.c_str(), ok ? "ok" : "err",
+                     (unsigned)result.size());
+            tool_results += "{\"role\":\"tool\",\"content\":\"" + EscapeJson(result) + "\"}";
+            if (!r.id.empty()) {
+                tool_results.insert(tool_results.size() - 1,
+                                    ",\"tool_call_id\":\"" + EscapeJson(r.id) + "\"");
+            }
+            tool_results += ",";
+        }
+        if (!tool_results.empty() && tool_results.back() == ',') tool_results.pop_back();
+        messages = "[" + messages.substr(1) + "," + assistant_json + "," + tool_results + "]";
     }
-    cJSON* root = cJSON_Parse(resp.c_str());
-    if (root == nullptr) { err = "对话响应非 JSON"; return false; }
-    const cJSON* choices = cJSON_GetObjectItem(root, "choices");
-    const cJSON* first = cJSON_IsArray(choices) ? cJSON_GetArrayItem(choices, 0) : nullptr;
-    const cJSON* msg = first ? cJSON_GetObjectItem(first, "message") : nullptr;
-    const cJSON* content = msg ? cJSON_GetObjectItem(msg, "content") : nullptr;
-    if (cJSON_IsString(content)) reply = content->valuestring;
-    cJSON_Delete(root);
-    // MiniMax-M2 等推理模型带 <think>...</think> 思考块,剥掉再上屏
-    if (reply.rfind("<think>", 0) == 0) {
-        const size_t end = reply.find("</think>");
-        reply = end == std::string::npos ? "" : reply.substr(end + 8);
-    }
-    // 首尾空白
-    while (!reply.empty() && (reply.front() == '\n' || reply.front() == ' ')) reply.erase(reply.begin());
-    while (!reply.empty() && (reply.back() == '\n' || reply.back() == ' ')) reply.pop_back();
-    if (reply.empty()) { err = "对话结果为空"; return false; }
-    return true;
+    err = "工具调用轮次超限";
+    return false;
 }
 
 // 对话轮存档:JSONL 追加到 SD(/sdcard/metalio/e-ink/aichat/history.jsonl)。
