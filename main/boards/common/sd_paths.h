@@ -50,6 +50,7 @@ extern "C" {
 #define SD_PATH_FONT_SRC    SD_APP_ROOT "/fonts_ttf"
 #define SD_PATH_A2UI_CACHE  SD_APP_ROOT "/a2ui_cache"
 #define SD_PATH_CHAT_LOG    SD_APP_ROOT "/chat_log"
+#define SD_PATH_AICHAT      SD_APP_ROOT "/aichat"
 #define SD_PATH_WALLPAPER    SD_APP_ROOT "/wallpaper"
 #define SD_PATH_CALENDAR     SD_APP_ROOT "/calendar"
 
@@ -114,6 +115,7 @@ static inline int SdEnsureAppLayout(void) {
     (void)SdEnsureDir(SD_PATH_FONT_SRC);
     (void)SdEnsureDir(SD_PATH_A2UI_CACHE);
     (void)SdEnsureDir(SD_PATH_CHAT_LOG);
+    (void)SdEnsureDir(SD_PATH_AICHAT);
     (void)SdEnsureDir(SD_PATH_WALLPAPER);
     return 1;
 }
