@@ -1074,6 +1074,7 @@ private:
                 }
             },
             "sys_mon", 4096, nullptr, 1, nullptr);
+#endif  // CONFIG_SYSTEM_MONITOR_ENABLE
     }
 
 public:
