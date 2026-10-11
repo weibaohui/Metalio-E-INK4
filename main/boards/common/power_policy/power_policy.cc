@@ -48,6 +48,10 @@ bool main_rail_on_pending = false;
 bool standby_show_pending = false;           // 锁外 lv_async Show（对齐电源键）
 bool restore_provisioning_ui_pending = false;
 bool touch_asleep = false;
+bool touch_transition = false;
+bool touch_target_asleep = false;
+bool touch_op_pending = false;
+SemaphoreHandle_t touch_effect_mu = nullptr;
 int idle_cpu_mhz = kIdleMhzDefault;
 int queued_cpu_mhz = 0;
 int idle_to_standby_sec = kIdleToStandbySecDefault;
@@ -414,7 +418,7 @@ void TickCb(void* /*arg*/)
         pwr::RequestShutdownLocked();
     }
     xSemaphoreGive(pwr::mu);
-    pwr::FlushCpuFreqOutsideLock();
+    pwr::FlushPendingActionsOutsideLock();
 }
 
 void SelfCheckThresholdsOnce()
@@ -460,7 +464,7 @@ void QueueCpuMhzLocked(int mhz)
     s_cpu_mhz_pending.store(mhz);
 }
 
-void FlushCpuFreqOutsideLock()
+void FlushPendingActionsOutsideLock()
 {
     if (s_cpu_mhz_pending.load() != 0) {
         if (!esp_lv_adapter_is_initialized()) {
@@ -515,6 +519,7 @@ void FlushCpuFreqOutsideLock()
     if (restore_prov) {
         ScreenLvAsync(RestoreProvisioningUiAsync);
     }
+    FlushTouchOutsideLock();
 }
 
 void BeginPowerOffLocked()
@@ -679,6 +684,16 @@ void PowerPolicy::Init(Board* board)
     if (pwr::mu == nullptr) {
         pwr::mu = xSemaphoreCreateMutex();
     }
+    if (pwr::touch_effect_mu == nullptr) {
+        pwr::touch_effect_mu = xSemaphoreCreateMutex();
+        if (pwr::touch_effect_mu == nullptr) {
+            ESP_LOGE(TAG, "touch effect mutex create failed; sleep/wake requests will remain pending");
+        }
+    }
+    pwr::touch_asleep = false;
+    pwr::touch_transition = false;
+    pwr::touch_target_asleep = false;
+    pwr::touch_op_pending = false;
     pwr::StartStandbyLpTask();
     if (pwr::tick == nullptr) {
         const esp_timer_create_args_t args = {
@@ -714,7 +729,7 @@ void PowerPolicy::Acquire(PowerNeed need)
     }
     pwr::ReevaluateLocked();
     xSemaphoreGive(pwr::mu);
-    pwr::FlushCpuFreqOutsideLock();
+    pwr::FlushPendingActionsOutsideLock();
 }
 
 void PowerPolicy::Release(PowerNeed need)
@@ -738,7 +753,7 @@ void PowerPolicy::Release(PowerNeed need)
     }
     pwr::ReevaluateLocked();
     xSemaphoreGive(pwr::mu);
-    pwr::FlushCpuFreqOutsideLock();
+    pwr::FlushPendingActionsOutsideLock();
 }
 
 void PowerPolicy::NotifyDeviceState(DeviceState state)
@@ -755,7 +770,7 @@ void PowerPolicy::NotifyDeviceState(DeviceState state)
     }
     pwr::ReevaluateLocked();
     xSemaphoreGive(pwr::mu);
-    pwr::FlushCpuFreqOutsideLock();
+    pwr::FlushPendingActionsOutsideLock();
 }
 
 void PowerPolicy::NotifyUserActivity()
@@ -766,14 +781,13 @@ void PowerPolicy::NotifyUserActivity()
     xSemaphoreTake(pwr::mu, portMAX_DELAY);
     const int64_t now = esp_timer_get_time();
 
-    if (pwr::touch_asleep && pwr::board != nullptr) {
-        if (pwr::board->TouchWakeByReset() == ESP_OK) {
-            pwr::touch_asleep = false;
-        }
+    if ((pwr::touch_asleep || pwr::touch_transition) && pwr::board != nullptr) {
+        pwr::WakeTouchLocked();
     }
 
     if (pwr::mode == pwr::Mode::StandbyUi) {
         xSemaphoreGive(pwr::mu);
+        pwr::FlushTouchOutsideLock();
         pwr::RequestDismissStandbyOverlay();
         return;
     }
@@ -781,6 +795,7 @@ void PowerPolicy::NotifyUserActivity()
     pwr::last_user_activity_us = now;
     pwr::ClearNetGraceLocked();
     xSemaphoreGive(pwr::mu);
+    pwr::FlushTouchOutsideLock();
 }
 
 bool PowerPolicy::IsTouchAsleep() const
@@ -789,7 +804,7 @@ bool PowerPolicy::IsTouchAsleep() const
         return false;
     }
     xSemaphoreTake(pwr::mu, portMAX_DELAY);
-    const bool asleep = pwr::touch_asleep;
+    const bool asleep = pwr::touch_asleep || pwr::touch_transition;
     xSemaphoreGive(pwr::mu);
     return asleep;
 }
@@ -812,7 +827,7 @@ void PowerPolicy::RequestReevaluate()
     xSemaphoreTake(pwr::mu, portMAX_DELAY);
     pwr::ReevaluateLocked();
     xSemaphoreGive(pwr::mu);
-    pwr::FlushCpuFreqOutsideLock();
+    pwr::FlushPendingActionsOutsideLock();
 }
 
 void PowerPolicy::RequestPowerOff()
@@ -825,6 +840,7 @@ void PowerPolicy::RequestPowerOff()
     ESP_LOGW(TAG, "RequestPowerOff");
     pwr::BeginPowerOffLocked();
     xSemaphoreGive(pwr::mu);
+    pwr::FlushTouchOutsideLock();
 }
 
 void PowerPolicy::OnStandbyOverlayDismissed()
@@ -842,7 +858,7 @@ void PowerPolicy::OnStandbyOverlayDismissed()
     pwr::standby_wake_exit = false;
     xSemaphoreGive(pwr::mu);
     pwr::ResumeIotKeysIfNeeded();
-    pwr::FlushCpuFreqOutsideLock();
+    pwr::FlushPendingActionsOutsideLock();
 }
 
 int PowerPolicy::GetIdleCpuMhz() const
@@ -884,7 +900,7 @@ void PowerPolicy::SetIdleCpuMhz(int mhz)
             pwr::QueueCpuMhzLocked(mhz);
         }
         xSemaphoreGive(pwr::mu);
-        pwr::FlushCpuFreqOutsideLock();
+        pwr::FlushPendingActionsOutsideLock();
     }
     if (xTaskCreate(PersistIdleMhzTask, "idle_mhz_nvs", 4096,
                     reinterpret_cast<void*>(static_cast<intptr_t>(mhz)), 5, nullptr) != pdPASS) {

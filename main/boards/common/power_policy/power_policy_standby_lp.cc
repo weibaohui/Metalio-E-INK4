@@ -68,6 +68,7 @@ bool RunStandbyBootKeyGesture(int held_ms)
         pwr::last_user_activity_us = esp_timer_get_time();
         pwr::PrepareStandbyWakeExitLocked();
         xSemaphoreGive(pwr::mu);
+        pwr::FlushTouchOutsideLock();
         ESP_LOGI(TAG, "BOOT standby long %d ms -> assistant", held_ms);
         StandbyScreen::HandleBootLongPress();
         return true;
@@ -86,6 +87,7 @@ void RunStandbyPowerKeyGesture(int held_ms)
         ESP_LOGW(TAG, "POWER standby long %d ms -> power off", held_ms);
         pwr::BeginPowerOffLocked();
         xSemaphoreGive(pwr::mu);
+        pwr::FlushTouchOutsideLock();
         // 阈值处已开刷，键可能仍按住；松开后再结束 LP，避免 resume iot 误触
         while (gpio_get_level(POWER_BUTTON_GPIO) == 0) {
             vTaskDelay(pdMS_TO_TICKS(20));
@@ -112,6 +114,7 @@ bool PollStandbyPhysicalKeys()
     pwr::ResetStandbyElapsedLocked();
     pwr::last_user_activity_us = esp_timer_get_time();
     xSemaphoreGive(pwr::mu);
+    pwr::FlushTouchOutsideLock();
     RunStandbyPowerKeyGesture(MeasureGpioHoldMs(POWER_BUTTON_GPIO));
     return true;
 }
@@ -300,6 +303,7 @@ bool StandbyLpShouldContinue()
         pwr::ClearStandbyElapsedLocked();
     }
     xSemaphoreGive(pwr::mu);
+    pwr::FlushTouchOutsideLock();
     return ok;
 }
 
@@ -313,6 +317,7 @@ bool RunStandbyLpMainLoop()
         if (pwr::StandbyUiLongEnoughLocked()) {
             pwr::RequestShutdownLocked();
             xSemaphoreGive(pwr::mu);
+            pwr::FlushTouchOutsideLock();
             return false;
         }
         xSemaphoreGive(pwr::mu);
@@ -348,7 +353,7 @@ void StandbyLpTask(void* /*arg*/)
             pwr::lp_session_active = false;
             pwr::ReevaluateLocked();
             xSemaphoreGive(pwr::mu);
-            pwr::FlushCpuFreqOutsideLock();
+            pwr::FlushPendingActionsOutsideLock();
             continue;
         }
 
@@ -356,6 +361,7 @@ void StandbyLpTask(void* /*arg*/)
         xSemaphoreTake(pwr::mu, portMAX_DELAY);
         pwr::EnsureTouchSleepLocked();
         xSemaphoreGive(pwr::mu);
+        pwr::FlushTouchOutsideLock();
 
         if (pwr::board != nullptr) {
             SuspendIotKeys();
@@ -388,13 +394,13 @@ namespace pwr {
 
 void EnsureTouchSleepLocked()
 {
-    if (board == nullptr || touch_asleep) {
+    if (board == nullptr || (touch_asleep && !touch_transition) ||
+        (touch_transition && touch_target_asleep)) {
         return;
     }
-    if (board->TouchEnterSleep() == ESP_OK) {
-        touch_asleep = true;
-        ESP_LOGI(TAG, "touch sleep for standby LP");
-    }
+    touch_target_asleep = true;
+    touch_transition = true;
+    touch_op_pending = true;
 }
 
 void ClearStandbyElapsedLocked()
@@ -423,12 +429,62 @@ bool StandbyUiLongEnoughLocked()
 
 void WakeTouchLocked()
 {
-    if (board == nullptr || !touch_asleep) {
+    if (board == nullptr || (!touch_asleep && !touch_transition)) {
         return;
     }
-    if (board->TouchWakeByReset() == ESP_OK) {
-        touch_asleep = false;
+    touch_target_asleep = false;
+    touch_transition = true;
+    touch_op_pending = true;
+}
+
+void FlushTouchOutsideLock()
+{
+    if (mu == nullptr || touch_effect_mu == nullptr) {
+        return;
     }
+    if (xSemaphoreTake(touch_effect_mu, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        ESP_LOGW(TAG, "touch effect lock timeout; request remains pending");
+        return;
+    }
+
+    for (;;) {
+        xSemaphoreTake(mu, portMAX_DELAY);
+        if (!touch_op_pending || board == nullptr) {
+            xSemaphoreGive(mu);
+            break;
+        }
+        const bool target_asleep = touch_target_asleep;
+        Board* const current_board = board;
+        touch_op_pending = false;
+        xSemaphoreGive(mu);
+
+        const esp_err_t err = target_asleep ? current_board->TouchEnterSleep()
+                                            : current_board->TouchWakeByReset();
+
+        xSemaphoreTake(mu, portMAX_DELAY);
+        if (touch_target_asleep != target_asleep) {
+            // A newer intent arrived during I2C; keep polling paused and apply it next.
+            touch_op_pending = true;
+            touch_transition = true;
+        } else {
+            touch_transition = false;
+            if (err == ESP_OK) {
+                touch_asleep = target_asleep;
+                ESP_LOGI(TAG, "touch state -> %s", target_asleep ? "asleep" : "awake");
+            } else {
+                // Keep the last confirmed state. In particular, a failed wake
+                // leaves polling disabled while the device may still be asleep.
+                ESP_LOGW(TAG, "touch state transition to %s failed: %s",
+                         target_asleep ? "asleep" : "awake", esp_err_to_name(err));
+            }
+        }
+        const bool again = touch_op_pending;
+        xSemaphoreGive(mu);
+        if (!again) {
+            break;
+        }
+    }
+    xSemaphoreGive(touch_effect_mu);
 }
 
 void PrepareStandbyWakeExitLocked()
@@ -459,7 +515,7 @@ void RequestStandbyUiAsync()
     if (standby_ui_requested) {
         return;
     }
-    // 仅置位；真正 lv_async_call(Show) 在 FlushCpuFreqOutsideLock（持锁外）
+    // 仅置位；真正 lv_async_call(Show) 在 FlushPendingActionsOutsideLock（持锁外）
     standby_ui_requested = true;
     standby_show_pending = true;
 }
