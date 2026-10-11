@@ -11,6 +11,7 @@
 #include <deque>
 #include <memory>
 #include <atomic>
+#include <vector>
 
 #include "protocol.h"
 #include "ota.h"
@@ -47,8 +48,6 @@ public:
     DeviceState GetDeviceState() const { return device_state_; }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
     void Schedule(std::function<void()> callback);
-    // 仅在主循环任务内调用：清空已排队的 MainEventLoop 任务，避免占死主循环。
-    void DrainScheduledTasks();
     void SetDeviceState(DeviceState state);
     void Alert(const char* status, const char* message, const char* emotion = "", const std::string_view& sound = "");
     void DismissAlert();
@@ -71,6 +70,7 @@ public:
     // 屏级语音会话：进页激活，离页关闭音频与协议，归还任务栈占用。
     void StartXiaozhiVoice(bool enter_listening = false);
     void StopXiaozhiVoice();
+    void CancelAssistantNetworkWait();
     bool IsXiaozhiVoiceActive() const { return xiaozhi_voice_active_; }
     // 开机主流程是否已结束（联网/OTA 等）。
     bool IsBootReady() const { return boot_ready_.load(std::memory_order_acquire); }
@@ -117,6 +117,10 @@ private:
     std::atomic<bool> activation_kick_{false};
     TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
+    bool assistant_network_worker_running_ = false; // MainEventLoop-owned
+    std::atomic<bool> assistant_network_cancel_requested_{false};
+    std::vector<std::function<void(bool)>> assistant_network_waiters_; // MainEventLoop-owned
+    uint32_t voice_session_generation_ = 0; // MainEventLoop-owned; invalidates stale async work
     void CheckNewVersion(Ota& ota);
     void CheckAssetsVersion();
     void ShowActivationCode(const std::string& code, const std::string& message);
@@ -130,6 +134,12 @@ private:
     bool ShouldAllowBootAudio() const;
     void EnsureProtocolReady();
     void TeardownProtocol();
+    // Assistant network waits run off MainEventLoop; callbacks return on that loop.
+    void EnsureAssistantNetworkReadyAsync(std::function<void(bool)> callback);
+    void CompleteAssistantNetworkReady(bool ready, bool cancelled);
+    void StartXiaozhiVoiceImpl(bool enter_listening, int network_result = -1);
+    void StartListeningImpl(uint32_t session_generation, int network_result = -1);
+    void StartAssistantNetworkWorker();
     // 开机完成后：若仍在百问页，则兑现挂起的进页/聆听意图。
     void FlushPendingXiaozhiVoice();
 };

@@ -51,46 +51,6 @@ namespace {
 constexpr int kAssistantNetSliceMs = 200;
 constexpr int kAssistantNetBudgetMs = 30000;
 
-/** 百问进页等网：短切片轮询，离页/进待机即停；切片间隙排空其它 Schedule。 */
-bool EnsureAssistantNetworkReady() {
-    auto& board = Board::GetInstance();
-    auto& app = Application::GetInstance();
-    if (!api::HasHost()) {
-        ESP_LOGI(TAG, "assistant network skipped: blank cloud endpoints");
-        return false;
-    }
-    if (board.IsNetworkReady()) {
-        return true;
-    }
-    if (board.IsWifiConfigMode()) {
-        return false;
-    }
-    for (int elapsed = 0; elapsed < kAssistantNetBudgetMs; elapsed += kAssistantNetSliceMs) {
-        if (!AssistantScreen::IsActive() || StandbyScreen::IsActive()) {
-            ESP_LOGI(TAG, "assistant network wait aborted: left screen or standby");
-            return false;
-        }
-        if (board.EnsureNetworkReady(kAssistantNetSliceMs)) {
-            // 连上后立刻刷成 RSSI 档，勿等被挡住的 CLOCK_TICK
-            if (auto* display = board.GetDisplay()) {
-                display->UpdateStatusBar(true);
-            }
-            return true;
-        }
-        // StartXiaozhiVoice 占着 MainEventLoop；间隙放行电源键等 ScreenLvAsync
-        app.DrainScheduledTasks();
-        // CLOCK_TICK 进不来：约每秒刷顶栏，WiFi 弱→中→强梯度才能动
-        if ((elapsed % 1000) == 0) {
-            if (auto* display = board.GetDisplay()) {
-                display->UpdateStatusBar();
-            }
-        }
-    }
-    ESP_LOGW(TAG, "assistant network wait timeout");
-    board.PauseNetworkIfNotReady();
-    return false;
-}
-
 }  // namespace
 
 static const char* const STATE_STRINGS[] = {
@@ -347,7 +307,103 @@ void Application::TeardownProtocol() {
     protocol_ready_ = false;
 }
 
+void Application::EnsureAssistantNetworkReadyAsync(std::function<void(bool)> callback) {
+    auto& board = Board::GetInstance();
+    if (!api::HasHost() || board.IsWifiConfigMode()) {
+        callback(false);
+        return;
+    }
+    if (board.IsNetworkReady()) {
+        callback(true);
+        return;
+    }
+
+    assistant_network_waiters_.push_back(std::move(callback));
+    assistant_network_cancel_requested_.store(false, std::memory_order_release);
+    if (!assistant_network_worker_running_) {
+        StartAssistantNetworkWorker();
+    }
+}
+
+void Application::StartAssistantNetworkWorker() {
+    assistant_network_worker_running_ = true;
+    const BaseType_t created = xTaskCreate(
+        [](void* arg) {
+            auto* app = static_cast<Application*>(arg);
+            auto& board = Board::GetInstance();
+            bool ready = false;
+            bool cancelled = false;
+            for (int elapsed = 0; elapsed < kAssistantNetBudgetMs; elapsed += kAssistantNetSliceMs) {
+                if (app->assistant_network_cancel_requested_.load(std::memory_order_acquire)) {
+                    cancelled = true;
+                    break;
+                }
+                if (board.EnsureNetworkReady(kAssistantNetSliceMs)) {
+                    ready = true;
+                    break;
+                }
+            }
+            if (app->assistant_network_cancel_requested_.load(std::memory_order_acquire)) {
+                cancelled = true;
+            }
+            if (!ready && !cancelled) {
+                ESP_LOGW(TAG, "assistant network wait timeout");
+                board.PauseNetworkIfNotReady();
+            }
+            app->Schedule([app, ready, cancelled]() {
+                app->CompleteAssistantNetworkReady(ready, cancelled);
+            });
+            vTaskDelete(nullptr);
+        },
+        "assistant_net", 8192, this, 3, nullptr);
+    if (created != pdPASS) {
+        ESP_LOGE(TAG, "failed to create assistant network worker");
+        assistant_network_worker_running_ = false;
+        auto waiters = std::move(assistant_network_waiters_);
+        assistant_network_waiters_.clear();
+        for (auto& waiter : waiters) {
+            waiter(false);
+        }
+    }
+}
+
+void Application::CompleteAssistantNetworkReady(bool ready, bool cancelled) {
+    assistant_network_worker_running_ = false;
+    if (cancelled) {
+        // Requests that arrived while a cancelled worker was winding down get a fresh worker.
+        if (!assistant_network_waiters_.empty()) {
+            assistant_network_cancel_requested_.store(false, std::memory_order_release);
+            StartAssistantNetworkWorker();
+        }
+        return;
+    }
+
+    auto waiters = std::move(assistant_network_waiters_);
+    assistant_network_waiters_.clear();
+    if (ready) {
+        if (auto* display = Board::GetInstance().GetDisplay()) {
+            display->UpdateStatusBar(true);
+        }
+    }
+    for (auto& waiter : waiters) {
+        waiter(ready);
+    }
+}
+
+void Application::CancelAssistantNetworkWait() {
+    // Can be called from an LVGL lifecycle callback; only the atomic signal crosses threads.
+    assistant_network_cancel_requested_.store(true, std::memory_order_release);
+    Schedule([this]() {
+        ++voice_session_generation_;
+        assistant_network_waiters_.clear();
+    });
+}
+
 void Application::StartXiaozhiVoice(bool enter_listening) {
+    StartXiaozhiVoiceImpl(enter_listening);
+}
+
+void Application::StartXiaozhiVoiceImpl(bool enter_listening, int network_result) {
     if (!api::HasHost()) {
         ESP_LOGI(TAG, "StartXiaozhiVoice skipped: blank cloud endpoints");
         activation_code_.clear();
@@ -386,7 +442,18 @@ void Application::StartXiaozhiVoice(bool enter_listening) {
         if (protocol_ && !protocol_->IsAudioChannelOpened()) {
             ESP_LOGI(TAG, "Xiaozhi voice: re-preload channel after standby/idle drop");
             SetDeviceState(kDeviceStateConnecting);
-            if (!EnsureAssistantNetworkReady()) {
+            if (network_result < 0) {
+                const uint32_t generation = voice_session_generation_;
+                EnsureAssistantNetworkReadyAsync([this, enter_listening, generation](bool ready) {
+                    if (generation != voice_session_generation_ || !AssistantScreen::IsActive() ||
+                        StandbyScreen::IsActive()) {
+                        return;
+                    }
+                    StartXiaozhiVoiceImpl(enter_listening, ready ? 1 : 0);
+                });
+                return;
+            }
+            if (network_result == 0) {
                 ESP_LOGW(TAG, "Xiaozhi voice: re-preload network not ready");
                 SetDeviceState(kDeviceStateIdle);
                 if (!StandbyScreen::IsActive()) {
@@ -453,7 +520,18 @@ void Application::StartXiaozhiVoice(bool enter_listening) {
         }
         if (!protocol_->IsAudioChannelOpened()) {
             SetDeviceState(kDeviceStateConnecting);
-            if (!EnsureAssistantNetworkReady()) {
+            if (network_result < 0) {
+                const uint32_t generation = voice_session_generation_;
+                EnsureAssistantNetworkReadyAsync([this, enter_listening, generation](bool ready) {
+                    if (generation != voice_session_generation_ || !AssistantScreen::IsActive() ||
+                        StandbyScreen::IsActive()) {
+                        return;
+                    }
+                    StartXiaozhiVoiceImpl(enter_listening, ready ? 1 : 0);
+                });
+                return;
+            }
+            if (network_result == 0) {
                 ESP_LOGW(TAG, "Xiaozhi voice hold-through: network not ready");
                 SetDeviceState(kDeviceStateIdle);
                 if (!StandbyScreen::IsActive()) {
@@ -491,7 +569,18 @@ void Application::StartXiaozhiVoice(bool enter_listening) {
     // 预开 WebSocket，缩短首按延迟；失败不退出会话，按下时 StartListening 会再试
     if (protocol_ && !protocol_->IsAudioChannelOpened()) {
         SetDeviceState(kDeviceStateConnecting);
-        if (!EnsureAssistantNetworkReady()) {
+        if (network_result < 0) {
+            const uint32_t generation = voice_session_generation_;
+            EnsureAssistantNetworkReadyAsync([this, enter_listening, generation](bool ready) {
+                if (generation != voice_session_generation_ || !AssistantScreen::IsActive() ||
+                    StandbyScreen::IsActive()) {
+                    return;
+                }
+                StartXiaozhiVoiceImpl(enter_listening, ready ? 1 : 0);
+            });
+            return;
+        }
+        if (network_result == 0) {
             ESP_LOGW(TAG, "Xiaozhi voice: preload network not ready; retry on PTT");
             if (!AssistantScreen::IsActive() || StandbyScreen::IsActive()) {
                 if (!StandbyScreen::IsActive()) {
@@ -536,6 +625,9 @@ void Application::StartXiaozhiVoice(bool enter_listening) {
 void Application::StopXiaozhiVoice() {
     pending_xiaozhi_voice_.store(false, std::memory_order_release);
     pending_xiaozhi_listen_.store(false, std::memory_order_release);
+    ++voice_session_generation_;
+    assistant_network_waiters_.clear();
+    assistant_network_cancel_requested_.store(true, std::memory_order_release);
     if (!xiaozhi_voice_active_) {
         return;
     }
@@ -833,67 +925,71 @@ void Application::StartListening() {
         ESP_LOGW(TAG, "StartListening ignored: Xiaozhi voice session not active");
         return;
     }
-    
+    const uint32_t generation = voice_session_generation_;
+    Schedule([this, generation]() { StartListeningImpl(generation); });
+}
+
+void Application::StartListeningImpl(uint32_t session_generation, int network_result) {
+    if (session_generation != voice_session_generation_ || !xiaozhi_voice_active_ || !protocol_) {
+        return;
+    }
+
     if (device_state_ == kDeviceStateIdle) {
-        Schedule([this]() {
-            if (!xiaozhi_voice_active_ || !protocol_) {
+        if (!protocol_->IsAudioChannelOpened()) {
+            SetDeviceState(kDeviceStateConnecting);
+            ESP_LOGI(TAG, "StartListening: audio channel not open, wait for network then open");
+            if (network_result < 0) {
+                EnsureAssistantNetworkReadyAsync([this, session_generation](bool ready) {
+                    if (session_generation != voice_session_generation_ ||
+                        !AssistantScreen::IsActive() || StandbyScreen::IsActive()) {
+                        return;
+                    }
+                    StartListeningImpl(session_generation, ready ? 1 : 0);
+                });
                 return;
             }
-            if (!protocol_->IsAudioChannelOpened()) {
-                SetDeviceState(kDeviceStateConnecting);
-                ESP_LOGI(TAG, "StartListening: audio channel not open, EnsureNetwork+Open");
-                if (!EnsureAssistantNetworkReady()) {
-                    ESP_LOGE(TAG, "StartListening: network not ready");
-                    SetDeviceState(kDeviceStateIdle);
-                    if (!StandbyScreen::IsActive()) {
-                        ApplyIdleStatusBar();
-                        Alert(Lang::Strings::SERVER_NOT_CONNECTED, Lang::Strings::SERVER_NOT_CONNECTED, "cloud_slash",
-                              Lang::Sounds::OGG_EXCLAMATION);
-                    }
-                    return;
-                }
-                if (!protocol_->OpenAudioChannel()) {
-                    ESP_LOGE(TAG, "StartListening: OpenAudioChannel failed");
-                    SetDeviceState(kDeviceStateIdle);
+            if (network_result == 0) {
+                ESP_LOGE(TAG, "StartListening: network not ready");
+                SetDeviceState(kDeviceStateIdle);
+                if (!StandbyScreen::IsActive()) {
                     ApplyIdleStatusBar();
-                    return;
+                    Alert(Lang::Strings::SERVER_NOT_CONNECTED, Lang::Strings::SERVER_NOT_CONNECTED, "cloud_slash",
+                          Lang::Sounds::OGG_EXCLAMATION);
                 }
-            } else {
-                ESP_LOGI(TAG, "StartListening: reuse open audio channel");
+                return;
             }
-
-            // 百问页长按臂听：开通道期间已松手则回待命（BOOT ∪ 屏触 PTT）
-            if (AssistantScreen::IsActive() && !AssistantScreen::IsPttHeld()) {
-                ESP_LOGI(TAG, "StartListening aborted: PTT released before listen");
+            if (!protocol_->OpenAudioChannel()) {
+                ESP_LOGE(TAG, "StartListening: OpenAudioChannel failed");
                 SetDeviceState(kDeviceStateIdle);
                 ApplyIdleStatusBar();
-                AssistantScreen::SyncPttOverlay();
                 return;
             }
+        } else {
+            ESP_LOGI(TAG, "StartListening: reuse open audio channel");
+        }
 
-            SetListeningMode(kListeningModeManualStop);
-        });
+        // 百问页长按臂听：开通道期间已松手则回待命（BOOT ∪ 屏触 PTT）
+        if (AssistantScreen::IsActive() && !AssistantScreen::IsPttHeld()) {
+            ESP_LOGI(TAG, "StartListening aborted: PTT released before listen");
+            SetDeviceState(kDeviceStateIdle);
+            ApplyIdleStatusBar();
+            AssistantScreen::SyncPttOverlay();
+            return;
+        }
+        SetListeningMode(kListeningModeManualStop);
     } else if (device_state_ == kDeviceStateSpeaking) {
-        Schedule([this]() {
-            if (!xiaozhi_voice_active_) {
-                return;
+        AbortSpeaking(kAbortReasonNone);
+        // 长按打断并开听；若已松手则只落到待命，不进聆听中
+        if (AssistantScreen::IsActive() && !AssistantScreen::IsPttHeld()) {
+            ESP_LOGI(TAG, "StartListening from speaking aborted: PTT released -> Idle");
+            if (audio_running_) {
+                audio_service_.ResetDecoder();
             }
-            if (device_state_ != kDeviceStateSpeaking) {
-                return;
-            }
-            AbortSpeaking(kAbortReasonNone);
-            // 长按打断并开听；若已松手则只落到待命，不进聆听中
-            if (AssistantScreen::IsActive() && !AssistantScreen::IsPttHeld()) {
-                ESP_LOGI(TAG, "StartListening from speaking aborted: PTT released -> Idle");
-                if (audio_running_) {
-                    audio_service_.ResetDecoder();
-                }
-                SetDeviceState(kDeviceStateIdle);
-                AssistantScreen::SyncPttOverlay();
-                return;
-            }
-            SetListeningMode(kListeningModeManualStop);
-        });
+            SetDeviceState(kDeviceStateIdle);
+            AssistantScreen::SyncPttOverlay();
+            return;
+        }
+        SetListeningMode(kListeningModeManualStop);
     }
 }
 
@@ -1158,20 +1254,6 @@ void Application::Schedule(std::function<void()> callback) {
         main_tasks_.push_back(std::move(callback));
     }
     xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
-}
-
-void Application::DrainScheduledTasks() {
-    std::deque<std::function<void()>> tasks;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (main_tasks_.empty()) {
-            return;
-        }
-        tasks = std::move(main_tasks_);
-    }
-    for (auto& task : tasks) {
-        task();
-    }
 }
 
 // The Main Event Loop controls the chat state and websocket connection

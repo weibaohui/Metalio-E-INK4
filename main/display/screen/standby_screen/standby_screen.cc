@@ -130,6 +130,7 @@ void StandbyScreen::Show() {
         ESP_LOGW(TAG, "show: no active screen");
         return;
     }
+    Application::GetInstance().CancelAssistantNetworkWait();
     ESP_LOGI(TAG, "show overlay on screen=%p", static_cast<void*>(under));
 
     lv_obj_t* overlay = lv_obj_create(under);
