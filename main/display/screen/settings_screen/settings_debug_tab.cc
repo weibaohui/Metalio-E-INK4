@@ -16,8 +16,7 @@ namespace {
 
 struct DebugUi {
     lv_obj_t* syslog_btns[2] = {};      // 开 / 关
-    lv_obj_t* target_btns[2] = {};      // 单播 / 广播
-    lv_obj_t* syslog_status = nullptr;  // 当前 host:port
+    lv_obj_t* syslog_status = nullptr;  // 当前 host:port(页面开启即广播)
     lv_obj_t* mon_btns[5] = {};         // 关 / 1s / 5s / 30s / 60s
     lv_obj_t* mem_btn = nullptr;
 };
@@ -25,10 +24,6 @@ struct DebugUi {
 DebugUi s_ui;
 
 constexpr int kMonChoices[] = {0, 1, 5, 30, 60};
-
-bool SyslogIsBroadcast() {
-    return Syslog_GetHost() == "broadcast";
-}
 
 void RefreshDebugTab();
 
@@ -38,13 +33,6 @@ void RefreshDebugTab() {
     if (s_ui.syslog_btns[0] != nullptr) {
         SettingsStyleSelectable(s_ui.syslog_btns[0], lv_obj_get_child(s_ui.syslog_btns[0], 0), on);
         SettingsStyleSelectable(s_ui.syslog_btns[1], lv_obj_get_child(s_ui.syslog_btns[1], 0), !on);
-    }
-    const bool bcast = SyslogIsBroadcast();
-    if (s_ui.target_btns[0] != nullptr) {
-        SettingsStyleSelectable(s_ui.target_btns[0], lv_obj_get_child(s_ui.target_btns[0], 0),
-                                !bcast);
-        SettingsStyleSelectable(s_ui.target_btns[1], lv_obj_get_child(s_ui.target_btns[1], 0),
-                                bcast);
     }
     if (s_ui.syslog_status != nullptr) {
         const std::string host = Syslog_GetHost();
@@ -62,31 +50,15 @@ void RefreshDebugTab() {
     }
 }
 
-// 切到广播前把当前单播 host 备份到 NVS,切回时恢复(设备无文本输入,host 编辑走 MCP)
-void ApplySyslogBroadcast(bool broadcast) {
-    const int port = Syslog_GetPort();
-    if (broadcast) {
-        if (!SyslogIsBroadcast()) {
-            Settings backup("dbg", true);
-            backup.SetString("sl_uc", Syslog_GetHost());
-            Syslog_Configure("broadcast", port);
-        }
-    } else if (SyslogIsBroadcast()) {
-        Settings backup("dbg", false);
-        Syslog_Configure(backup.GetString("sl_uc", ""), port);
-    }
-}
-
 void OnSyslogToggle(lv_event_t* e) {
     const bool enable = (reinterpret_cast<intptr_t>(lv_event_get_user_data(e)) != 0);
-    // NVS 写/配置应用都在 main 任务(MCP 工具同款约束)
-    Application::GetInstance().Schedule([enable]() { Syslog_SetEnabled(enable); });
-    RefreshDebugTab();
-}
-
-void OnTargetToggle(lv_event_t* e) {
-    const bool broadcast = (reinterpret_cast<intptr_t>(lv_event_get_user_data(e)) != 0);
-    Application::GetInstance().Schedule([broadcast]() { ApplySyslogBroadcast(broadcast); });
+    // NVS 写/配置应用都在 main 任务(MCP 工具同款约束);从本页开启即用广播
+    Application::GetInstance().Schedule([enable]() {
+        if (enable && Syslog_GetHost() != "broadcast") {
+            Syslog_Configure("broadcast", Syslog_GetPort());
+        }
+        Syslog_SetEnabled(enable);
+    });
     RefreshDebugTab();
 }
 
@@ -129,10 +101,6 @@ void SettingsDebugTab_Build(lv_obj_t* page) {
         page, Lang::Strings::COMMON_ON, OnSyslogToggle, 1);
     s_ui.syslog_btns[1] = SettingsCreateSelectableOption(
         page, Lang::Strings::COMMON_OFF, OnSyslogToggle, 0);
-    s_ui.target_btns[0] = SettingsCreateSelectableOption(
-        page, Lang::Strings::SETTINGS_DBG_SYSLOG_UCAST, OnTargetToggle, 0);
-    s_ui.target_btns[1] = SettingsCreateSelectableOption(
-        page, Lang::Strings::SETTINGS_DBG_SYSLOG_BCAST, OnTargetToggle, 1);
     s_ui.syslog_status = add_label("");
 
     // ---- 系统监控打印 ----
