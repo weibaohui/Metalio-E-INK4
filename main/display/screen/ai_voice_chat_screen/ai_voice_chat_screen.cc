@@ -166,8 +166,10 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     lv_obj_add_flag(chat, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(chat, LV_DIR_VER);
     lv_obj_clear_flag(chat, LV_OBJ_FLAG_CLICKABLE);
-    s_ui.user_lbl = ScreenMakeLabel(chat, "");
-    s_ui.reply_lbl = ScreenMakeLabel(chat, "");
+    // wrap=true:宽 100% + 长文自动折行,回复再长也不超屏宽;
+    // 超出对话区高度由容器竖向滚动承载(上下滑动看全文)
+    s_ui.user_lbl = ScreenMakeLabel(chat, "", 25, true);
+    s_ui.reply_lbl = ScreenMakeLabel(chat, "", 25, true);
 
     // 按住说话大按钮(屏幕下方;播报中显示"按住打断播报")
     s_ui.talk_btn = lv_obj_create(body);
