@@ -172,7 +172,13 @@ bool ResolveDest(sockaddr_in* out, uint32_t* gen_out) {
     memset(out, 0, sizeof(*out));
     out->sin_family = AF_INET;
     out->sin_port = htons((uint16_t)s_port);
-    if (inet_pton(AF_INET, s_host, &out->sin_addr) != 1) return false;
+    // "broadcast"(或直接填 255.255.255.255)= UDP 定向受限广播:设备无需知道
+    // 接收方 IP,同网段任何监听者都能收(Mac 上 `nc -ul <port>` 即可抓)
+    if (std::strcmp(s_host, "broadcast") == 0) {
+        out->sin_addr.s_addr = htonl(INADDR_BROADCAST);
+    } else if (inet_pton(AF_INET, s_host, &out->sin_addr) != 1) {
+        return false;
+    }
     if (gen_out != nullptr) *gen_out = s_cfg_gen.load();
     return true;
 }
@@ -237,6 +243,9 @@ void SenderTask(void*) {
                 if (sock >= 0) {
                     const int flags = fcntl(sock, F_GETFL, 0);
                     if (flags >= 0) fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+                    // 广播目标需要 SO_BROADCAST(lwIP 对单播无副作用,恒开)
+                    const int on = 1;
+                    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
                 }
                 if (sock < 0) break;
             }
@@ -414,7 +423,7 @@ void SyslogRegisterMcpTools() {
     auto& mcp = McpServer::GetInstance();
 
     mcp.AddTool("self.syslog.configure",
-        "Configure the syslog (RFC3164 over UDP) target host and port. host must be an IPv4 literal (x.x.x.x). port defaults to 514.",
+        "Configure the syslog (RFC3164 over UDP) target host and port. host is an IPv4 literal (x.x.x.x) or 'broadcast' (255.255.255.255, any LAN listener receives). port defaults to 514.",
         PropertyList({Property("host", kPropertyTypeString),
                       Property("port", kPropertyTypeInteger, 514)}),
         [](const PropertyList& properties) -> ReturnValue {
