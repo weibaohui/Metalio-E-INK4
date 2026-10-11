@@ -10,6 +10,7 @@ struct EpdStatusBar {
     lv_obj_t* overlay = nullptr;
     lv_obj_t* network_label = nullptr;
     lv_obj_t* mute_label = nullptr;
+    lv_obj_t* volume_label = nullptr;   // 喇叭图标后的音量数字(需求:音量数值提示)
     lv_obj_t* battery_pct_label = nullptr;
     lv_obj_t* battery_label = nullptr;
     lv_obj_t* status_label = nullptr;
