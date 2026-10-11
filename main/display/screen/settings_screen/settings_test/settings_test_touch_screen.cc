@@ -38,7 +38,7 @@ bool s_testing = false;
 
 void ClearStatusBindings() {
     if (auto* disp = LVAdapterDisplay::Instance()) {
-        disp->BindStatusWidgets(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+        disp->BindStatusWidgets(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 }
 

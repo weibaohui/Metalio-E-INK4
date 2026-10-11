@@ -54,9 +54,9 @@ public:
     void SetPreviewImage(const void* image);
 
     // 由各 Screen 在 Create 时绑定当前页控件；切页时覆盖。
-    void BindStatusWidgets(lv_obj_t* network, lv_obj_t* mute, lv_obj_t* battery, lv_obj_t* status,
-                           lv_obj_t* notification, lv_obj_t* low_battery_popup,
-                           lv_obj_t* battery_pct = nullptr);
+    void BindStatusWidgets(lv_obj_t* network, lv_obj_t* mute, lv_obj_t* volume, lv_obj_t* battery,
+                           lv_obj_t* status, lv_obj_t* notification,
+                           lv_obj_t* low_battery_popup, lv_obj_t* battery_pct = nullptr);
 
     /**
      * @brief 状态栏尚未绑定时排队通知；首次 BindStatusWidgets 后显示
@@ -99,11 +99,14 @@ private:
     void ApplyStatusTextLocked(const char* status);
     // 已持锁/LVGL 上下文：把缓存的网络/静音/电池/状态灌进当前绑定的控件（首帧同屏画出）。
     void RestoreStatusWidgetsLocked();
+    // 喇叭图标+音量数字同步(持锁上下文调);音量 0=静音叉,>0=喇叭+数字
+    void SyncVolumeWidgetsLocked();
 
     lv_obj_t* network_label_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* notification_label_ = nullptr;
     lv_obj_t* mute_label_ = nullptr;
+    lv_obj_t* volume_label_ = nullptr;   // 喇叭图标后的音量数字
     lv_obj_t* battery_label_ = nullptr;
     lv_obj_t* battery_pct_label_ = nullptr;
     lv_obj_t* low_battery_popup_ = nullptr;
@@ -118,6 +121,7 @@ private:
     const char* battery_icon_ = nullptr;
     const char* network_icon_ = nullptr;
     bool muted_ = false;
+    int volume_cache_ = -1;              // 状态栏音量数字缓存(-1=未知,跨页保留)
     std::chrono::system_clock::time_point last_status_update_time_;
     esp_timer_handle_t notification_timer_ = nullptr;
 
