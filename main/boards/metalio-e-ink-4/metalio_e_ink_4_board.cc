@@ -933,13 +933,17 @@ private:
                         heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
                     const unsigned min_free_kb = static_cast<unsigned>(
                         heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024);
+                    // TLS 预检看的是最大连续块(碎片化时空闲总量会骗人),一并打出来
+                    const unsigned largest_kb = static_cast<unsigned>(
+                        heap_caps_get_largest_free_block(
+                            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024);
                     const unsigned psram_free_kb = static_cast<unsigned>(
                         heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
                     const unsigned psram_min_kb = static_cast<unsigned>(
                         heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM) / 1024);
                     ESP_LOGI(kMonitorTag,
-                             "@@@RAM   | 剩余: %6u KB | 历史最小: %6u KB",
-                             free_kb, min_free_kb);
+                             "@@@RAM   | 剩余: %6u KB | 最大块: %6u KB | 历史最小: %6u KB",
+                             free_kb, largest_kb, min_free_kb);
                     ESP_LOGI(kMonitorTag,
                              "@@@PSRAM | 剩余: %6u KB | 历史最小: %6u KB",
                              psram_free_kb, psram_min_kb);

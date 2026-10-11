@@ -5,7 +5,6 @@
 #include <esp_log.h>
 #include <lvgl.h>
 
-#include "cloud_screen/cloud_screen.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
 #include "ota_confirm_dialog/ota_confirm_dialog.h"
 #include "power_policy.h"
@@ -34,7 +33,6 @@ bool DispatchBootAction(BootKeyAction action, const char* kind, const char* scre
 }
 
 void EnterStandbyAsync(void* /*arg*/) {
-    CloudScreen::StopTransfer();
     StandbyScreen::Show();
 }
 

@@ -8,7 +8,6 @@ public:
     static constexpr int kCardStyleWhite = 0;
     static constexpr int kCardStyleGray = 1;
     static constexpr int kCardStyleBorder = 2;
-    static constexpr int kCardStyleSlash = 3;
 
     static lv_obj_t* Create();
 

@@ -119,7 +119,12 @@ inline HttpReply HttpFetch(const char* method, const std::string& url, std::stri
     // 这里统一预检,由调用方按 rep.error 降级或报错。
     if (url.rfind("https://", 0) == 0 && !TlsPreflightOk(opts.tls_min_largest_block)) {
         rep.error = "内部内存不足,暂无法 HTTPS";
-        ESP_LOGW(kTag, "%s %s -> %s", method, url.c_str(), rep.error.c_str());
+        // 带实测数字(收音机同款):空闲总量够但碎片化时,没有数字无从分诊
+        ESP_LOGW(kTag, "%s %s -> %s (内部剩余=%zu 最大块=%zu 阈值=%zu)",
+                 method, url.c_str(), rep.error.c_str(),
+                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 opts.tls_min_largest_block);
         return rep;
     }
     auto http = network->CreateHttp(0);

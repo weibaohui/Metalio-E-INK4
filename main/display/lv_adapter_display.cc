@@ -20,7 +20,6 @@
 
 #include "application.h"
 #include "assets/lang_config.h"
-#include "assistant_screen/assistant_screen.h"
 #include "audio_codec.h"
 #include "board.h"
 #include "power_policy.h"
@@ -35,8 +34,8 @@
 #include "a2ui_image.h"
 #include "sd_paths.h"
 #include "SdCardManager.hpp"
-#include "wallpaper_screen/wallpaper_active.h"
 #include "reader/book_home_snapshot.h"
+#include "utils/psr_worker.h"
 
 #include "esp_lcd_panel_ssd1677.h"
 #include "esp_lcd_ssd1677_commands.h"
@@ -103,63 +102,8 @@ bool TryLoadShutdownA2i1FromSd(uint8_t** out_buf, size_t* out_len) {
         return false;
     }
 
-    char path[192] = {};
-    if (!wallpaper::TryResolveActiveWallpaperPath(path, sizeof(path))) {
-        ESP_LOGI(TAG, "shutdown img: no NVS shutdown file → built-in");
-        return false;
-    }
-
-    struct stat st {};
-    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) {
-        ESP_LOGI(TAG, "shutdown img: missing %s → built-in", path);
-        return false;
-    }
-    // A2I1 头至少 magic+wh+stride+res+palette = 20
-    constexpr off_t kMinBytes = 20;
-    constexpr off_t kMaxBytes = 256 * 1024;
-    if (st.st_size < kMinBytes || st.st_size > kMaxBytes) {
-        ESP_LOGW(TAG, "shutdown img: bad size %ld → built-in", static_cast<long>(st.st_size));
-        return false;
-    }
-
-    FILE* f = fopen(path, "rb");
-    if (f == nullptr) {
-        ESP_LOGW(TAG, "shutdown img: fopen %s fail errno=%d → built-in", path, errno);
-        return false;
-    }
-
-    const size_t need = static_cast<size_t>(st.st_size);
-    uint8_t* buf = static_cast<uint8_t*>(
-        heap_caps_malloc(need, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (buf == nullptr) {
-        buf = static_cast<uint8_t*>(heap_caps_malloc(need, MALLOC_CAP_8BIT));
-    }
-    if (buf == nullptr) {
-        fclose(f);
-        ESP_LOGW(TAG, "shutdown img: alloc %u fail → built-in", static_cast<unsigned>(need));
-        return false;
-    }
-
-    const size_t nread = fread(buf, 1, need, f);
-    fclose(f);
-    if (nread != need) {
-        heap_caps_free(buf);
-        ESP_LOGW(TAG, "shutdown img: short read %u/%u → built-in", static_cast<unsigned>(nread),
-                 static_cast<unsigned>(need));
-        return false;
-    }
-
-    // 快速魔数校验，坏文件留给内置，避免关机白屏/花屏
-    if (!(need >= 4 && buf[0] == 'A' && buf[1] == '2' && buf[2] == 'I' && buf[3] == '1')) {
-        heap_caps_free(buf);
-        ESP_LOGW(TAG, "shutdown img: not A2I1 %s → built-in", path);
-        return false;
-    }
-
-    ESP_LOGI(TAG, "shutdown img: use SD %s (%u bytes)", path, static_cast<unsigned>(need));
-    *out_buf = buf;
-    *out_len = need;
-    return true;
+    // 壁纸功能已移除，恒定使用内置默认关机画面
+    return false;
 }
 
 constexpr size_t kMaxTouchVirtualKeys = 8;
@@ -456,7 +400,7 @@ void TouchFeedTask(void* arg) {
         vTaskDelay(pdMS_TO_TICKS(kTouchFeedPeriodMs));
     }
     s_touch_feed_task = nullptr;
-    vTaskDelete(nullptr);
+    // SpawnPsrWorker 包装层负责 WithCaps 自删,这里 return 即可
 }
 
 void StartTouchFeed(esp_lcd_touch_handle_t tp, TouchPollCallback poll) {
@@ -469,9 +413,9 @@ void StartTouchFeed(esp_lcd_touch_handle_t tp, TouchPollCallback poll) {
     }
     s_touch_feed_run = true;
     s_touch_feed_context = {tp, poll};
-    BaseType_t ok = xTaskCreatePinnedToCore(TouchFeedTask, "touch_feed", 4096, &s_touch_feed_context,
-                                             kTouchFeedPriority, &s_touch_feed_task, 0);
-    if (ok != pdPASS) {
+    // 纯 I2C 轮询 + LVGL 喂点路径(无 NVS/flash 写),栈放 PSRAM 省 4KB 内部 RAM
+    if (!SpawnPsrWorker("touch_feed", 4096, kTouchFeedPriority, TouchFeedTask,
+                        &s_touch_feed_context, &s_touch_feed_task, 0)) {
         s_touch_feed_run = false;
         s_touch_feed_task = nullptr;
         ESP_LOGE(TAG, "touch_feed create failed");
@@ -1213,7 +1157,7 @@ LVAdapterDisplay::LVAdapterDisplay(const esp_lcd_panel_handle_t panel,
                 if (display->notification_label_) {
                     lv_obj_add_flag(display->notification_label_, LV_OBJ_FLAG_HIDDEN);
                 }
-                if (display->status_label_ && !AssistantScreen::IsPttWaveVisible()) {
+                if (display->status_label_) {
                     lv_obj_remove_flag(display->status_label_, LV_OBJ_FLAG_HIDDEN);
                 }
             },
@@ -1324,9 +1268,7 @@ LVAdapterDisplay::LVAdapterDisplay(const esp_lcd_panel_handle_t panel,
     // APP 开关必须在 SetupUI 首次渲染首页前载入:否则 CollectEnabled 走"未载入默认全开",
     // 开机第一屏显示全部图标,进过设置再回首页才被开关过滤(本末倒置)。
     HomeScreen::InitAppToggles();
-    // 待机壁纸路由：开机即灌 NVS→缓存，勿等 Application::Start 联网后才 classic
-    wallpaper::HydrateFromNvsNow();
-    // 阅读首页快照：与壁纸同点灌入，首页可点时内存已有最近阅读/总时长
+    // 阅读首页快照：首页可点时内存已有最近阅读/总时长
     reader::book_home_snapshot::HydrateFromNvs();
 
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
@@ -1464,11 +1406,9 @@ void LVAdapterDisplay::RestoreStatusWidgetsLocked() {
         // 无缓存时勿回退「待命」：首页 Idle 应以时钟为准，由 ApplyIdleStatusBar 写入
         const char* body = status_body_cache_[0] != '\0' ? status_body_cache_ : "--:--";
         ApplyStatusTextLocked(body);
-        if (!AssistantScreen::IsPttWaveVisible()) {
-            lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
-            if (notification_label_ != nullptr) {
-                lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
-            }
+        lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
+        if (notification_label_ != nullptr) {
+            lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
         }
     }
 }
@@ -1553,21 +1493,10 @@ LVAdapterDisplay::~LVAdapterDisplay() {
     }
 }
 
-void LVAdapterDisplay::SetEmotion(const char* emotion) {
-    // 非对话页无表情控件，跳过加锁，少打断其它屏局刷。
-    if (!AssistantScreen::IsActive()) {
-        return;
-    }
-    DisplayLockGuard lock(this);
-    AssistantScreen::SetEmotion(emotion);
+void LVAdapterDisplay::SetEmotion(const char* /*emotion*/) {
 }
 
-void LVAdapterDisplay::SetChatMessage(const char* role, const char* content) {
-    // 只转发；AddMessage 内自行短持锁做 UI。解析/落盘在锁外，避免流式每包堵住翻页。
-    if (!AssistantScreen::IsActive()) {
-        return;
-    }
-    AssistantScreen::AddMessage(role, content);
+void LVAdapterDisplay::SetChatMessage(const char* /*role*/, const char* /*content*/) {
 }
 
 void LVAdapterDisplay::SetStatusTitlePrefix(const char* prefix) {
@@ -1811,14 +1740,6 @@ void LVAdapterDisplay::ApplyStatusTextLocked(const char* status) {
 }
 
 void LVAdapterDisplay::SetStatus(const char* status) {
-    // 百问页：屏蔽待命/聆听/回答，保留连接网络/登录等系统提示（跟 DeviceState）
-    if (AssistantScreen::IsActive()) {
-        const DeviceState state = Application::GetInstance().GetDeviceState();
-        if (state == kDeviceStateIdle || state == kDeviceStateListening ||
-            state == kDeviceStateSpeaking) {
-            return;
-        }
-    }
     DisplayLockGuard lock(this);
     if (status_label_ == nullptr) {
         return;
@@ -1864,18 +1785,10 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
     // I2C / 业务读取放锁外；所有 label 改动合并进一次 DisplayLock，减少无效局刷。
     char time_str[16] = {};
     bool set_time = false;
-    const bool assistant_page = AssistantScreen::IsActive();
     const auto device_state = app.GetDeviceState();
-    // 百问联网/启动中：顶栏保留「连接中…」等，勿用时钟盖住；Idle/聆听/播报仍刷时钟（对话文案已在 SetStatus 过滤）
-    const bool assistant_net_hint =
-        assistant_page && (device_state == kDeviceStateConnecting ||
-                           device_state == kDeviceStateStarting ||
-                           device_state == kDeviceStateWifiConfiguring ||
-                           device_state == kDeviceStateActivating);
-    const bool want_clock = AllowsIdleStatusClock() && !assistant_net_hint &&
-                            (assistant_page ||
-                             (!app.HasPendingActivationCode() && !app.IsXiaozhiVoiceActive() &&
-                              device_state == kDeviceStateIdle));
+    const bool want_clock = AllowsIdleStatusClock() &&
+                            (!app.HasPendingActivationCode() && !app.IsXiaozhiVoiceActive() &&
+                             device_state == kDeviceStateIdle);
     if (want_clock &&
         (update_all || last_status_update_time_ + std::chrono::seconds(10) <
                             std::chrono::system_clock::now())) {
@@ -1932,17 +1845,13 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
 
         if (set_time && status_label_ != nullptr) {
             ApplyStatusTextLocked(time_str);
-            // 百问 PTT 波形占用状态栏中央时只更新文案，勿揭开时钟盖住动画
-            // 通知展示中同样勿用时钟盖住（如开机 IO 扩展异常）
-            if (!AssistantScreen::IsPttWaveVisible()) {
-                const bool notif_on =
-                    notification_label_ != nullptr &&
-                    !lv_obj_has_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
-                if (!notif_on) {
-                    lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
-                    if (notification_label_ != nullptr) {
-                        lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
-                    }
+            const bool notif_on =
+                notification_label_ != nullptr &&
+                !lv_obj_has_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
+            if (!notif_on) {
+                lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
+                if (notification_label_ != nullptr) {
+                    lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
                 }
             }
             last_status_update_time_ = std::chrono::system_clock::now();
