@@ -319,10 +319,10 @@ endif()
 
 file(GLOB COMMON_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
 # 产测/老化等：与 Lang 音效同路径 EMBED，符号为 _binary_<basename>_ogg_{start,end}
-file(GLOB FACTORY_TEST_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/factory-test-assets/*.ogg)
+file(GLOB FACTORY_TEST_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/factory_test/*.ogg)
 if(FACTORY_TEST_SOUNDS)
     list(LENGTH FACTORY_TEST_SOUNDS _factory_test_sound_count)
-    message(STATUS "Embedding ${_factory_test_sound_count} factory-test sound(s) from factory-test-assets/")
+    message(STATUS "Embedding ${_factory_test_sound_count} factory-test sound(s) from assets/factory_test/")
 endif()
 
 # 固件内嵌 UI 图（随 app OTA，不进 resources/assets 分区 bin）
@@ -561,7 +561,7 @@ endif()
 
 spiffs_create_partition_assets(
     resources
-    "./xingzhi-assets"
+    "${PROJECT_DIR}/assets/resources"
     FLASH_IN_PROJECT
     MMAP_FILE_SUPPORT_FORMAT ".jpg,.png,.eaf,.a2i1"
     MMAP_SUPPORT_SJPG

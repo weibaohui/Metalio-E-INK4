@@ -54,11 +54,11 @@ tools\a2i1\build_windows.bat
 
 ## 转换 CLI
 
-源图可放本目录；产物放到 `main/xingzhi-assets/` 根目录打包进 `resources`。
+源图可放本目录；产物放到 `assets/resources/` 根目录打包进 `resources`。
 
 ```bash
 python3 tools/a2i1/jpg_to_a2i1.py tools/a2i1/bg_shutdown.png \
-  -o main/xingzhi-assets/bg_shutdown.a2i1 \
+  -o assets/resources/bg_shutdown.a2i1 \
   --preview /tmp/bg_shutdown_bw.png \
   --method threshold
 ```
