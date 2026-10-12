@@ -419,6 +419,25 @@ lv_obj_t* RadioScreen::Create() {
     s_alive = true;
     s_page = 0;
     LoadFavs();
+    // 需求:进屏默认定位到"上次最后播放的电台"(只定位高亮,不自动开播)。
+    // 台名+URL 已由 PlayCatalog 持久化(RadioSetLast);后台在播时 snapshot
+    // 会经 SyncStateLabels 对齐 s_playing,这里只在无在播台时用记忆兜底。
+    if (s_playing.empty()) {
+        std::string last_name, last_url;
+        RadioGetLast(last_name, last_url);
+        if (!last_name.empty()) s_playing = last_name;
+    }
+    if (!s_playing.empty()) {
+        // 列表翻到该台所在页(进屏默认"全部"视图);目录里已下架则自然落回第 1 页
+        for (int i = 0; i < TotalCount(); ++i) {
+            const int ci = ViewToCatalog(i);
+            radio_station_t st;
+            if (ci >= 0 && radio_catalog_get(ci, &st) && st.name == s_playing) {
+                s_page = i / kRowsPerPage;
+                break;
+            }
+        }
+    }
     // 导航框架靠这个标志区分"首页/子页"。所有子屏都调了(assistant/book/cloud/
     // glm/settings/wallpaper...),漏掉会让导航把它当首页处理 -> 点了进不去。
     ScreenSetIsHome(false);
