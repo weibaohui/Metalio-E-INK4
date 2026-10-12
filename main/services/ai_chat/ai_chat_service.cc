@@ -654,6 +654,7 @@ void PipelineTask(void*) {
 
         std::unique_ptr<minimax_speech::MiniMaxBidiTts> bidi_tts;
         std::atomic<bool> play_running{false};
+        std::atomic<bool> play_done{false};
         std::atomic<bool> speech_started{false};
         TaskHandle_t play_task = nullptr;
 
@@ -668,30 +669,41 @@ void PipelineTask(void*) {
                 if (codec) codec->EnableOutput(true);
 
                 play_running.store(true);
+                play_done.store(false);
                 struct PlayArg {
                     minimax_speech::MiniMaxBidiTts* tts;
                     std::atomic<bool>* running;
                     std::atomic<bool>* speaking;
+                    std::atomic<bool>* done;
                 };
-                auto* parg = new PlayArg{bidi_tts.get(), &play_running, &speech_started};
+                auto* parg = new PlayArg{bidi_tts.get(), &play_running, &speech_started, &play_done};
 
-                SpawnPsrWorker("aichat_play", 4096, 5, [](void* p) {
+                SpawnPsrWorker("aichat_play", 6144, 5, [](void* p) {
                     auto* a = static_cast<PlayArg*>(p);
                     auto* c = Board::GetInstance().GetAudioCodec();
                     std::vector<int16_t> chunk;
                     chunk.reserve(960);
-                    while (a->running->load() && !s_cancel.load() && !s_interrupt_tts.load()) {
+                    while (a->running->load() && !s_cancel.load() && !s_interrupt_tts.load() && !a->tts->IsCanceled()) {
+                        // 持续对 AudioService 保活, 防止 15s 省电定时器将 I2S 输出通道静默关闭
+                        Application::GetInstance().GetAudioService().KeepOutputAlive();
+
                         if (a->tts->PopAudioPcm(chunk, 960, 40)) {
                             if (!chunk.empty() && c) {
                                 if (!a->speaking->exchange(true)) {
                                     SetState(AiChatState::Speaking);
                                 }
+                                if (!c->output_enabled()) {
+                                    c->EnableOutput(true);
+                                }
                                 c->OutputData(chunk);
                             }
                         } else {
-                            if (a->tts->IsFinished()) break;
+                            if (a->tts->IsFinished() || a->tts->IsFlushed()) {
+                                if (!a->tts->HasAudioPcm()) break;
+                            }
                         }
                     }
+                    a->done->store(true);
                     delete a;
                     // SpawnPsrWorker 创建的 PSRAM 栈任务:直接 return 让包装层
                     // vTaskDeleteWithCaps 自删;裸 vTaskDelete 每次泄漏 4KB 栈。
@@ -718,7 +730,13 @@ void PipelineTask(void*) {
             if (bidi_tts) {
                 bidi_tts->Cancel();
                 play_running.store(false);
+                int wait_cycles = 0;
+                while (!play_done.load() && wait_cycles < 100) {
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                    ++wait_cycles;
+                }
                 PowerPolicy::GetInstance().Release(PowerNeed::AiChatTts);
+                bidi_tts->Close();
             }
             SetState(AiChatState::Error, err);
             break;
@@ -732,16 +750,27 @@ void PipelineTask(void*) {
         // 4. 收尾 TTS 播放
         if (bidi_tts && bidi_tts->IsSessionActive()) {
             bidi_tts->Flush();
-            bidi_tts->Finish();
-            // 等待音频播放线程放完缓冲中的音频
+            // 只要服务端在活跃推送（每句都会刷新活跃时间），就持续接收，直到 task_flushed 或 15s 静默
+            bidi_tts->WaitUntilDoneOrIdle(15000);
+
+            // 等待音频播放线程放完缓冲中的所有音频 (或被用户打断)
             while (play_running.load() && !s_cancel.load() && !s_interrupt_tts.load()) {
-                if (bidi_tts->IsFinished() && !bidi_tts->HasAudioPcm()) {
+                if (!bidi_tts->HasAudioPcm()) {
                     break;
                 }
-                vTaskDelay(pdMS_TO_TICKS(40));
+                vTaskDelay(pdMS_TO_TICKS(50));
             }
+
+            // 关键修复: 通知播放线程退出并严密等待播放线程彻底结束, 杜绝悬空指针导致的 xQueueSemaphoreTake 崩溃
             play_running.store(false);
+            int wait_cycles = 0;
+            while (!play_done.load() && wait_cycles < 100) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                ++wait_cycles;
+            }
+
             PowerPolicy::GetInstance().Release(PowerNeed::AiChatTts);
+            bidi_tts->Finish();
             bidi_tts->Close();
         } else if (cfg.auto_tts && !s_cancel.load() && !s_interrupt_tts.load()) {
             // Fallback: WSS 失败时的 HTTP TTS 兜底
