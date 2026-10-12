@@ -6,6 +6,8 @@ components/*
 !components/esp-wifi-connect/**
 !components/esp_lvgl_port/
 !components/esp_lvgl_port/**
+!components/reader_core/
+!components/reader_core/**
 managed_components/
 build/
 .vscode/
