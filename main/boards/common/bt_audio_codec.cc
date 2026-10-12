@@ -128,12 +128,22 @@ int BTAudioCodec::Write(const int16_t *data, int samples)
 
 int BTAudioCodec::Read(int16_t *dest, int samples)
 {
-    size_t bytes_read;
+    size_t bytes_read = 0;
 
-    std::vector<int32_t> bit32_buffer(samples);
-    if (i2s_channel_read(rx_handle_, bit32_buffer.data(), samples * sizeof(int32_t), &bytes_read, portMAX_DELAY) != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Read Failed!");
+    // 复用成员缓冲(容量只增不减),对齐 Write/tx_buffer_:杜绝每次调用临时
+    // vector 分配/释放把内部堆撕碎。
+    if (static_cast<int>(rx_buffer_.size()) < samples) {
+        rx_buffer_.resize(samples);
+    }
+    std::vector<int32_t>& bit32_buffer = rx_buffer_;
+
+    // 有限超时对齐 Write(1000ms):portMAX_DELAY 在 DMA/对端停摆时会永久挂死
+    // 录音路径;去掉硬失败即当失败返回 0,远优于整机假死。
+    esp_err_t err = i2s_channel_read(rx_handle_, bit32_buffer.data(),
+                                     samples * sizeof(int32_t), &bytes_read,
+                                     pdMS_TO_TICKS(1000));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2s_channel_read failed: %s (samples=%d)", esp_err_to_name(err), samples);
         return 0;
     }
 

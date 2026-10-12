@@ -15,6 +15,8 @@ protected:
     // 每次临时 new/free 8KB 内部 RAM 会把本就只有 ~30KB 的内部堆撕碎,
     // 最终 lwIP 拿不到连续内存导致整个网络栈饿死(WiFi 仍关联但 ping/TCP 全死)。
     std::vector<int32_t> tx_buffer_;
+    // I2S 读的 32bit 采样缓冲。同样成员复用,避免 Read 每次 vector 堆分配抖动。
+    std::vector<int32_t> rx_buffer_;
 
     virtual int Write(const int16_t* data, int samples) override;
     virtual int Read(int16_t* dest, int samples) override;

@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 #include "image_util.h"
 #include "reader_types.h"
+#include "utils/psr_worker.h"
 
 static const char *TAG = "a2ui_image";
 
@@ -64,7 +65,7 @@ typedef struct {
  *   -----------                         -------------------------
  *   load_async → alloc surface
  *             → enqueue FIFO
- *             → idle? xTaskCreate
+ *             → idle? SpawnPsrWorker (PSRAM stack)
  *   abort/clear → gen++, drain queue
  *   clear       → free all surfaces
  *
@@ -910,8 +911,7 @@ static void image_task(void *arg)
             ESP_LOGI(TAG, "run next queued image job");
         }
     }
-
-    vTaskDelete(NULL);
+    // SpawnPsrWorker 包装层 return 后 vTaskDeleteWithCaps 自删,勿再 vTaskDelete。
 }
 
 esp_err_t a2ui_image_load_async(lv_obj_t *img_obj, const char *url, int max_w, int max_h)
@@ -992,9 +992,10 @@ esp_err_t a2ui_image_load_async(lv_obj_t *img_obj, const char *url, int max_w, i
         return ESP_OK;
     }
 
-    // 任务内可能写 SD 缓存：栈须 INTERNAL
-    if (xTaskCreate(image_task, "a2ui_img", A2UI_IMG_TASK_STACK, job, A2UI_IMG_TASK_PRIO, NULL) !=
-        pdPASS) {
+    // 栈放 PSRAM(统一入口 SpawnPsrWorker):12KB 内部栈挤占 DRAM。
+    // 任务内只做 HTTP/SD FatFS(fopen),不直接碰 NVS/SPI flash;与 book_* PSRAM
+    // worker 同模式。return 后由包装层自删。
+    if (!SpawnPsrWorker("a2ui_img", A2UI_IMG_TASK_STACK, A2UI_IMG_TASK_PRIO, image_task, job)) {
         free_job(job);
         portENTER_CRITICAL(&s_job_mux);
         s_worker_alive = false;
