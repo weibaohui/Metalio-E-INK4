@@ -1,25 +1,13 @@
 #include "home_screen.h"
 
-#include "ai_voice_chat_screen/ai_voice_chat_screen.h"
+#include "app_manager.h"
 #include "application.h"
-#include "services/ai_chat/ai_chat_service.h"
 #include "home_screen/home_hero.h"
 #include "assets/lang_config.h"
-#include "book_screen/book_screen.h"
-#include "calendar_screen/calendar_screen.h"
-#include "glm_usage_screen/glm_usage_screen.h"
 #include "haptic_feedback.h"
 #include "lv_adapter_display.h"
-#include "power_screen/power_screen.h"
-#include "radio_screen/radio_screen.h"
-#include "services/radio/radio_mcp.h"
-#include "services/calendar/calendar_mcp.h"
 #include "screen_common.h"
 #include "settings.h"
-#include "settings_screen/settings_screen.h"
-#include "system_info_screen/system_info_screen.h"
-#include "time_sync_screen/time_sync_screen.h"
-#include "backup_screen/backup_screen.h"
 #include "vk_key_handler.h"
 #include "vk_page_repeat.h"
 
@@ -127,99 +115,15 @@ namespace
         }
     }
 
-    struct AppEntry
-    {
-        const char *id;         // 稳定短 id(NVS 键 en_<id>,需 ≤15 字符)
-        const char *icon_path;
-        const char *(*name)();
-        lv_obj_t *(*create)();
-        // boot 期 MCP 注册入口(仅开着的 APP 会被调,见 RegisterEnabledAppMcpTools)。
-        // GLM 例外:它的 Init 有时序要求,在 StartNetwork 前按开关单独做,这里留空。
-        void (*register_mcp)() = nullptr;
-    };
-
-    const char *AppNameGlm() { return "GLM 用量"; }
-    const char *AppNameRadio() { return "收音机"; }
-    const char *AppNameBook() { return Lang::Strings::HOME_APP_BOOK; }
-    const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
-    const char *AppNameCalendar() { return "日历"; }   // 新 APP 暂不走 i18n
-    const char *AppNameTimeSync() { return "校时"; }   // 新 APP 暂不走 i18n
-    const char *AppNamePower() { return "电源"; }   // 新 APP 暂不走 i18n
-    const char *AppNameSysInfo() { return "系统信息"; }   // 新 APP 暂不走 i18n
-    const char *AppNameAiChat() { return "AI 对话"; }   // 新 APP 暂不走 i18n
-    const char *AppNameBackup() { return "备份恢复"; }
-
-    constexpr AppEntry kApps[] = {
-        {"glm", "A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create},
-        {"book", "A:ic_app_home_book.spng", AppNameBook, BookScreen::Create},
-        {"radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create, RadioRegisterMcpTools},
-        {"time", "A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create},
-        // 日历:暂无专用图标,先复用 task 占位(见 PR13 描述)
-        {"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create, CalendarRegisterMcpTools},
-        {"power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create},
-        {"info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create},
-        {"aichat", "A:ic_app_home_buddy.spng", AppNameAiChat, AiVoiceChatScreen::Create, AiChat_BootRegister},
-        {"backup", "A:ic_app_home_cloud.spng", AppNameBackup, BackupScreen::Create},
-        {"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create},
-    };
-
-    // 随 kApps 自动变长；页数 = ceil(总数 / 每页 12)
-    constexpr int kTotalApps = static_cast<int>(sizeof(kApps) / sizeof(kApps[0]));
-
-    // ---- APP 开关(需求一.3):只显示开启的 APP ----
-    // NVS "apps/en_<id>"(bool,默认开)。"set"(设置)永驻不可关(否则无法再进设置打开别的)。
-    // RAM 缓存由 HomeScreen::InitAppToggles() 在开机 main 任务载入;首页/设置页都跑在
-    // LVGL worker(PSRAM 栈),直接读 NVS 会关 cache 触发断言 —— 所以读全走 RAM 缓存。
-    constexpr int kSettingsAppIndex = kTotalApps - 1;   // kApps 末位是"设置"
-    uint32_t s_enabled_mask = 0;    // bit i = kApps[i] 开启
-    bool s_toggles_loaded = false;
-
-    int AppIndexById(const char *id)
-    {
-        if (id == nullptr) return -1;
-        for (int i = 0; i < kTotalApps; ++i)
-        {
-            if (std::strcmp(kApps[i].id, id) == 0) return i;
-        }
-        return -1;
-    }
-
-    bool AppIsEnabledId(const char *id)
-    {
-        const int i = AppIndexById(id);
-        if (i < 0) return true;
-        if (i == kSettingsAppIndex) return true;    // 设置永驻
-        if (!s_toggles_loaded) return true;         // 未载入(异常)默认全开,别误隐藏
-        return (s_enabled_mask & (1u << i)) != 0;
-    }
-
-    // 过滤出开启的 APP(保持 src 顺序),返回个数。
-    int CollectEnabled(const AppEntry *src, int n, const AppEntry **out, int cap)
-    {
-        int cnt = 0;
-        for (int i = 0; i < n && cnt < cap; ++i)
-        {
-            if (AppIsEnabledId(src[i].id)) out[cnt++] = &src[i];
-        }
-        return cnt;
-    }
-
-    int EnabledAppCount()
-    {
-        const AppEntry *tmp[kTotalApps];
-        return CollectEnabled(kApps, kTotalApps, tmp, kTotalApps);
-    }
-
     lv_obj_t *s_apps = nullptr;
     lv_obj_t *s_page_dots = nullptr;
     lv_obj_t *s_home_scr = nullptr;
     int s_home_page = 0; // 离开子页再回首页时保持页码
-    lv_obj_t *CreateAppCell(lv_obj_t *parent, const AppEntry &entry, int card_style);
+    lv_obj_t *CreateAppCell(lv_obj_t *parent, const AppDesc &entry, int card_style);
 
     int PageCount()
     {
-        // 动态显示(需求一.3):页数按"开启的 APP 数"算,而不是固定总数
-        const int enabled = EnabledAppCount();
+        const int enabled = AppManager::GetInstance().GetEnabledAppCount();
         return (enabled + kAppsPerPage - 1) / kAppsPerPage;
     }
 
@@ -284,9 +188,8 @@ namespace
 
         lv_obj_clean(s_apps);
         const int card_style = HomeScreen::LoadCardStyle();
-        // 动态显示(需求一.3):只渲染开启的 APP。先收集开启项,再按页切片。
-        const AppEntry *enabled[kTotalApps];
-        const int enabled_cnt = CollectEnabled(kApps, kTotalApps, enabled, kTotalApps);
+        auto enabled = AppManager::GetInstance().GetEnabledApps();
+        const int enabled_cnt = static_cast<int>(enabled.size());
         const int start = s_home_page * kAppsPerPage;
         int end = start + kAppsPerPage;
         if (end > enabled_cnt)
@@ -434,22 +337,22 @@ namespace
 
     void LaunchAppAsync(void *user_data)
     {
-        const auto *entry = static_cast<const AppEntry *>(user_data);
+        const auto *entry = static_cast<const AppDesc *>(user_data);
         if (entry == nullptr || entry->create == nullptr)
         {
             return;
         }
-        ESP_LOGI(TAG, "launch %s", entry->name());
+        ESP_LOGI(TAG, "launch %s", entry->name != nullptr ? entry->name() : entry->id);
         ScreenNavigateTo(entry->create);
     }
 
     void OnAppClicked(lv_event_t *e)
     {
         lv_obj_t *obj = static_cast<lv_obj_t *>(lv_event_get_target(e));
-        const AppEntry *entry = nullptr;
+        const AppDesc *entry = nullptr;
         while (obj != nullptr)
         {
-            entry = static_cast<const AppEntry *>(lv_obj_get_user_data(obj));
+            entry = static_cast<const AppDesc *>(lv_obj_get_user_data(obj));
             if (entry != nullptr)
             {
                 break;
@@ -458,17 +361,17 @@ namespace
         }
         if (entry == nullptr)
         {
-            entry = static_cast<const AppEntry *>(lv_event_get_user_data(e));
+            entry = static_cast<const AppDesc *>(lv_event_get_user_data(e));
         }
         if (entry == nullptr || entry->create == nullptr)
         {
             return;
         }
         // 事件回调里删当前屏不安全，延后一拍再切（与返回键一致）
-        lv_async_call(LaunchAppAsync, const_cast<AppEntry *>(entry));
+        lv_async_call(LaunchAppAsync, const_cast<AppDesc *>(entry));
     }
 
-    lv_obj_t *CreateAppCell(lv_obj_t *parent, const AppEntry &entry, int card_style)
+    lv_obj_t *CreateAppCell(lv_obj_t *parent, const AppDesc &entry, int card_style)
     {
         // 整卡为唯一点击热区；样式来自设置→主题（NVS）。
         lv_obj_t *cell = lv_obj_create(parent);
@@ -484,8 +387,8 @@ namespace
         // 手势冒泡:在卡片上起手的左右滑动要冒泡到宫格容器,由屏的手势处理器翻页
         lv_obj_add_flag(cell, LV_OBJ_FLAG_GESTURE_BUBBLE);
         HapticAttachClick(cell);
-        lv_obj_set_user_data(cell, const_cast<AppEntry *>(&entry));
-        lv_obj_add_event_cb(cell, OnAppClicked, LV_EVENT_CLICKED, const_cast<AppEntry *>(&entry));
+        lv_obj_set_user_data(cell, const_cast<AppDesc *>(&entry));
+        lv_obj_add_event_cb(cell, OnAppClicked, LV_EVENT_CLICKED, const_cast<AppDesc *>(&entry));
         lv_obj_t *icon = lv_image_create(cell);
         lv_image_set_src(icon, entry.icon_path);
         lv_obj_set_size(icon, kIconSize, kIconSize);
@@ -493,7 +396,7 @@ namespace
         lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_t *name = lv_label_create(cell);
-        lv_label_set_text(name, entry.name());
+        lv_label_set_text(name, entry.name != nullptr ? entry.name() : entry.id);
         lv_obj_set_width(name, HOME_APP_CARD_W);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_font(name, fontpack_lv_font_ui(), 0);
@@ -561,79 +464,46 @@ void HomeScreen::SaveCardStyle(int style)
     }
 }
 
-// ---- APP 开关(需求一.3)公开实现 ----
+// ---- APP 开关公开实现（转由 AppManager 统一管理）----
 
 void HomeScreen::InitAppToggles()
 {
-    // boot,main 任务(内部栈):读 NVS 到 RAM 缓存。
-    uint32_t mask = 0;
-    Settings settings("apps", false);
-    for (int i = 0; i < kTotalApps; ++i)
-    {
-        char key[16];
-        std::snprintf(key, sizeof(key), "en_%s", kApps[i].id);
-        if (settings.GetBool(key, true))
-        {
-            mask |= (1u << i);
-        }
-    }
-    mask |= (1u << kSettingsAppIndex);   // "设置"永驻
-    s_enabled_mask = mask;
-    s_toggles_loaded = true;
-    ESP_LOGI(TAG, "app toggles loaded: mask=0x%02x", (unsigned)mask);
+    AppManager::GetInstance().Init();
 }
 
-int HomeScreen::GetAppToggleCount() { return kTotalApps; }
+int HomeScreen::GetAppToggleCount()
+{
+    return AppManager::GetInstance().GetAppCount();
+}
 
 const char *HomeScreen::GetAppToggleName(int index)
 {
-    if (index < 0 || index >= kTotalApps) return "";
-    return kApps[index].name();
+    return AppManager::GetInstance().GetAppNameByIndex(index);
 }
 
 bool HomeScreen::IsAppEnabledByIndex(int index)
 {
-    if (index < 0 || index >= kTotalApps) return true;
-    if (index == kSettingsAppIndex) return true;
-    if (!s_toggles_loaded) return true;   // 未载入(异常)默认全开,别误隐藏
-    return (s_enabled_mask & (1u << index)) != 0;
+    return AppManager::GetInstance().IsAppEnabledByIndex(index);
 }
 
-bool HomeScreen::IsAppMandatoryByIndex(int index) { return index == kSettingsAppIndex; }
+bool HomeScreen::IsAppMandatoryByIndex(int index)
+{
+    return AppManager::GetInstance().IsAppMandatoryByIndex(index);
+}
 
-bool HomeScreen::IsAppEnabledById(const char *id) { return AppIsEnabledId(id); }
+bool HomeScreen::IsAppEnabledById(const char *id)
+{
+    return AppManager::GetInstance().IsAppEnabled(id);
+}
 
 void HomeScreen::RegisterEnabledAppMcpTools()
 {
-    // 表驱动(分析文档 §3.1):APP 的 MCP 入口收进 AppEntry.register_mcp,
-    // 新 APP 不再需要在 application.cc 手写 if。
-    for (int i = 0; i < kTotalApps; ++i)
-    {
-        if (kApps[i].register_mcp == nullptr) continue;
-        if (!AppIsEnabledId(kApps[i].id))
-        {
-            ESP_LOGI(TAG, "app %s off: skip MCP tools", kApps[i].id);
-            continue;
-        }
-        kApps[i].register_mcp();
-        ESP_LOGI(TAG, "app mcp tools registered: %s", kApps[i].id);
-    }
+    AppManager::GetInstance().RegisterEnabledMcpTools();
 }
 
 void HomeScreen::SetAppEnabled(int index, bool enabled)
 {
-    if (index < 0 || index >= kTotalApps) return;
-    if (index == kSettingsAppIndex) return;   // 永驻不可关
-    if (enabled) s_enabled_mask |= (1u << index);
-    else s_enabled_mask &= ~(1u << index);
-    // 落盘到 main 任务(设置页在 LVGL worker PSRAM 栈,禁直接写 flash)。
-    const std::string key = std::string("en_") + kApps[index].id;
-    Application::GetInstance().Schedule([key, enabled]() {
-        Settings settings("apps", true);
-        settings.SetBool(key.c_str(), enabled);
-    });
-    // 首页在返回时经工厂重建会重读缓存,此处无需强制刷新。
-    ESP_LOGI(TAG, "app %s -> %s", kApps[index].id, enabled ? "on" : "off");
+    AppManager::GetInstance().SetAppEnabled(index, enabled);
 }
 
 lv_obj_t *HomeScreen::Create()
@@ -658,8 +528,9 @@ lv_obj_t *HomeScreen::Create()
     }
 
     const int card_style = LoadCardStyle();
+    const int total_apps = AppManager::GetInstance().GetAppCount();
     const int pages = PageCount();
-    ESP_LOGI(TAG, "layout apps=%d pages=%d per_page=%d style=%d", kTotalApps, pages,
+    ESP_LOGI(TAG, "layout apps=%d pages=%d per_page=%d style=%d", total_apps, pages,
              kAppsPerPage, card_style);
 
     // 上半：时分 + 日期天气（历史经典待机上半区；不含待办）
@@ -669,7 +540,7 @@ lv_obj_t *HomeScreen::Create()
     // 多屏分页(需求:触摸手势+多屏):宫格容器固定为"单页视口"(最多 kRowsPerPage 行,
     // 贴合屏幕),超出的 APP 落到下一页,由左右滑动/盖板虚拟键切换 + 页码指示。
     // 不再是"行数随 app 总数无限长高"(那样超一屏会溢出且无分页可达)。
-    const int total_rows = (kTotalApps + kColsPerRow - 1) / kColsPerRow;
+    const int total_rows = (total_apps + kColsPerRow - 1) / kColsPerRow;
     const int apps_rows = total_rows < kRowsPerPage ? total_rows : kRowsPerPage;
     const lv_coord_t apps_content_h =
         HOME_APPS_PAD_TOP + apps_rows * HOME_APP_CARD_H +

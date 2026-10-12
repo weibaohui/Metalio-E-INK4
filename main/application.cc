@@ -16,7 +16,7 @@
 #include "services/time_service.h"
 #include "services/mem_report/mem_report.h"
 #include "assets.h"
-#include "home_screen/home_screen.h"
+#include "app_manager.h"
 #include "boot_key_handler.h"
 #include "fontpack_lvgl.h"
 #include "settings.h"
@@ -732,16 +732,16 @@ void Application::Start() {
          [&] {
              // APP 开关(需求一.3):开机把 NVS 开关载入 RAM 缓存(main 任务,内部栈)。
              // 必须早于:1) 下方 MCP 工具注册的开关门控;2) 首页首次渲染。
-             HomeScreen::InitAppToggles();
+             AppManager::GetInstance().Init();
              // GLM 用量服务的 Init(NVS 读 + MCP 工具注册)必须在 StartNetwork 之前完成:
              // StartNetwork 会阻塞数十秒(慢路由连网),期间用户已可进入 GLM 用量屏;
              // 若 Init 迟到,屏幕侧 Start() 因 !inited_ 空手而归 → 无 worker 不刷新,
              // 卡"尚未查询"(2026-10-09 实测:22s 进屏报 start-before-init,125s Init 才跑)。
              // Init 幂等。应用开关关掉 GLM 用量时不初始化:不注册 MCP,也不载入状态。
-             if (HomeScreen::IsAppEnabledById("glm")) {
+             if (AppManager::GetInstance().IsAppEnabled("glm")) {
                  GlmUsageService::GetInstance().Init();
              }
-             if (HomeScreen::IsAppEnabledById("radio")) {
+             if (AppManager::GetInstance().IsAppEnabled("radio")) {
                  RadioPlayer::GetInstance().Init();
              }
          }},
@@ -783,7 +783,7 @@ void Application::Start() {
              // MCP 注册跟随应用开关,表驱动(关掉的 APP 连 MCP 工具都不注册,重启后生效)。
              // syslog/MCP 自身是系统服务非 APP,常注册;GLM 的 Init(含 MCP 注册)
              // 已按开关在 StartNetwork 前完成(见上)。
-             HomeScreen::RegisterEnabledAppMcpTools();
+             AppManager::GetInstance().RegisterEnabledMcpTools();
              SyslogRegisterMcpTools();   // 需求一.2:syslog 的 MCP 配置接口(self.syslog.*)
              MemReport_RegisterMcpTools();  // 每任务内存占用查询(self.mem.tasks)
              LocalMcpServer::GetInstance().Start();
@@ -797,7 +797,7 @@ void Application::Start() {
              CalendarIcs_Init();
              // APP 开关(需求一.3):NVS→RAM 缓存已随显示初始化(SetupUI 首次渲染首页前)
              // 载入,开机第一屏就按开关过滤图标;此处幂等重载兜底,防启动路径变动回归。
-             HomeScreen::InitAppToggles();
+             AppManager::GetInstance().Init();
          }},
         {"boot_ready",
          [&] {
