@@ -9,10 +9,20 @@
 #include <network_interface.h>
 #include <esp_err.h>
 
-#include "led/led.h"
 #include "backlight.h"
 #include "camera.h"
 #include "assets.h"
+
+class Led {
+public:
+    virtual ~Led() = default;
+    virtual void OnStateChanged() {}
+};
+
+class NoLed : public Led {
+public:
+    virtual void OnStateChanged() override {}
+};
 
 // 网络事件枚举：统一给业务层回调。
 enum class NetworkEvent {

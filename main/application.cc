@@ -27,7 +27,6 @@
 #include "reader/book_home_snapshot.h"
 #include "reader/book_progress_sync.h"
 #include "reader/book_library_warmup.h"
-#include "device_wifi_location.h"
 #include "api_endpoints.h"
 
 #include <cstring>
