@@ -29,6 +29,8 @@ void AiChat_Init();
 void AiChat_BeginRecord();     // 按住:开始录音
 void AiChat_ReleaseRecord();   // 松手:停录并跑 STT+对话
 void AiChat_AbortRecord();     // 取消:不跑 STT,直接结束(离屏用;播报也一并停)
+void AiChat_CancelTap();       // 单击/误触松手:停录并打断播报,立即归位 Idle(不跑 STT)
+void AiChat_StopAll();         // 停止按钮:强制打断一切操作(录音/转写/LLM输出/播报),立即归位 Idle
 
 // 管线任务是否还活着(录音/转写/思考/播报任一进行中)。
 bool AiChat_IsBusy();

@@ -27,6 +27,8 @@ struct AvcUi {
     lv_obj_t* auto_tts_cb = nullptr;  // 自动发声勾选框
     lv_obj_t* talk_btn = nullptr;     // 按住说话
     lv_obj_t* talk_lbl = nullptr;
+    lv_obj_t* stop_btn = nullptr;     // 停止/打断按钮
+    lv_obj_t* stop_lbl = nullptr;
     lv_obj_t* chat_box = nullptr;     // 对话可滚动容器 (我+AI回答区)
     lv_obj_t* user_lbl = nullptr;     // 我: <识别文本>
     lv_obj_t* reply_lbl = nullptr;    // AI: <回复>
@@ -402,6 +404,10 @@ void OpenVoiceSettingsModal(lv_obj_t* parent_screen) {
     }, LV_EVENT_CLICKED, nullptr);
 }
 
+static std::string s_last_rendered_user;
+static std::string s_last_rendered_reply;
+static std::string s_last_rendered_err;
+
 void RefreshState() {
     if (!s_alive || s_ui.status_lbl == nullptr) return;
     lv_label_set_text(s_ui.status_lbl, AiChat_GetStateText().c_str());
@@ -416,7 +422,8 @@ void RefreshState() {
                                     recording ? lv_color_white() : lv_color_black(), 0);
     }
     const std::string user = AiChat_GetUserText();
-    if (s_ui.user_lbl != nullptr) {
+    if (s_ui.user_lbl != nullptr && user != s_last_rendered_user) {
+        s_last_rendered_user = user;
         if (!user.empty()) lv_label_set_text(s_ui.user_lbl, ("我:" + user).c_str());
         else lv_label_set_text(s_ui.user_lbl, "");
     }
@@ -424,40 +431,71 @@ void RefreshState() {
     const std::string err = AiChat_GetError();
     if (s_ui.reply_lbl != nullptr) {
         if (!reply.empty()) {
-            lv_label_set_text(s_ui.reply_lbl, ("AI:" + reply).c_str());
-            // 如果处于生成中或播报中, 自动滚动到底部最新内容, 保证输出内容始终可见
-            if (s_ui.chat_box != nullptr && (st == AiChatState::Thinking || st == AiChatState::Speaking)) {
-                lv_obj_scroll_to_view(s_ui.reply_lbl, LV_ANIM_OFF);
+            if (reply != s_last_rendered_reply) {
+                s_last_rendered_reply = reply;
+                s_last_rendered_err.clear();
+                lv_label_set_text(s_ui.reply_lbl, ("AI:" + reply).c_str());
+                // 仅当大模型吐出新文本时自动跟随滚动到底部；生成完毕后不干扰用户自由上下滑动浏览
+                if (s_ui.chat_box != nullptr && (st == AiChatState::Thinking || st == AiChatState::Speaking)) {
+                    lv_obj_scroll_to_view(s_ui.reply_lbl, LV_ANIM_OFF);
+                }
             }
         } else if (!err.empty()) {
-            lv_label_set_text(s_ui.reply_lbl, ("错误:" + err).c_str());
+            if (err != s_last_rendered_err) {
+                s_last_rendered_err = err;
+                s_last_rendered_reply.clear();
+                lv_label_set_text(s_ui.reply_lbl, ("错误:" + err).c_str());
+            }
         } else {
-            lv_label_set_text(s_ui.reply_lbl, "");
-            // 新提问清空时, 将滚动条复位到顶部
-            if (s_ui.chat_box != nullptr) {
-                lv_obj_scroll_to_y(s_ui.chat_box, 0, LV_ANIM_OFF);
+            if (!s_last_rendered_reply.empty() || !s_last_rendered_err.empty()) {
+                s_last_rendered_reply.clear();
+                s_last_rendered_err.clear();
+                lv_label_set_text(s_ui.reply_lbl, "");
+                // 新提问清空时, 将滚动条复位到顶部
+                if (s_ui.chat_box != nullptr) {
+                    lv_obj_scroll_to_y(s_ui.chat_box, 0, LV_ANIM_OFF);
+                }
             }
         }
     }
 }
 
+static int64_t s_press_down_us = 0;
+
 void OnTalkPressed(lv_event_t*) {
-    // 按住:开始录音(若 STT/LLM 未配置则提示)
+    // 按住: 开始录音 (若 STT/LLM 未配置则提示)
     if (!AiChat_SttConfigured() || !AiChat_LlmConfigured()) {
         if (s_ui.status_lbl != nullptr) {
             lv_label_set_text(s_ui.status_lbl, "先用 MCP 配置 aichat 的 stt_key 和 llm_key");
         }
         return;
     }
+    s_press_down_us = esp_timer_get_time();
     HapticPulseIfEnabled();
     AiChat_BeginRecord();
     RefreshState();
 }
 
 void OnTalkReleased(lv_event_t*) {
-    if (AiChat_GetState() != AiChatState::Recording) return;
+    const int64_t held_ms = (s_press_down_us > 0) ? (esp_timer_get_time() - s_press_down_us) / 1000 : 0;
+    s_press_down_us = 0;
+
+    // 误触过滤: 按住时长 < 300ms 视为误触, 快速取消并复位 Idle
+    if (held_ms < 300) {
+        AiChat_CancelTap();
+        RefreshState();
+        return;
+    }
+
     HapticPulseIfEnabled();
     AiChat_ReleaseRecord();
+    RefreshState();
+}
+
+void OnStopClicked(lv_event_t*) {
+    HapticPulseIfEnabled();
+    // 强制打断一切操作: 正在录音、转写中、大模型流式输出中、语音播报中一律立即终止并归位
+    AiChat_StopAll();
     RefreshState();
 }
 
@@ -473,6 +511,10 @@ void OnScreenUnloaded(lv_event_t*) {
     // 否则退出后任务还在后台跑,"播报中"状态残留到下次进屏
     if (AiChat_IsBusy()) AiChat_AbortRecord();
     if (s_timer != nullptr) { lv_timer_delete(s_timer); s_timer = nullptr; }
+    s_last_rendered_user.clear();
+    s_last_rendered_reply.clear();
+    s_last_rendered_err.clear();
+    s_press_down_us = 0;
     s_ui = {};
 }
 
@@ -570,13 +612,18 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     lv_obj_t* chat = lv_obj_create(body);
     lv_obj_remove_style_all(chat);
     lv_obj_set_width(chat, lv_pct(100));
+    lv_obj_set_height(chat, 0);          // 显式设为 0, 让 flex_grow 精确计算剩余高度, 避免被长文本撑大越界
     lv_obj_set_flex_grow(chat, 1);
     lv_obj_set_flex_flow(chat, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(chat, 8, 0);
+    lv_obj_set_style_bg_color(chat, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(chat, LV_OPA_COVER, 0); // 不透明背景, 确保触摸判定 100% 命中
+
     // 启用触摸点击与垂直手势滑动
     lv_obj_add_flag(chat, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(chat, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(chat, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_add_flag(chat, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     lv_obj_set_scroll_dir(chat, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(chat, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_style_width(chat, 4, LV_PART_SCROLLBAR);
@@ -588,11 +635,24 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     // 超出对话区高度由容器竖向滚动承载 (支持手势上下滑动看全文)
     s_ui.user_lbl = ScreenMakeLabel(chat, "", 25, true);
     s_ui.reply_lbl = ScreenMakeLabel(chat, "", 25, true);
+    lv_obj_add_flag(s_ui.user_lbl, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_flag(s_ui.reply_lbl, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    // 按住说话大按钮(屏幕下方;播报中单击=停播,按住=开录)
-    s_ui.talk_btn = lv_obj_create(body);
+    // 底部控制行: 左侧按住说话 + 右侧停止/打断小按钮 ("用那种停止的感觉，点击能打断一切")
+    lv_obj_t* bottom_row = lv_obj_create(body);
+    lv_obj_remove_style_all(bottom_row);
+    lv_obj_set_size(bottom_row, lv_pct(100), 90);
+    lv_obj_set_flex_flow(bottom_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bottom_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(bottom_row, 10, 0);
+    DisableScroll(bottom_row);
+    lv_obj_clear_flag(bottom_row, LV_OBJ_FLAG_CLICKABLE);
+
+    // 左侧: 按住说话大按钮
+    s_ui.talk_btn = lv_obj_create(bottom_row);
     lv_obj_remove_style_all(s_ui.talk_btn);
-    lv_obj_set_size(s_ui.talk_btn, lv_pct(100), 90);
+    lv_obj_set_height(s_ui.talk_btn, 90);
+    lv_obj_set_flex_grow(s_ui.talk_btn, 1);
     lv_obj_set_style_bg_color(s_ui.talk_btn, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(s_ui.talk_btn, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_ui.talk_btn, lv_color_black(), 0);
@@ -608,6 +668,39 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     lv_obj_set_style_text_color(s_ui.talk_lbl, lv_color_black(), 0);
     lv_obj_center(s_ui.talk_lbl);
     lv_obj_clear_flag(s_ui.talk_lbl, LV_OBJ_FLAG_CLICKABLE);
+
+    // 右侧: 停止/打断小按钮 ("用那种停止的感觉，点击能打断一切")
+    s_ui.stop_btn = lv_obj_create(bottom_row);
+    lv_obj_remove_style_all(s_ui.stop_btn);
+    lv_obj_set_size(s_ui.stop_btn, 92, 90);
+    lv_obj_set_style_bg_color(s_ui.stop_btn, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(s_ui.stop_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_ui.stop_btn, lv_color_black(), 0);
+    lv_obj_set_style_border_width(s_ui.stop_btn, 3, 0);
+    lv_obj_set_style_radius(s_ui.stop_btn, 16, 0);
+    lv_obj_set_flex_flow(s_ui.stop_btn, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_ui.stop_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(s_ui.stop_btn, 4, 0);
+    lv_obj_set_style_pad_row(s_ui.stop_btn, 4, 0);
+    lv_obj_add_flag(s_ui.stop_btn, LV_OBJ_FLAG_CLICKABLE);
+    DisableScroll(s_ui.stop_btn);
+    HapticAttachClick(s_ui.stop_btn);
+    lv_obj_add_event_cb(s_ui.stop_btn, OnStopClicked, LV_EVENT_CLICKED, nullptr);
+
+    // 经典方形停止图标 (Solid square ■)
+    lv_obj_t* stop_icon = lv_obj_create(s_ui.stop_btn);
+    lv_obj_remove_style_all(stop_icon);
+    lv_obj_set_size(stop_icon, 20, 20);
+    lv_obj_set_style_bg_color(stop_icon, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(stop_icon, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(stop_icon, 3, 0);
+    lv_obj_clear_flag(stop_icon, LV_OBJ_FLAG_CLICKABLE);
+
+    s_ui.stop_lbl = lv_label_create(s_ui.stop_btn);
+    lv_label_set_text(s_ui.stop_lbl, "停止");
+    lv_obj_set_style_text_font(s_ui.stop_lbl, UiFont(), 0);
+    lv_obj_set_style_text_color(s_ui.stop_lbl, lv_color_black(), 0);
+    lv_obj_clear_flag(s_ui.stop_lbl, LV_OBJ_FLAG_CLICKABLE);
 
     AiChat_ResetStaleState();   // 上次异常残留"播报中"等 → 进屏即归位
     RefreshState();

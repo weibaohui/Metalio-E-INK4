@@ -409,13 +409,20 @@ bool MiniMaxBidiTts::WaitFlushed(uint32_t timeout_ms) {
     return (bits & (kBitTaskFlushed | kBitTaskFinished)) != 0;
 }
 
-bool MiniMaxBidiTts::WaitUntilDoneOrIdle(uint32_t idle_timeout_ms) {
+bool MiniMaxBidiTts::WaitUntilDoneOrIdle(uint32_t idle_timeout_ms,
+                                        const std::atomic<bool>* interrupt_flag,
+                                        const std::atomic<bool>* cancel_flag) {
     if (is_flushed_.load() || is_finished_.load() || is_canceled_.load()) return true;
     if (!session_active_.load()) return true;
 
     while (session_active_.load() && !is_canceled_.load()) {
         if (is_flushed_.load() || is_finished_.load()) {
             return true;
+        }
+        if ((interrupt_flag && interrupt_flag->load()) || (cancel_flag && cancel_flag->load())) {
+            ESP_LOGI(TAG, "WaitUntilDoneOrIdle: 收到打断/取消信号, 立即退出等待");
+            Cancel();
+            return false;
         }
         int64_t last = last_active_us_.load();
         if (last > 0) {

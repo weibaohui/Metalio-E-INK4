@@ -804,7 +804,7 @@ void PipelineTask(void*) {
         if (bidi_tts && bidi_tts->IsSessionActive()) {
             bidi_tts->Flush();
             // 只要服务端在活跃推送（每句都会刷新活跃时间），就持续接收，直到 task_flushed 或 15s 静默
-            bidi_tts->WaitUntilDoneOrIdle(15000);
+            bidi_tts->WaitUntilDoneOrIdle(15000, &s_interrupt_tts, &s_cancel);
 
             // 等待音频播放线程自然播完缓冲中的所有音频 (或被用户打断/离屏取消)
             while (play_running.load() && !play_done.load() && !s_cancel.load() && !s_interrupt_tts.load()) {
@@ -959,8 +959,19 @@ void AiChat_BeginRecord() {
             SetUserText("");              // 清空上一轮提问
             SetState(AiChatState::Recording); // 立即更新为录音中, 彻底消除"播报中"残留
             ESP_LOGI(TAG, "barge-in: interrupt tts, state set to Recording");
+            return;
         }
-        return;   // 其它阶段(转写/思考)一轮未结束, 忽略
+
+        // 若前一个任务已在退出末期(非 Speaking/Done), 稍等最多 100ms 待其自删
+        int wait_cycles = 0;
+        while (s_task != nullptr && wait_cycles < 5) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            ++wait_cycles;
+        }
+        if (s_task != nullptr) {
+            // 仍在忙碌处理中(如正在转写/思考), 忽略本次重复按下
+            return;
+        }
     }
     s_cancel.store(false);
     s_interrupt_tts.store(false);   // 清陈旧打断标志(新一轮)
@@ -987,6 +998,21 @@ void AiChat_AbortRecord() {
     s_cancel.store(true);
     s_interrupt_tts.store(true);   // 播报也立刻停(PlayPcm 逐块查)
     s_record_flag.store(false);   // 管线在下一个检查点直接结束,不跑 STT
+    SetState(AiChatState::Idle);
+}
+
+void AiChat_CancelTap() {
+    s_record_flag.store(false);
+    s_interrupt_tts.store(true);
+    SetState(AiChatState::Idle);
+}
+
+void AiChat_StopAll() {
+    ESP_LOGI(TAG, "AiChat_StopAll: 强制打断一切操作 (录音/转写/LLM/播报)");
+    s_cancel.store(true);
+    s_interrupt_tts.store(true);
+    s_record_flag.store(false);
+    SetState(AiChatState::Idle);
 }
 
 AiChatState AiChat_GetState() { std::lock_guard<std::mutex> l(s_state_mutex); return s_state; }
