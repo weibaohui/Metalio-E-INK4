@@ -3,10 +3,7 @@
 #include "bq27220_gauge.h"
 #include "display/lv_adapter_display.h"
 #include "display/screen/boot_key_handler.h"
-#include "display/screen/ota_upgrade_screen/ota_upgrade_screen.h"
-#include "display/screen/ota_confirm_dialog/ota_confirm_dialog.h"
-#include "display/screen/settings_screen/settings_test/settings_test_aging_screen.h"
-#include "display/screen/standby_screen/standby_screen.h"
+#include "display/screen/screen_common.h"
 #include "display/screen/vk_key_handler.h"
 #include "haptic_feedback.h"
 #include "system_reset.h"
@@ -22,7 +19,6 @@
 #include "uvc_still_camera.h"
 #include "SimpleUart.hpp"
 #include "display/screen/bluetooth_screen/bluetooth_screen.h"
-#include "display/screen/book_screen/book_screen.h"
 #include "cx25601n.h"
 #include "pcf8563.h"
 #include "sc7a20h.h"
@@ -527,14 +523,11 @@ private:
             if (power_key_suppress_) {
                 return;
             }
-            if (OtaUpgradeScreen::IsActive() || OtaConfirmDialog::IsActive()) {
-                ESP_LOGI(TAG, "POWER press-down blocked (ota upgrade)");
+            if (ScreenIsCriticalModalActive()) {
+                ESP_LOGI(TAG, "POWER press-down blocked (critical modal active)");
                 return;
             }
-            if (SettingsTestAgingScreen::IsActive()) {
-                ESP_LOGI(TAG, "POWER press-down (aging test, activity only)");
-            }
-            if (!StandbyScreen::IsActive()) {
+            if (!ScreenIsStandbyActive()) {
                 PowerPolicy::GetInstance().NotifyUserActivity();
             }
             ESP_LOGI(TAG, "按键按下: POWER (GPIO%d)", static_cast<int>(POWER_BUTTON_GPIO));
@@ -581,16 +574,12 @@ private:
 
             // 正文阅读：音量+ = 上一页，音量- = 下一页（含长按连翻）；其它页仍调音量
             volume_up_button_->OnClick([this]() {
-                if (OtaUpgradeScreen::IsActive() || OtaConfirmDialog::IsActive()) {
-                    ESP_LOGI(TAG, "VOLUME_UP blocked (ota upgrade)");
-                    return;
-                }
-                if (SettingsTestAgingScreen::IsActive()) {
-                    ESP_LOGI(TAG, "VOLUME_UP blocked (aging test)");
+                if (ScreenIsCriticalModalActive()) {
+                    ESP_LOGI(TAG, "VOLUME_UP blocked (critical modal active)");
                     return;
                 }
                 PowerPolicy::GetInstance().NotifyUserActivity();
-                if (BookScreen::IsReadingActive()) {
+                if (ScreenIsReadingActive()) {
                     VkKey_Dispatch("vk_prev");
                     return;
                 }
@@ -604,14 +593,11 @@ private:
                 GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
             });
             volume_up_button_->OnLongPress([this]() {
-                if (OtaUpgradeScreen::IsActive() || OtaConfirmDialog::IsActive()) {
-                    return;
-                }
-                if (SettingsTestAgingScreen::IsActive()) {
+                if (ScreenIsCriticalModalActive()) {
                     return;
                 }
                 PowerPolicy::GetInstance().NotifyUserActivity();
-                if (BookScreen::IsReadingActive()) {
+                if (ScreenIsReadingActive()) {
                     VkKey_OnLongPress("vk_prev");
                     return;
                 }
@@ -620,28 +606,21 @@ private:
                 GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
             });
             volume_up_button_->OnPressUp([]() {
-                if (OtaUpgradeScreen::IsActive() || OtaConfirmDialog::IsActive()) {
+                if (ScreenIsCriticalModalActive()) {
                     return;
                 }
-                if (SettingsTestAgingScreen::IsActive()) {
-                    return;
-                }
-                if (BookScreen::IsReadingActive()) {
+                if (ScreenIsReadingActive()) {
                     VkKey_OnPressUp("vk_prev");
                 }
             });
 
             volume_down_button_->OnClick([this]() {
-                if (OtaUpgradeScreen::IsActive() || OtaConfirmDialog::IsActive()) {
-                    ESP_LOGI(TAG, "VOLUME_DOWN blocked (ota upgrade)");
-                    return;
-                }
-                if (SettingsTestAgingScreen::IsActive()) {
-                    ESP_LOGI(TAG, "VOLUME_DOWN blocked (aging test)");
+                if (ScreenIsCriticalModalActive()) {
+                    ESP_LOGI(TAG, "VOLUME_DOWN blocked (critical modal active)");
                     return;
                 }
                 PowerPolicy::GetInstance().NotifyUserActivity();
-                if (BookScreen::IsReadingActive()) {
+                if (ScreenIsReadingActive()) {
                     VkKey_Dispatch("vk_next");
                     return;
                 }
@@ -655,14 +634,11 @@ private:
                 GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
             });
             volume_down_button_->OnLongPress([this]() {
-                if (OtaUpgradeScreen::IsActive() || OtaConfirmDialog::IsActive()) {
-                    return;
-                }
-                if (SettingsTestAgingScreen::IsActive()) {
+                if (ScreenIsCriticalModalActive()) {
                     return;
                 }
                 PowerPolicy::GetInstance().NotifyUserActivity();
-                if (BookScreen::IsReadingActive()) {
+                if (ScreenIsReadingActive()) {
                     VkKey_OnLongPress("vk_next");
                     return;
                 }
@@ -671,13 +647,10 @@ private:
                 GetDisplay()->ShowNotification(Lang::Strings::MUTED);
             });
             volume_down_button_->OnPressUp([]() {
-                if (OtaUpgradeScreen::IsActive() || OtaConfirmDialog::IsActive()) {
+                if (ScreenIsCriticalModalActive()) {
                     return;
                 }
-                if (SettingsTestAgingScreen::IsActive()) {
-                    return;
-                }
-                if (BookScreen::IsReadingActive()) {
+                if (ScreenIsReadingActive()) {
                     VkKey_OnPressUp("vk_next");
                 }
             });
