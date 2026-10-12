@@ -4,7 +4,7 @@
 #include "api_http.h"
 #include "assets/lang_config.h"
 #include "board.h"
-#include "book_cover_sidecar.h"
+#include "reader/book_cover_sidecar.h"
 #include "power_policy.h"
 #include "reader/book_home_snapshot.h"
 #include "reader/book_library.h"

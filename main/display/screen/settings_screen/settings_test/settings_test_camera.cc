@@ -6,8 +6,8 @@
 #include "assets/lang_config.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
-#include "image_util.h"
-#include "reader_types.h"
+#include "reader/image_util.h"
+#include "reader/reader_types.h"
 #include "usb_uvc_still.h"
 
 #include <cstdio>
