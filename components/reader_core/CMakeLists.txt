@@ -8,5 +8,5 @@ idf_component_register(
          "src/image_stream.cc"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "include/reader_core"
-    REQUIRES espressif__zlib lvgl__lvgl
+    REQUIRES espressif__zlib lvgl__lvgl fatfs
 )
