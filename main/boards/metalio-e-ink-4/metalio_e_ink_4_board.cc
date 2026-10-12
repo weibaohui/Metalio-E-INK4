@@ -10,7 +10,6 @@
 #include "button.h"
 #include "config.h"
 #include "mcp_server.h"
-#include "led/single_led.h"
 #include "assets/lang_config.h"
 #include "IOExpander.hpp"
 #include "SdCardManager.hpp"
@@ -984,13 +983,8 @@ public:
     virtual Camera* GetCamera() override { return camera_; }
 
     virtual Led* GetLed() override {
-#if BUILTIN_LED_GPIO != GPIO_NUM_NC
-        static SingleLed led(BUILTIN_LED_GPIO);
-        return &led;
-#else
         static NoLed led;
         return &led;
-#endif
     }
 
     virtual AudioCodec* GetAudioCodec() override {

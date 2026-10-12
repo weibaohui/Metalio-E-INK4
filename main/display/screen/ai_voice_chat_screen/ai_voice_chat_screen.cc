@@ -27,6 +27,7 @@ struct AvcUi {
     lv_obj_t* auto_tts_cb = nullptr;  // 自动发声勾选框
     lv_obj_t* talk_btn = nullptr;     // 按住说话
     lv_obj_t* talk_lbl = nullptr;
+    lv_obj_t* chat_box = nullptr;     // 对话可滚动容器 (我+AI回答区)
     lv_obj_t* user_lbl = nullptr;     // 我: <识别文本>
     lv_obj_t* reply_lbl = nullptr;    // AI: <回复>
 };
@@ -407,7 +408,6 @@ void RefreshState() {
     const auto st = AiChat_GetState();
     const bool recording = st == AiChatState::Recording;
     if (s_ui.talk_lbl != nullptr) {
-        // 文案恒为"按住说话":播报中单击=只停止播报,按住=正常说话(服务侧按时长判定)
         lv_label_set_text(s_ui.talk_lbl, recording ? "松开发送" : "按住说话");
     }
     if (s_ui.talk_btn != nullptr) {
@@ -416,14 +416,28 @@ void RefreshState() {
                                     recording ? lv_color_white() : lv_color_black(), 0);
     }
     const std::string user = AiChat_GetUserText();
-    if (s_ui.user_lbl != nullptr && !user.empty()) {
-        lv_label_set_text(s_ui.user_lbl, ("我:" + user).c_str());
+    if (s_ui.user_lbl != nullptr) {
+        if (!user.empty()) lv_label_set_text(s_ui.user_lbl, ("我:" + user).c_str());
+        else lv_label_set_text(s_ui.user_lbl, "");
     }
     const std::string reply = AiChat_GetReplyText();
     const std::string err = AiChat_GetError();
     if (s_ui.reply_lbl != nullptr) {
-        if (!reply.empty()) lv_label_set_text(s_ui.reply_lbl, ("AI:" + reply).c_str());
-        else if (!err.empty()) lv_label_set_text(s_ui.reply_lbl, ("错误:" + err).c_str());
+        if (!reply.empty()) {
+            lv_label_set_text(s_ui.reply_lbl, ("AI:" + reply).c_str());
+            // 如果处于生成中或播报中, 自动滚动到底部最新内容, 保证输出内容始终可见
+            if (s_ui.chat_box != nullptr && (st == AiChatState::Thinking || st == AiChatState::Speaking)) {
+                lv_obj_scroll_to_view(s_ui.reply_lbl, LV_ANIM_OFF);
+            }
+        } else if (!err.empty()) {
+            lv_label_set_text(s_ui.reply_lbl, ("错误:" + err).c_str());
+        } else {
+            lv_label_set_text(s_ui.reply_lbl, "");
+            // 新提问清空时, 将滚动条复位到顶部
+            if (s_ui.chat_box != nullptr) {
+                lv_obj_scroll_to_y(s_ui.chat_box, 0, LV_ANIM_OFF);
+            }
+        }
     }
 }
 
@@ -552,18 +566,26 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     lv_obj_set_width(s_ui.status_lbl, lv_pct(100));
     lv_obj_set_style_text_align(s_ui.status_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
-    // 对话显示区(我 + AI):弹性撑满中间,把按住说话按钮顶到屏幕底部
+    // 对话显示区(我 + AI): 弹性撑满中间, 支持触摸上下滑动浏览长回复
     lv_obj_t* chat = lv_obj_create(body);
     lv_obj_remove_style_all(chat);
     lv_obj_set_width(chat, lv_pct(100));
     lv_obj_set_flex_grow(chat, 1);
     lv_obj_set_flex_flow(chat, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(chat, 8, 0);
+    // 启用触摸点击与垂直手势滑动
+    lv_obj_add_flag(chat, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(chat, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(chat, LV_OBJ_FLAG_SCROLL_ELASTIC);
     lv_obj_set_scroll_dir(chat, LV_DIR_VER);
-    lv_obj_clear_flag(chat, LV_OBJ_FLAG_CLICKABLE);
-    // wrap=true:宽 100% + 长文自动折行,回复再长也不超屏宽;
-    // 超出对话区高度由容器竖向滚动承载(上下滑动看全文)
+    lv_obj_set_scrollbar_mode(chat, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_width(chat, 4, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(chat, lv_color_black(), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(chat, LV_OPA_COVER, LV_PART_SCROLLBAR);
+    s_ui.chat_box = chat;
+
+    // wrap=true: 宽 100% + 长文自动折行, 回复再长也不超屏宽;
+    // 超出对话区高度由容器竖向滚动承载 (支持手势上下滑动看全文)
     s_ui.user_lbl = ScreenMakeLabel(chat, "", 25, true);
     s_ui.reply_lbl = ScreenMakeLabel(chat, "", 25, true);
 

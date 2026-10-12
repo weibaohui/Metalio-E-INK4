@@ -607,17 +607,16 @@ void PipelineTask(void*) {
 
     while (!s_cancel.load()) {
         const bool barge = s_barge_record.exchange(false);
+        SetState(AiChatState::Recording);
         std::vector<int16_t> pcm = RecordWhileHeld();
         if (s_cancel.load()) break;
-        // 播报中按下但 <0.6s 就松手 = 单击:用户只想停止播报,静默回 Idle
-        // (不进 STT、不报"录音太短");按住 ≥0.6s 才算"按住说话"
-        if (barge && pcm.size() < (size_t)kSampleRate * 6 / 10) {
-            ESP_LOGI(TAG, "barge tap: tts stopped only (%u samples)", (unsigned)pcm.size());
+
+        // 单击误触/打断判定: 按住时长 < 0.5s (8000 个采样点)
+        // 无论是在空闲状态还是在播报中，点完马上松手均视为单击 (Tap):
+        // 行为等同于打断/取消，静默归位到 Idle，绝不进入 STT 语言转写，也不报"录音太短"
+        if (pcm.size() < (size_t)kSampleRate * 5 / 10) {
+            ESP_LOGI(TAG, "tap detected (%u samples < 0.5s): stop tts if any, return to idle", (unsigned)pcm.size());
             SetState(AiChatState::Idle);
-            break;
-        }
-        if (pcm.size() < kSampleRate / 4) {  // 太短(<0.25s)
-            SetState(AiChatState::Error, "录音太短");
             break;
         }
 
@@ -842,14 +841,14 @@ void PipelineTask(void*) {
         }
 
         s_interrupt_tts.store(false);
-        SetState(AiChatState::Done);
 
         // 播报中(或播报刚结束)用户已按住说话 → 循环回录音段直接开录,
-        // 不等任务退出重建,打断跟手;未按住则正常收工。
+        // 不等任务退出重建,打断跟手;未按住则正常归位到 Idle。
         if (s_record_flag.load() && !s_cancel.load()) {
             SetState(AiChatState::Recording);
             continue;
         }
+        SetState(AiChatState::Idle);
         break;
     }
 
@@ -951,19 +950,24 @@ void AiChat_Init() {
 
 void AiChat_BeginRecord() {
     if (s_task != nullptr) {
-        // 播报中按住说话:打断播报(TTS 逐块查标志即停),管线循环回录音段直接开录
-        if (AiChat_GetState() == AiChatState::Speaking) {
+        // 播报中(或任务收尾中)按住说话: 打断播报, 管线循环回录音段直接开录
+        if (AiChat_GetState() == AiChatState::Speaking || AiChat_GetState() == AiChatState::Done) {
             s_interrupt_tts.store(true);
-            s_barge_record.store(true);   // 本轮源自播报中按下:松手太快视为单击停播
+            s_barge_record.store(true);   // 本轮源自播报中按下: 松手太快视为单击停播
             s_record_flag.store(true);
-            ESP_LOGI(TAG, "barge-in: interrupt tts, back to recording");
+            SetReplyText("");             // 新提问：清空上一轮回答
+            SetUserText("");              // 清空上一轮提问
+            SetState(AiChatState::Recording); // 立即更新为录音中, 彻底消除"播报中"残留
+            ESP_LOGI(TAG, "barge-in: interrupt tts, state set to Recording");
         }
-        return;   // 其它阶段(转写/思考)一轮未结束,忽略
+        return;   // 其它阶段(转写/思考)一轮未结束, 忽略
     }
     s_cancel.store(false);
     s_interrupt_tts.store(false);   // 清陈旧打断标志(新一轮)
     s_barge_record.store(false);
     s_record_flag.store(true);
+    SetReplyText("");               // 新提问：清空上一轮回答
+    SetUserText("");                // 清空上一轮提问
     SetState(AiChatState::Recording);
     // 按下即起管线任务开录(内部栈;HTTPS/TLS 读 CA 证书碰 flash,禁 PSRAM 栈)。
     // 原设计在松手才建任务,而松手已清录音标志 → 循环瞬退,永远"录音太短"。
