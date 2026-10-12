@@ -30,6 +30,7 @@
 #include "settings.h"
 #include "tts_decoder.h"
 #include "minimax_speech.h"
+#include "minimax_bidi_tts.h"
 
 namespace {
 
@@ -116,9 +117,78 @@ int HttpPost(const std::string& url, const std::string& bearer,
     return status;
 }
 
-// STT: 委托给独立 minimax_speech 模块转写 (OpenAI 兼容 multipart WAV 上传)
+// 流式 HTTP POST: 以 SSE (Server-Sent Events) 读取响应, 逐行解析 data:
+int HttpPostStream(const std::string& url, const std::string& bearer,
+                   const std::string& content_type, const std::string& body,
+                   std::function<void(const std::string& line)> on_line,
+                   std::string& err,
+                   const std::atomic<bool>* interrupt_flag,
+                   const std::atomic<bool>* cancel_flag) {
+    if (url.empty()) return -1;
+    ESP_LOGI(TAG, "http stream: create (%u bytes body)", (unsigned)body.size());
+    auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
+    if (!http) { err = "创建 HTTP 客户端失败"; return -1; }
+    http->SetTimeout(30000);
+    if (!bearer.empty()) http->SetHeader("Authorization", "Bearer " + bearer);
+    http->SetHeader("Content-Type", content_type);
+    http->SetHeader("Accept", "text/event-stream");
+    http->SetContent(std::string(body));
+    if (!http->Open("POST", url)) {
+        err = "连接失败 code=" + std::to_string(http->GetLastError());
+        http->Close();
+        return -2;
+    }
+    const int status = http->GetStatusCode();
+    if (status < 200 || status >= 300) {
+        std::string err_body = http->ReadAll();
+        http->Close();
+        err = "HTTP " + std::to_string(status) + ": " + (err_body.size() > 200 ? err_body.substr(0, 200) : err_body);
+        return status;
+    }
+
+    std::string line_buf;
+    char chunk[1024];
+    while (true) {
+        if ((interrupt_flag && interrupt_flag->load()) || (cancel_flag && cancel_flag->load())) {
+            ESP_LOGI(TAG, "http stream interrupted by user");
+            break;
+        }
+        int r = http->Read(chunk, sizeof(chunk) - 1);
+        if (r <= 0) break;
+        chunk[r] = '\0';
+        line_buf.append(chunk, r);
+
+        size_t pos = 0;
+        while ((pos = line_buf.find('\n')) != std::string::npos) {
+            std::string line = line_buf.substr(0, pos);
+            line_buf.erase(0, pos + 1);
+
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+
+            if (line.rfind("data:", 0) == 0) {
+                std::string payload = line.substr(5);
+                while (!payload.empty() && payload.front() == ' ') payload.erase(payload.begin());
+                if (!payload.empty() && on_line) {
+                    on_line(payload);
+                }
+            }
+        }
+    }
+    http->Close();
+    return status;
+}
+
+// STT: 委托给独立 minimax_speech 模块转写 (支持全量与流式)
 bool SttTranscribe(const Cfg& cfg, const std::vector<int16_t>& pcm, std::string& text, std::string& err) {
     return minimax_speech::Transcribe(cfg.stt_url, cfg.stt_key, cfg.stt_model, pcm, text, err);
+}
+
+bool SttTranscribeStream(const Cfg& cfg, const std::vector<int16_t>& pcm,
+                         std::function<void(const std::string& delta)> on_delta,
+                         std::string& text, std::string& err,
+                         const std::atomic<bool>* cancel_flag) {
+    return minimax_speech::TranscribeStream(cfg.stt_url, cfg.stt_key, cfg.stt_model, pcm, on_delta, text, err, cancel_flag);
 }
 
 // 对话:OpenAI 兼容 chat completions。成功返回 true。
@@ -270,7 +340,9 @@ std::string TodayLine() {
     return buf;
 }
 
-bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, std::string& err) {
+bool LlmChatStream(const Cfg& cfg, const std::string& user_text,
+                   std::function<void(const std::string& delta)> on_delta,
+                   std::string& reply, std::string& err) {
     const std::string url = cfg.llm_base + "/chat/completions";
     const std::string model = cfg.llm_model.empty() ? kDefaultLlmModel : cfg.llm_model;
     // 设备 MCP 工具表(排除 aichat 自身防递归);为空则退化为纯聊天
@@ -288,71 +360,69 @@ bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, s
                            s_history.BuildMessagesJson(cfg.history_rounds) +
                            "{\"role\":\"user\",\"content\":\"" + EscapeJson(user_text) + "\"}]";
     for (int round = 0; round < 4; ++round) {
-        std::string body = std::string("{\"model\":\"") + model + "\",\"messages\":" + messages;
+        std::string body = std::string("{\"model\":\"") + model + "\",\"stream\":true,\"messages\":" + messages;
         if (has_tools) body += ",\"tools\":" + tools;
         body += "}";
-        std::string resp;
-        const int status = HttpPost(url, cfg.llm_key, "application/json", body, resp);
+
+        std::vector<ToolReq> reqs;
+        std::string round_content;
+        std::string stream_err;
+
+        auto on_sse_line = [&](const std::string& payload) {
+            if (payload == "[DONE]") return;
+            cJSON* root = cJSON_Parse(payload.c_str());
+            if (!root) return;
+            const cJSON* choices = cJSON_GetObjectItem(root, "choices");
+            const cJSON* first = cJSON_IsArray(choices) ? cJSON_GetArrayItem(choices, 0) : nullptr;
+            if (first) {
+                const cJSON* delta = cJSON_GetObjectItem(first, "delta");
+                if (delta) {
+                    const cJSON* content = cJSON_GetObjectItem(delta, "content");
+                    if (cJSON_IsString(content) && content->valuestring) {
+                        const std::string c = content->valuestring;
+                        round_content += c;
+                        if (on_delta) on_delta(c);
+                    }
+                    const cJSON* tool_calls = cJSON_GetObjectItem(delta, "tool_calls");
+                    if (cJSON_IsArray(tool_calls)) {
+                        const cJSON* tc = nullptr;
+                        cJSON_ArrayForEach(tc, tool_calls) {
+                            const cJSON* idx_item = cJSON_GetObjectItem(tc, "index");
+                            size_t idx = cJSON_IsNumber(idx_item) ? idx_item->valueint : 0;
+                            if (idx >= reqs.size()) {
+                                reqs.resize(idx + 1);
+                            }
+                            const cJSON* id_item = cJSON_GetObjectItem(tc, "id");
+                            if (cJSON_IsString(id_item) && id_item->valuestring) {
+                                reqs[idx].id = id_item->valuestring;
+                            }
+                            const cJSON* fn = cJSON_GetObjectItem(tc, "function");
+                            if (fn) {
+                                const cJSON* name_item = cJSON_GetObjectItem(fn, "name");
+                                if (cJSON_IsString(name_item) && name_item->valuestring) {
+                                    reqs[idx].name += name_item->valuestring;
+                                }
+                                const cJSON* args_item = cJSON_GetObjectItem(fn, "arguments");
+                                if (cJSON_IsString(args_item) && args_item->valuestring) {
+                                    reqs[idx].args += args_item->valuestring;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            cJSON_Delete(root);
+        };
+
+        const int status = HttpPostStream(url, cfg.llm_key, "application/json", body, on_sse_line, stream_err, &s_interrupt_tts, &s_cancel);
         if (status < 200 || status >= 300) {
-            // 带出服务端错误体:400 的 message 直接写明原因(model/参数/JSON),
-            // 只报状态码等于盲猜(2026-10-11 STT 400 排查教训)
-            err = "对话 HTTP " + std::to_string(status) + ": " +
-                  (resp.size() > 200 ? resp.substr(0, 200) : resp);
-            ESP_LOGE(TAG, "llm http %d body=%u resp=%.200s",
-                     status, (unsigned)body.size(), resp.c_str());
+            err = stream_err.empty() ? ("对话 HTTP " + std::to_string(status)) : stream_err;
+            ESP_LOGE(TAG, "llm stream fail: %s", err.c_str());
             return false;
         }
-        cJSON* root = cJSON_Parse(resp.c_str());
-        if (root == nullptr) { err = "对话响应非 JSON"; return false; }
-        const cJSON* choices = cJSON_GetObjectItem(root, "choices");
-        const cJSON* first = cJSON_IsArray(choices) ? cJSON_GetArrayItem(choices, 0) : nullptr;
-        const cJSON* message = first ? cJSON_GetObjectItem(first, "message") : nullptr;
-        const cJSON* tool_calls = message ? cJSON_GetObjectItem(message, "tool_calls") : nullptr;
-        const cJSON* content = message ? cJSON_GetObjectItem(message, "content") : nullptr;
-
-        // ---- root 存活期内完成全部 JSON 重组 ----
-        std::vector<ToolReq> reqs;
-        std::string assistant_json;   // 回填用 assistant 消息(含原样 tool_calls)
-        if (cJSON_IsArray(tool_calls) && cJSON_GetArraySize(tool_calls) > 0) {
-            std::string tcs = "[";
-            bool tfirst = true;
-            const cJSON* tc = nullptr;
-            cJSON_ArrayForEach(tc, tool_calls) {
-                char* tc_raw = cJSON_PrintUnformatted(tc);
-                if (tc_raw != nullptr) {
-                    if (!tfirst) tcs += ",";
-                    tcs += tc_raw;
-                    cJSON_free(tc_raw);
-                    tfirst = false;
-                }
-                ToolReq r;
-                const cJSON* fn = cJSON_GetObjectItem(tc, "function");
-                const cJSON* tc_name = fn ? cJSON_GetObjectItem(fn, "name") : nullptr;
-                const cJSON* tc_args = fn ? cJSON_GetObjectItem(fn, "arguments") : nullptr;
-                const cJSON* tc_id = cJSON_GetObjectItem(tc, "id");
-                if (cJSON_IsString(tc_name) && tc_name->valuestring != nullptr) {
-                    r.name = tc_name->valuestring;
-                    r.args = cJSON_IsString(tc_args) && tc_args->valuestring ? tc_args->valuestring : "{}";
-                    if (cJSON_IsString(tc_id) && tc_id->valuestring != nullptr) r.id = tc_id->valuestring;
-                    reqs.push_back(r);
-                }
-            }
-            assistant_json = std::string("{\"role\":\"assistant\",\"content\":");
-            if (cJSON_IsString(content)) {
-                char* printed = cJSON_PrintUnformatted(content);
-                assistant_json += printed;
-                cJSON_free(printed);   // 不 free 会被工具轮数放大成泄漏
-            } else {
-                assistant_json += "null";
-            }
-            assistant_json += ",\"tool_calls\":" + tcs + "}";
-        } else if (cJSON_IsString(content) && content->valuestring != nullptr) {
-            reply = content->valuestring;
-        }
-        cJSON_Delete(root);   // 此后只使用上面重组出的字符串
 
         if (reqs.empty()) {
-            // 无工具调用:最终回答
+            reply = round_content;
             if (reply.rfind("<think>", 0) == 0) {
                 const size_t end = reply.find("</think>");
                 reply = end == std::string::npos ? "" : reply.substr(end + 8);
@@ -363,28 +433,43 @@ bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, s
             return true;
         }
 
-        // ---- 执行工具并回填(纯字符串,与 root 生命周期解耦) ----
+        // 构造 assistant 消息回填
+        std::string tcs = "[";
+        bool tfirst = true;
+        for (const auto& r : reqs) {
+            if (!tfirst) tcs += ",";
+            tcs += "{\"id\":\"" + EscapeJson(r.id) + "\",\"type\":\"function\",\"function\":{\"name\":\"" +
+                   EscapeJson(r.name) + "\",\"arguments\":\"" + EscapeJson(r.args) + "\"}}";
+            tfirst = false;
+        }
+        tcs += "]";
+        std::string assistant_json = "{\"role\":\"assistant\",\"content\":" +
+                                     (round_content.empty() ? std::string("null") : ("\"" + EscapeJson(round_content) + "\"")) +
+                                     ",\"tool_calls\":" + tcs + "}";
+
         std::string tool_results;
         int executed = 0;
         for (const auto& r : reqs) {
-            if (++executed > 6) break;   // 单轮工具数上限
+            if (++executed > 6) break;
             bool ok = false;
             ESP_LOGI(TAG, "tool call: %s(%s)", r.name.c_str(), r.args.c_str());
             std::string result = mcp_bridge::CallTool(r.name, r.args, ok);
-            ESP_LOGI(TAG, "tool %s -> %s: %u bytes", r.name.c_str(), ok ? "ok" : "err",
-                     (unsigned)result.size());
-            tool_results += "{\"role\":\"tool\",\"content\":\"" + EscapeJson(result) + "\"}";
+            ESP_LOGI(TAG, "tool %s -> %s: %u bytes", r.name.c_str(), ok ? "ok" : "err", (unsigned)result.size());
+            tool_results += "{\"role\":\"tool\",\"content\":\"" + EscapeJson(result) + "\"";
             if (!r.id.empty()) {
-                tool_results.insert(tool_results.size() - 1,
-                                    ",\"tool_call_id\":\"" + EscapeJson(r.id) + "\"");
+                tool_results += ",\"tool_call_id\":\"" + EscapeJson(r.id) + "\"";
             }
-            tool_results += ",";
+            tool_results += "},";
         }
         if (!tool_results.empty() && tool_results.back() == ',') tool_results.pop_back();
         messages = "[" + messages.substr(1) + "," + assistant_json + "," + tool_results + "]";
     }
     err = "工具调用轮次超限";
     return false;
+}
+
+bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, std::string& err) {
+    return LlmChatStream(cfg, user_text, nullptr, reply, err);
 }
 
 // 对话轮存档:JSONL 追加到 SD(/sdcard/metalio/e-ink/aichat/history.jsonl)。
@@ -547,45 +632,137 @@ void PipelineTask(void*) {
         Cfg cfg;
         { std::lock_guard<std::mutex> l(s_cfg_mutex); cfg = s_cfg; }
 
+        // 1. 流式语音转文字 (STT SSE)
         SetState(AiChatState::Transcribing);
-        ESP_LOGI(TAG, "stt: %u bytes wav uploading", (unsigned)(pcm.size() * 2 + 44));
+        ESP_LOGI(TAG, "stt: %u bytes wav uploading (streaming)", (unsigned)(pcm.size() * 2 + 44));
+        std::string user_accum;
+        auto on_stt_delta = [&](const std::string& delta) {
+            user_accum += delta;
+            SetUserText(user_accum);
+        };
         std::string text, err;
-        if (!SttTranscribe(cfg, pcm, text, err)) { ESP_LOGE(TAG, "stt fail: %s", err.c_str()); SetState(AiChatState::Error, err); break; }
+        if (!SttTranscribeStream(cfg, pcm, on_stt_delta, text, err, &s_cancel)) {
+            ESP_LOGE(TAG, "stt fail: %s", err.c_str());
+            SetState(AiChatState::Error, err);
+            break;
+        }
         ESP_LOGI(TAG, "stt ok: %s", text.c_str());
         SetUserText(text);
 
+        // 2. 准备大模型对话与双向流式 TTS 会话
         SetState(AiChatState::Thinking);
+
+        std::unique_ptr<minimax_speech::MiniMaxBidiTts> bidi_tts;
+        std::atomic<bool> play_running{false};
+        std::atomic<bool> speech_started{false};
+        TaskHandle_t play_task = nullptr;
+
+        const std::string tts_key = !cfg.stt_key.empty() ? cfg.stt_key : cfg.llm_key;
+        if (cfg.auto_tts && !s_cancel.load() && !tts_key.empty()) {
+            bidi_tts = std::make_unique<minimax_speech::MiniMaxBidiTts>();
+            const auto voice_cfg = minimax_speech::GetVoiceConfig();
+            std::string bidi_err;
+            if (bidi_tts->StartSession(tts_key, voice_cfg, bidi_err)) {
+                ESP_LOGI(TAG, "WSS TTS 会话已就绪, 开启实时音频播放流水线");
+                PowerPolicy::GetInstance().Acquire(PowerNeed::AiChatTts);
+                if (codec) codec->EnableOutput(true);
+
+                play_running.store(true);
+                struct PlayArg {
+                    minimax_speech::MiniMaxBidiTts* tts;
+                    std::atomic<bool>* running;
+                    std::atomic<bool>* speaking;
+                };
+                auto* parg = new PlayArg{bidi_tts.get(), &play_running, &speech_started};
+
+                SpawnPsrWorker("aichat_play", 4096, 5, [](void* p) {
+                    auto* a = static_cast<PlayArg*>(p);
+                    auto* c = Board::GetInstance().GetAudioCodec();
+                    std::vector<int16_t> chunk;
+                    chunk.reserve(960);
+                    while (a->running->load() && !s_cancel.load() && !s_interrupt_tts.load()) {
+                        if (a->tts->PopAudioPcm(chunk, 960, 40)) {
+                            if (!chunk.empty() && c) {
+                                if (!a->speaking->exchange(true)) {
+                                    SetState(AiChatState::Speaking);
+                                }
+                                c->OutputData(chunk);
+                            }
+                        } else {
+                            if (a->tts->IsFinished()) break;
+                        }
+                    }
+                    delete a;
+                    // SpawnPsrWorker 创建的 PSRAM 栈任务:直接 return 让包装层
+                    // vTaskDeleteWithCaps 自删;裸 vTaskDelete 每次泄漏 4KB 栈。
+                }, parg, &play_task, 0);
+            } else {
+                ESP_LOGW(TAG, "WSS TTS 建连失败(%s), 将在模型完成后降级为 HTTP TTS", bidi_err.c_str());
+                bidi_tts.reset();
+            }
+        }
+
+        // 3. 大模型流式对话 (LLM SSE)
+        std::string reply_accum;
+        auto on_llm_delta = [&](const std::string& delta) {
+            reply_accum += delta;
+            SetReplyText(reply_accum);
+            if (bidi_tts && bidi_tts->IsSessionActive()) {
+                bidi_tts->SendText(delta);
+            }
+        };
+
         std::string reply;
-        if (!LlmChat(cfg, text, reply, err)) { ESP_LOGE(TAG, "llm fail: %s", err.c_str()); SetState(AiChatState::Error, err); break; }
+        if (!LlmChatStream(cfg, text, on_llm_delta, reply, err)) {
+            ESP_LOGE(TAG, "llm fail: %s", err.c_str());
+            if (bidi_tts) {
+                bidi_tts->Cancel();
+                play_running.store(false);
+                PowerPolicy::GetInstance().Release(PowerNeed::AiChatTts);
+            }
+            SetState(AiChatState::Error, err);
+            break;
+        }
+
         ESP_LOGI(TAG, "llm ok: %u chars", (unsigned)reply.size());
         SetReplyText(reply);
         s_history.AddTurn(text, reply, cfg.history_rounds);
-        SaveHistory(text, reply);   // 先落盘再发声,TTS 慢不拖累存档
-        SetState(AiChatState::Done);
+        SaveHistory(text, reply);
 
-        if (cfg.auto_tts && !s_cancel.load()) {
+        // 4. 收尾 TTS 播放
+        if (bidi_tts && bidi_tts->IsSessionActive()) {
+            bidi_tts->Flush();
+            bidi_tts->Finish();
+            // 等待音频播放线程放完缓冲中的音频
+            while (play_running.load() && !s_cancel.load() && !s_interrupt_tts.load()) {
+                if (bidi_tts->IsFinished() && !bidi_tts->HasAudioPcm()) {
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(40));
+            }
+            play_running.store(false);
+            PowerPolicy::GetInstance().Release(PowerNeed::AiChatTts);
+            bidi_tts->Close();
+        } else if (cfg.auto_tts && !s_cancel.load() && !s_interrupt_tts.load()) {
+            // Fallback: WSS 失败时的 HTTP TTS 兜底
             SetState(AiChatState::Speaking);
-            // 播报拉 PA(aichat 直写 codec 不进语音状态机,不拉就是"解码在走、
-            // I2S 在写、功放关着"的无声;收音机 RadioPlayback 同款问题同款修法)。
-            // 在合成前 Acquire:网络等待期正好覆盖功放爬坡,首字不被裁。
             PowerPolicy::GetInstance().Acquire(PowerNeed::AiChatTts);
             std::vector<int16_t> tts_pcm;
             try {
                 if (TtsSynthesize(cfg, reply, tts_pcm, err)) {
-                    ESP_LOGI(TAG, "tts ok: %u samples", (unsigned)tts_pcm.size());
-                    PlayPcm(tts_pcm);   // 逐块查打断标志,播报中按住即停
+                    PlayPcm(tts_pcm);
                 } else {
-                    ESP_LOGE(TAG, "tts fail: %s", err.c_str());
+                    ESP_LOGE(TAG, "fallback tts fail: %s", err.c_str());
                 }
             } catch (const std::exception& e) {
-                // TTS/播放路径的 OOM 等异常不得逃出管线任务(未捕获 = abort 整机)
                 ESP_LOGE(TAG, "tts exception: %s", e.what());
                 err = "播报异常,回复过长";
             }
             PowerPolicy::GetInstance().Release(PowerNeed::AiChatTts);
-            s_interrupt_tts.store(false);
-            SetState(AiChatState::Done);
         }
+
+        s_interrupt_tts.store(false);
+        SetState(AiChatState::Done);
 
         // 播报中(或播报刚结束)用户已按住说话 → 循环回录音段直接开录,
         // 不等任务退出重建,打断跟手;未按住则正常收工。

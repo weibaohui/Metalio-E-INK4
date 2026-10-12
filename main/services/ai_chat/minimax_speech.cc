@@ -227,12 +227,14 @@ bool Synthesize(const std::string& key,
     return ok;
 }
 
-bool Transcribe(const std::string& url,
-                const std::string& key,
-                const std::string& model,
-                const std::vector<int16_t>& pcm,
-                std::string& text,
-                std::string& err) {
+bool TranscribeStream(const std::string& url,
+                      const std::string& key,
+                      const std::string& model,
+                      const std::vector<int16_t>& pcm,
+                      std::function<void(const std::string& delta)> on_delta,
+                      std::string& text,
+                      std::string& err,
+                      const std::atomic<bool>* cancel_flag) {
     if (url.empty() || key.empty()) {
         err = "STT URL 或 Key 为空";
         return false;
@@ -244,26 +246,98 @@ bool Transcribe(const std::string& url,
     body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
     body.append(wav);
     body += "\r\n--" + boundary + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n" +
-            // asr-1.0 = speech_to_text 唯一合法模型(服务端 400 实证)
             (model.empty() ? std::string("asr-1.0") : model) + "\r\n";
+    body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n";
+    body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"stream\"\r\n\r\ntrue\r\n";
     body += "--" + boundary + "--\r\n";
-    std::string resp;
-    const int status = HttpPostRaw(url, key, "multipart/form-data; boundary=" + boundary, body, resp, nullptr, nullptr);
-    if (status < 200 || status >= 300) {
-        err = "转写 HTTP " + std::to_string(status);
+
+    auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
+    if (!http) { err = "创建 HTTP 客户端失败"; return false; }
+    http->SetTimeout(25000);
+    http->SetHeader("Authorization", "Bearer " + key);
+    http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+    http->SetContent(std::string(body));
+    if (!http->Open("POST", url)) {
+        err = "STT 连接失败 code=" + std::to_string(http->GetLastError());
+        http->Close();
         return false;
     }
-    cJSON* root = cJSON_Parse(resp.c_str());
-    if (root == nullptr) { err = "转写响应非 JSON"; return false; }
-    const cJSON* t = cJSON_GetObjectItem(root, "text");
-    if (cJSON_IsString(t) && t->valuestring != nullptr) text = t->valuestring;
-    if (text.empty()) {
-        const cJSON* data = cJSON_GetObjectItem(root, "data");
-        if (cJSON_IsString(data) && data->valuestring != nullptr) text = data->valuestring;
+    const int status = http->GetStatusCode();
+    if (status < 200 || status >= 300) {
+        std::string err_body = http->ReadAll();
+        http->Close();
+        err = "转写 HTTP " + std::to_string(status) + ": " + (err_body.size() > 120 ? err_body.substr(0, 120) : err_body);
+        return false;
     }
-    cJSON_Delete(root);
-    if (text.empty()) { err = "转写结果为空"; return false; }
+
+    text.clear();
+    std::string line_buf;
+    char chunk[1024];
+    while (true) {
+        if (cancel_flag && cancel_flag->load()) {
+            err = "转写已取消";
+            http->Close();
+            return false;
+        }
+        int r = http->Read(chunk, sizeof(chunk) - 1);
+        if (r <= 0) break;
+        chunk[r] = '\0';
+        line_buf.append(chunk, r);
+
+        size_t pos = 0;
+        while ((pos = line_buf.find('\n')) != std::string::npos) {
+            std::string line = line_buf.substr(0, pos);
+            line_buf.erase(0, pos + 1);
+
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+
+            if (line.rfind("data:", 0) == 0) {
+                std::string payload = line.substr(5);
+                while (!payload.empty() && payload.front() == ' ') payload.erase(payload.begin());
+                if (payload.empty()) continue;
+
+                cJSON* root = cJSON_Parse(payload.c_str());
+                if (root) {
+                    const cJSON* d = cJSON_GetObjectItem(root, "delta");
+                    if (cJSON_IsString(d) && d->valuestring && strlen(d->valuestring) > 0) {
+                        std::string delta = d->valuestring;
+                        text += delta;
+                        if (on_delta) on_delta(delta);
+                    }
+                    cJSON_Delete(root);
+                }
+            }
+        }
+    }
+    http->Close();
+
+    if (text.empty() && !line_buf.empty()) {
+        cJSON* root = cJSON_Parse(line_buf.c_str());
+        if (root) {
+            const cJSON* t = cJSON_GetObjectItem(root, "text");
+            if (cJSON_IsString(t) && t->valuestring) {
+                text = t->valuestring;
+                if (on_delta) on_delta(text);
+            }
+            cJSON_Delete(root);
+        }
+    }
+
+    if (text.empty()) {
+        err = "转写结果为空";
+        return false;
+    }
     return true;
+}
+
+bool Transcribe(const std::string& url,
+                const std::string& key,
+                const std::string& model,
+                const std::vector<int16_t>& pcm,
+                std::string& text,
+                std::string& err) {
+    return TranscribeStream(url, key, model, pcm, nullptr, text, err, nullptr);
 }
 
 }  // namespace minimax_speech
