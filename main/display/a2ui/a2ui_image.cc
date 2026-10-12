@@ -16,8 +16,8 @@
 #include "esp_lv_adapter.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "image_util.h"
-#include "reader_types.h"
+#include "reader/image_util.h"
+#include "reader/reader_types.h"
 #include "utils/psr_worker.h"
 
 static const char *TAG = "a2ui_image";

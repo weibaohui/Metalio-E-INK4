@@ -4,7 +4,7 @@
 #include "power_policy.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
-#include "settings_common.h"
+#include "settings_screen/settings_common.h"
 
 #include "SimpleUart.hpp"
 #include "IOExpander.hpp"

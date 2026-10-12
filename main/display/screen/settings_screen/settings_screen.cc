@@ -17,7 +17,7 @@
 #include "settings_network_tab.h"
 #include "settings_power_tab.h"
 #include "settings_storage_tab.h"
-#include "settings_test_tab.h"
+#include "settings_test/settings_test_tab.h"
 #include "settings_theme_tab.h"
 #include "vk_key_handler.h"
 

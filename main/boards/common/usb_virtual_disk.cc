@@ -10,7 +10,7 @@
 #include <mutex>
 
 #include "SdCardManager.hpp"
-#include "book_library.h"
+#include "reader/book_library.h"
 #include "power_policy.h"
 
 #include "driver/gpio.h"

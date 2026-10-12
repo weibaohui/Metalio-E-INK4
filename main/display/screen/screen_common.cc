@@ -6,7 +6,7 @@
 #include "home_screen/home_screen.h"
 #include "lv_adapter_display.h"
 #include "network_screen/network_screen.h"
-#include "settings_network_tab.h"
+#include "settings_screen/settings_network_tab.h"
 #include "vk_key_handler.h"
 
 #include <cstring>

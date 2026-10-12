@@ -138,7 +138,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/backup_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services")
+set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/lvgl_display" "audio" "protocols" "reader" "services")
 
 # Add board common files explicitly (replaces GLOB to avoid cache issues and unwanted sources)
 list(APPEND SOURCES
