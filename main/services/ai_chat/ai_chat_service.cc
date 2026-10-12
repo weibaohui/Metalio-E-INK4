@@ -570,11 +570,17 @@ void PipelineTask(void*) {
             // 在合成前 Acquire:网络等待期正好覆盖功放爬坡,首字不被裁。
             PowerPolicy::GetInstance().Acquire(PowerNeed::AiChatTts);
             std::vector<int16_t> tts_pcm;
-            if (TtsSynthesize(cfg, reply, tts_pcm, err)) {
-                ESP_LOGI(TAG, "tts ok: %u samples", (unsigned)tts_pcm.size());
-                PlayPcm(tts_pcm);   // 逐块查打断标志,播报中按住即停
-            } else {
-                ESP_LOGE(TAG, "tts fail: %s", err.c_str());
+            try {
+                if (TtsSynthesize(cfg, reply, tts_pcm, err)) {
+                    ESP_LOGI(TAG, "tts ok: %u samples", (unsigned)tts_pcm.size());
+                    PlayPcm(tts_pcm);   // 逐块查打断标志,播报中按住即停
+                } else {
+                    ESP_LOGE(TAG, "tts fail: %s", err.c_str());
+                }
+            } catch (const std::exception& e) {
+                // TTS/播放路径的 OOM 等异常不得逃出管线任务(未捕获 = abort 整机)
+                ESP_LOGE(TAG, "tts exception: %s", e.what());
+                err = "播报异常,回复过长";
             }
             PowerPolicy::GetInstance().Release(PowerNeed::AiChatTts);
             s_interrupt_tts.store(false);
