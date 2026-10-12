@@ -1,8 +1,8 @@
 #include "settings_apps_tab.h"
 
+#include "app_manager.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
-#include "home_screen/home_screen.h"
 #include "settings_common.h"
 
 namespace {
@@ -34,20 +34,20 @@ lv_obj_t* MakeText(lv_obj_t* parent, const char* text, int font_size = 25) {
 
 void RefreshRow(int index) {
     if (index < 0 || index >= s_ui.count || s_ui.state_lbls[index] == nullptr) return;
-    if (HomeScreen::IsAppMandatoryByIndex(index)) {
+    if (AppManager::GetInstance().IsAppMandatoryByIndex(index)) {
         lv_label_set_text(s_ui.state_lbls[index], "常驻");
         return;
     }
     lv_label_set_text(s_ui.state_lbls[index],
-                      HomeScreen::IsAppEnabledByIndex(index) ? "开" : "关");
+                      AppManager::GetInstance().IsAppEnabledByIndex(index) ? "开" : "关");
 }
 
 void OnAppRowClicked(lv_event_t* e) {
     const int index = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
     if (index < 0 || index >= s_ui.count) return;
-    if (HomeScreen::IsAppMandatoryByIndex(index)) return;   // 设置永驻不可关
+    if (AppManager::GetInstance().IsAppMandatoryByIndex(index)) return;   // 设置永驻不可关
     HapticPulseIfEnabled();
-    HomeScreen::SetAppEnabled(index, !HomeScreen::IsAppEnabledByIndex(index));
+    AppManager::GetInstance().SetAppEnabled(index, !AppManager::GetInstance().IsAppEnabledByIndex(index));
     RefreshRow(index);
 }
 
@@ -72,7 +72,7 @@ lv_obj_t* MakeAppRow(lv_obj_t* parent, int index) {
                         reinterpret_cast<void*>(static_cast<intptr_t>(index)));
 
     lv_obj_t* name = lv_label_create(row);
-    lv_label_set_text(name, HomeScreen::GetAppToggleName(index));
+    lv_label_set_text(name, AppManager::GetInstance().GetAppNameByIndex(index));
     lv_obj_set_style_text_font(name, UiFont(), 0);
     lv_obj_set_style_text_color(name, lv_color_black(), 0);
     lv_obj_set_flex_grow(name, 1);
@@ -92,7 +92,7 @@ void SettingsAppsTab_Reset() { s_ui = {}; }
 
 void SettingsAppsTab_Build(lv_obj_t* page) {
     s_ui = {};
-    s_ui.count = HomeScreen::GetAppToggleCount();
+    s_ui.count = AppManager::GetInstance().GetAppCount();
     if (s_ui.count > kMaxApps) s_ui.count = kMaxApps;
 
     MakeText(page, "应用显示", 30);
