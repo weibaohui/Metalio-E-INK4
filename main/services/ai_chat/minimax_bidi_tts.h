@@ -2,7 +2,7 @@
 // MiniMax 双向流式语音合成 (WebSocket Bidi) 底层组件:
 // 接口规范: wss://api.minimax.cn/ws/v1/t2a_v2_bidi
 // 特性:
-// 1. 面向大模型流式输出设计: 逐字/逐 token 发送文本 (task_continue), 由 MiniMax 服务端自动攒句合成。
+// 1. 面向大模型流式输出设计: 智能分句/断句发送 (task_continue), 由 MiniMax 服务端自动攒句合成。
 // 2. 边生成边发声: 服务端分句返回音频分片 (task_continued, hex 编码 PCM 16kHz 单声道)。
 // 3. 原生支持随时打断 (task_cancel), 立即停止服务端合成与清空本地待播队列。
 // 4. 线程安全, 内部解耦网络接收与音频消费。
@@ -19,7 +19,6 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
-#include <freertos/semphr.h>
 
 #include "minimax_speech.h"
 #include "web_socket.h"
@@ -50,7 +49,7 @@ public:
 
     /**
      * @brief 增量发送文本片段 (来自大模型 stream 输出的 token)
-     * @param text 增量文本 (纯空白会被服务端自动忽略)
+     * @param text 增量文本 (内部自动做标点断句缓冲, 避免暴洪式微帧)
      * @return true 发送成功
      */
     bool SendText(const std::string& text);
@@ -59,6 +58,20 @@ public:
      * @brief 催出攒句缓冲区中的残留文本 (文本全部送完后调用, 使尾句立即合成出音频)
      */
     bool Flush();
+
+    /**
+     * @brief 等待服务端完成本轮所有发送文本的音频下发 (等待 task_flushed 事件)
+     * @param timeout_ms 最长等待时间 (毫秒)
+     * @return true 服务端确认全部音频下发完毕
+     */
+    bool WaitFlushed(uint32_t timeout_ms = 15000);
+
+    /**
+     * @brief 智能等待服务端完成全部合成下发：以静默活跃超时判定, 只要服务端持续在出分句音频即不超时
+     * @param idle_timeout_ms 无任何新音频或事件到达的最大允许静默时间 (毫秒, 默认 15s)
+     * @return true 正常完成 (收到 task_flushed / task_finished)
+     */
+    bool WaitUntilDoneOrIdle(uint32_t idle_timeout_ms = 15000);
 
     /**
      * @brief 正常结束本次合成任务 (服务端合成完残留音频后关闭会话)
@@ -81,6 +94,8 @@ public:
     bool IsConnected() const;
     bool IsSessionActive() const;
     bool IsFinished() const;
+    bool IsFlushed() const;
+    bool IsCanceled() const;
 
     /**
      * @brief 从内部音频缓冲队列中取出一批 16kHz 单声道 int16 PCM 样本
@@ -104,6 +119,7 @@ public:
 private:
     void OnWebSocketData(const char* data, size_t len, bool binary);
     void PushPcm(const int16_t* samples, size_t count);
+    bool DoSendContinue(const std::string& str);
 
     std::unique_ptr<WebSocket> ws_;
     std::string last_error_;
@@ -120,16 +136,23 @@ private:
 
     std::atomic<bool> is_connected_{false};
     std::atomic<bool> session_active_{false};
+    std::atomic<bool> is_flushed_{false};
     std::atomic<bool> is_finished_{false};
     std::atomic<bool> is_canceled_{false};
+    std::atomic<int64_t> last_active_us_{0};
 
-    // 音频 PCM 队列缓冲 (受上限保护, 限制在 PSRAM 中)
+    // 客户端发送平滑缓冲 (按标点或长度分批发送, 防暴洪)
+    std::mutex send_buf_mutex_;
+    std::string send_buffer_;
+
+    // 音频 PCM 队列缓冲 (保存在 PSRAM 中, 容量充足不丢帧)
     mutable std::mutex pcm_mutex_;
     std::vector<int16_t> pcm_queue_;
-    static constexpr size_t kMaxQueueSamples = 16000 * 5; // 最多缓冲 5 秒音频, 防止长回复挤爆内存
+    static constexpr size_t kMaxQueueSamples = 16000 * 60; // 允许缓冲 60 秒音频 (约 1.9MB PSRAM)
 
     VoiceConfig voice_cfg_;
     std::string session_id_;
+    size_t total_pcm_received_ = 0;
 };
 
 }  // namespace minimax_speech
