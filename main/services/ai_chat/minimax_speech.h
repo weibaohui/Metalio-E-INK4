@@ -5,10 +5,13 @@
 // 3. 音色库与参数持久化: 统一管理常用音色列表、参数配置与 NVS 存储
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
+
+#include <functional>
 
 namespace minimax_speech {
 
@@ -54,5 +57,15 @@ bool Transcribe(const std::string& url,
                 const std::vector<int16_t>& pcm,
                 std::string& text,
                 std::string& err);
+
+// MiniMax STT 流式转写: 开启 stream=true, 边识别边通过 on_delta 回调输出增量文本
+bool TranscribeStream(const std::string& url,
+                      const std::string& key,
+                      const std::string& model,
+                      const std::vector<int16_t>& pcm,
+                      std::function<void(const std::string& delta)> on_delta,
+                      std::string& text,
+                      std::string& err,
+                      const std::atomic<bool>* cancel_flag = nullptr);
 
 }  // namespace minimax_speech
