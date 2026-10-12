@@ -69,9 +69,13 @@ public:
     /**
      * @brief 智能等待服务端完成全部合成下发：以静默活跃超时判定, 只要服务端持续在出分句音频即不超时
      * @param idle_timeout_ms 无任何新音频或事件到达的最大允许静默时间 (毫秒, 默认 15s)
+     * @param interrupt_flag 外部打断标志, 置 true 时毫秒级退出等待并取消合成
+     * @param cancel_flag 外部取消标志, 置 true 时立即退出等待
      * @return true 正常完成 (收到 task_flushed / task_finished)
      */
-    bool WaitUntilDoneOrIdle(uint32_t idle_timeout_ms = 15000);
+    bool WaitUntilDoneOrIdle(uint32_t idle_timeout_ms = 15000,
+                             const std::atomic<bool>* interrupt_flag = nullptr,
+                             const std::atomic<bool>* cancel_flag = nullptr);
 
     /**
      * @brief 正常结束本次合成任务 (服务端合成完残留音频后关闭会话)

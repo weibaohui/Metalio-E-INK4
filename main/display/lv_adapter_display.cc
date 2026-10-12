@@ -332,8 +332,11 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
                 kick = TouchFeedUiPressLocked(ux, uy);
             }
         } else {
-            s_touch_snap.live_x = ux;
-            s_touch_snap.live_y = uy;
+            if (s_touch_snap.live_x != ux || s_touch_snap.live_y != uy) {
+                s_touch_snap.live_x = ux;
+                s_touch_snap.live_y = uy;
+                kick = true;
+            }
         }
         pend_d = s_touch_snap.pending_down;
         pend_u = s_touch_snap.pending_up;
@@ -341,7 +344,7 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
         lvgl_d = s_touch_snap.lvgl_down;
         portEXIT_CRITICAL(&s_touch_snap_mux);
         if (kick) {
-            TouchFeedKickLvgl("ui_down", pend_d, pend_u, live, lvgl_d, ux, uy);
+            TouchFeedKickLvgl(live > 0 && lvgl_d ? "ui_move" : "ui_down", pend_d, pend_u, live, lvgl_d, ux, uy);
         }
         return;
     }
