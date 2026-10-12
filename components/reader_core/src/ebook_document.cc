@@ -8,14 +8,15 @@
 #include <esp_log.h>
 #include <zlib.h>
 #ifndef EBOOK_EMULATOR
-#include "assets/lang_config.h"
+// lang_config decoupled
 #endif
 
 namespace reader {
 namespace {
 
 #ifndef EBOOK_EMULATOR
-const char* UiChapterFmt() { return Lang::Strings::BOOK_CHAPTER_FMT; }
+static const char* s_chapter_fmt = "第 %d 章";
+const char* UiChapterFmt() { return s_chapter_fmt; }
 #else
 const char* UiChapterFmt() { return "Ch.%d"; }
 #endif

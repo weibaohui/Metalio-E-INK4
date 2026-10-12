@@ -67,8 +67,6 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/book_screen/book_reader_prefs.cc"
             "display/screen/book_screen/book_cover_loader.cc"
             "display/screen/book_screen/book_cloud_library.cc"
-            "reader/zip_reader.cc"
-            "reader/html_content.cc"
             "reader/book_library.cc"
             "reader/book_home_snapshot.cc"
             "reader/book_progress_cache.cc"
@@ -76,14 +74,9 @@ set(SOURCES "audio/audio_codec.cc"
             "reader/book_progress_sync.cc"
             "device_wifi_location.cc"
             "reader/image_util.cc"
-            "reader/image_stream.cc"
-            "reader/text_encoding.cc"
-            "reader/epub_document.cc"
-            "reader/ebook_document.cc"
             "reader/book_cover_sidecar.cc"
             "reader/http_download_file.cc"
             "reader/book_session.cc"
-            "reader/txt_chapter.cc"
             "display/screen/settings_screen/settings_screen.cc"
             "display/screen/settings_screen/settings_common.cc"
             "display/screen/settings_screen/settings_network_tab.cc"
@@ -358,7 +351,7 @@ set_source_files_properties(
 # zlib：reader/ZipReader 解压 EPUB；EbookDocument 分块 inflate .ebook
 # esp-ml307 / esp-wifi-connect：本地 vendored 组件（components/），不再走 Component Manager
 # esp_tinyusb：设置页模拟 U 盘（MSC）；仅 S3 拉取，链接 usb PHY
-target_link_libraries(${COMPONENT_LIB} PRIVATE idf::fatfs idf::sdmmc idf::esp_driver_sdmmc idf::espressif__zlib idf::esp_partition idf::espcoredump idf::esp-ml307 idf::esp-wifi-connect idf::esp_http_server idf::espressif__freetype)
+target_link_libraries(${COMPONENT_LIB} PRIVATE idf::fatfs idf::sdmmc idf::esp_driver_sdmmc idf::espressif__zlib idf::esp_partition idf::espcoredump idf::esp-ml307 idf::esp-wifi-connect idf::esp_http_server idf::espressif__freetype idf::reader_core)
 if(TARGET idf::espressif__esp_tinyusb)
     target_link_libraries(${COMPONENT_LIB} PRIVATE idf::espressif__esp_tinyusb idf::usb)
 endif()
