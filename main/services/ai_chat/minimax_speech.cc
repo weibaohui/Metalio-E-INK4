@@ -212,7 +212,19 @@ bool Synthesize(const std::string& key,
         return false;
     }
 
-    return tts_decoder::DecodeTtsResponse(resp, pcm, err);
+    bool ok = false;
+    try {
+        ok = tts_decoder::DecodeTtsResponse(resp, pcm, err);
+    } catch (const std::bad_alloc&) {
+        // 长回复的 MB 级载荷可能打爆 PSRAM;未捕获异常会直接 abort 整机
+        err = "TTS 内存不足(回复过长)";
+        ok = false;
+    } catch (const std::exception& e) {
+        err = std::string("TTS 解码异常: ") + e.what();
+        ok = false;
+    }
+    std::string().swap(resp);   // 解码器已自持副本,立即释放调用方这份(MB 级)
+    return ok;
 }
 
 bool Transcribe(const std::string& url,

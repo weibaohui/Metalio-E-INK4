@@ -191,11 +191,15 @@ inline bool ParseRawPcm(const uint8_t* data, size_t len, std::vector<int16_t>& p
 }
 
 // ---- 3. 顶层自动探测与解码主入口 ----
-inline bool DecodeTtsResponse(const std::string& raw_resp, std::vector<int16_t>& pcm_out, std::string& err_out) {
-    if (raw_resp.empty()) {
+inline bool DecodeTtsResponse(const std::string& raw_resp_in, std::vector<int16_t>& pcm_out, std::string& err_out) {
+    if (raw_resp_in.empty()) {
         err_out = "TTS 响应为空";
         return false;
     }
+    // 拷贝成本换来"调用方可立即释放原响应"的时机:调用方(Synthesize)在把
+    // 响应交给本函数后即释放自己的 resp,峰值从 2 份降为 1 份。
+    std::string raw_resp_copy = raw_resp_in;
+    std::string& raw_resp = raw_resp_copy;
 
     // A. 探测容器格式: JSON vs 直接二进制流
     size_t first_non_space = raw_resp.find_first_not_of(" \t\r\n");
@@ -247,7 +251,10 @@ inline bool DecodeTtsResponse(const std::string& raw_resp, std::vector<int16_t>&
         }
         cJSON_Delete(root);
 
-        // B. 探测文本编码: Base64 vs Hex
+        // B. 探测文本编码: Base64 vs Hex。
+        // 内存纪律:长回复的 audio 载荷可达 MB 级,与 raw_resp/二进制/PCM 多份并存
+        // 会把 PSRAM 打爆(bad_alloc → 未捕获异常 → abort,2026-10-12 实测)。
+        // 解码出二进制后立即清 audio_str 释放一份。
         if (IsProbablyBase64(audio_str)) {
             ESP_LOGI(TAG, "探测到 Base64 编码音频 (%u 字符)", (unsigned)audio_str.size());
             if (!DecodeBase64(audio_str, binary_data)) {
@@ -271,6 +278,10 @@ inline bool DecodeTtsResponse(const std::string& raw_resp, std::vector<int16_t>&
         err_out = "提取音频二进制过短";
         return false;
     }
+
+    // 内存纪律:二进制已就绪,释放原始响应副本(MB 级,与 PCM 并存即爆);
+    // JSON 路径的 audio_str 文本副本在其块内随二进制解码完成即结束作用域
+    std::string().swap(raw_resp_copy);
 
     // C. 探测音频封装格式: WAV (RIFF) vs 裸 PCM
     pcm_out.clear();
