@@ -62,3 +62,9 @@ lv_obj_t* ScreenMakeLabel(lv_obj_t* parent, const char* text, int font_size = 25
 // (可用于改字),不需要时传 nullptr。
 lv_obj_t* ScreenMakeBtn(lv_obj_t* parent, const char* text, lv_coord_t w, lv_coord_t h,
                         lv_event_cb_t cb, void* user_data = nullptr, lv_obj_t** lbl_out = nullptr);
+
+// 屏幕/模态状态感知接口（解耦板级按键及电源策略，避免硬件驱动层直接反向依赖具体 Screen）
+bool ScreenIsCriticalModalActive();
+bool ScreenIsReadingActive();
+bool ScreenIsStandbyActive();
+

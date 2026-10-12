@@ -7,6 +7,11 @@
 #include "lv_adapter_display.h"
 #include "network_screen/network_screen.h"
 #include "settings_screen/settings_network_tab.h"
+#include "ota_upgrade_screen/ota_upgrade_screen.h"
+#include "ota_confirm_dialog/ota_confirm_dialog.h"
+#include "settings_screen/settings_test/settings_test_aging_screen.h"
+#include "book_screen/book_screen.h"
+#include "standby_screen/standby_screen.h"
 #include "vk_key_handler.h"
 
 #include <cstring>
@@ -625,4 +630,16 @@ lv_obj_t* ScreenMakeBtn(lv_obj_t* parent, const char* text, lv_coord_t w, lv_coo
         *lbl_out = lbl;
     }
     return lbl;
+}
+
+bool ScreenIsCriticalModalActive() {
+    return OtaUpgradeScreen::IsActive() || OtaConfirmDialog::IsActive() || SettingsTestAgingScreen::IsActive();
+}
+
+bool ScreenIsReadingActive() {
+    return BookScreen::IsReadingActive();
+}
+
+bool ScreenIsStandbyActive() {
+    return StandbyScreen::IsActive();
 }
