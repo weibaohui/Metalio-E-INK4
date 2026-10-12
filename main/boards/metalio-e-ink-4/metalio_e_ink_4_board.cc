@@ -31,6 +31,7 @@
 #include "esp_lcd_ssd1677_commands.h"
 #include "metalio_touch.h"
 #include "power_policy.h"
+#include "utils/psr_worker.h"
 
 #include <wifi_station.h>
 #include <esp_log.h>
@@ -778,7 +779,9 @@ private:
             interval_sec = settings.GetInt("mon_iv", interval_sec);
         }
         s_monitor_interval_sec.store(interval_sec);
-        xTaskCreate(
+        // 栈放 PSRAM(统一入口 SpawnPsrWorker):本任务只读堆/电量/打日志,
+        // 不碰 NVS/flash;4KB 内部栈在 DRAM 余量紧张时挤占无益。
+        if (!SpawnPsrWorker("sys_mon", 4096, 1,
             [](void*) {
                 constexpr int kCoreCount = portNUM_PROCESSORS;
                 configRUN_TIME_COUNTER_TYPE prev_idle[kCoreCount] = {};
@@ -959,7 +962,9 @@ private:
                     // }
                 }
             },
-            "sys_mon", 4096, nullptr, 1, nullptr);
+            nullptr)) {
+            ESP_LOGE(TAG, "sys_mon task create failed");
+        }
 #endif  // CONFIG_SYSTEM_MONITOR_ENABLE
     }
 
