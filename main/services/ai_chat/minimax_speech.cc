@@ -129,7 +129,10 @@ VoiceConfig GetVoiceConfig() {
         if (s_voice_cfg.pitch < -12 || s_voice_cfg.pitch > 12) s_voice_cfg.pitch = 0;
 
         s_voice_cfg.emotion = st.GetString("tts_emotion", "neutral");
-        s_voice_cfg.model = st.GetString("tts_model", "speech-02-turbo");
+        s_voice_cfg.model = st.GetString("tts_model", "speech-2.8-turbo");
+        if (s_voice_cfg.model.empty() || s_voice_cfg.model == "speech-02-turbo") {
+            s_voice_cfg.model = "speech-2.8-turbo";
+        }
         s_cfg_initialized = true;
     }
     return s_voice_cfg;
