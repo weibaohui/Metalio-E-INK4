@@ -112,6 +112,11 @@ public:
     bool HasAudioPcm() const;
 
     /**
+     * @brief 当前队列中累积的音频采样点数
+     */
+    size_t GetQueuedSamples() const;
+
+    /**
      * @brief 获取最后一次出错信息
      */
     std::string GetLastError() const;

@@ -58,23 +58,42 @@ std::string JsonEscape(const std::string& in) {
     return out;
 }
 
-// 检查是否包含断句标点
-bool HasClausePunctuation(const std::string& s) {
+// 检查是否包含强断句终结标点 (句号、感叹号、问号、换行等)
+bool HasSentenceTerminator(const std::string& s) {
     for (size_t i = 0; i < s.size(); ++i) {
         unsigned char c = static_cast<unsigned char>(s[i]);
-        if (c == '\n' || c == ',' || c == '.' || c == '!' || c == '?' || c == ';' || c == ':') {
+        if (c == '\n' || c == '.' || c == '!' || c == '?') {
             return true;
         }
-        // UTF-8 常用中文字符标点：逗号(， EFBCA0), 句号(。 E38082), 感叹号(！ EFBC81),
-        // 问号(？ EFBC9F), 分号(； EFBC9B), 冒号(： EFBC9A), 顿号(、 E38081)
         if (i + 2 < s.size()) {
             if (c == 0xEF && static_cast<unsigned char>(s[i+1]) == 0xBC) {
                 unsigned char b2 = static_cast<unsigned char>(s[i+2]);
-                if (b2 == 0x8C || b2 == 0x81 || b2 == 0x9F || b2 == 0x9B || b2 == 0x9A) return true;
+                if (b2 == 0x81 || b2 == 0x9F) return true; // ！ ？
             }
             if (c == 0xE3 && static_cast<unsigned char>(s[i+1]) == 0x80) {
                 unsigned char b2 = static_cast<unsigned char>(s[i+2]);
-                if (b2 == 0x82 || b2 == 0x81) return true;
+                if (b2 == 0x82) return true; // 。
+            }
+        }
+    }
+    return false;
+}
+
+// 检查是否包含次级停顿标点 (逗号、顿号、分号、冒号等)
+bool HasClausePunctuation(const std::string& s) {
+    for (size_t i = 0; i < s.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c == ',' || c == ';' || c == ':') {
+            return true;
+        }
+        if (i + 2 < s.size()) {
+            if (c == 0xEF && static_cast<unsigned char>(s[i+1]) == 0xBC) {
+                unsigned char b2 = static_cast<unsigned char>(s[i+2]);
+                if (b2 == 0x8C || b2 == 0x9B || b2 == 0x9A) return true; // ， ； ：
+            }
+            if (c == 0xE3 && static_cast<unsigned char>(s[i+1]) == 0x80) {
+                unsigned char b2 = static_cast<unsigned char>(s[i+2]);
+                if (b2 == 0x81) return true; // 、
             }
         }
     }
@@ -233,7 +252,10 @@ void MiniMaxBidiTts::OnWebSocketData(const char* data, size_t len, bool binary) 
         snprintf(spd_buf, sizeof(spd_buf), "%.1f", voice_cfg_.speed);
         snprintf(vol_buf, sizeof(vol_buf), "%.1f", voice_cfg_.vol);
 
-        const std::string model_name = voice_cfg_.model.empty() ? "speech-02-turbo" : voice_cfg_.model;
+        std::string model_name = voice_cfg_.model;
+        if (model_name.empty() || model_name == "speech-02-turbo") {
+            model_name = "speech-2.8-turbo";
+        }
         const std::string voice_id = voice_cfg_.voice_id.empty() ? "male-qn-qingse" : voice_cfg_.voice_id;
         const std::string emotion = voice_cfg_.emotion.empty() ? "neutral" : voice_cfg_.emotion;
 
@@ -334,8 +356,15 @@ bool MiniMaxBidiTts::SendText(const std::string& text) {
     {
         std::lock_guard<std::mutex> lk(send_buf_mutex_);
         send_buffer_ += text;
-        // 遇到标点符号或达到约 15 个字符 (45字节) 时成批发送, 避免单个汉字暴洪
-        if (HasClausePunctuation(send_buffer_) || send_buffer_.size() >= 45) {
+        // 智能分句策略 (避免切碎短句，减少服务端分句断点开销):
+        // 1. 强断句终结符 (。！？\n): 积攒 >=15 字节 (约 5 汉字) 即切分发送成句
+        // 2. 次级从句标点 (，、；：): 需积攒满自然意群 (>=45 字节, 约 15 汉字) 才切分发送
+        // 3. 长句保底: 若长达 75 字节 (约 25 汉字) 仍无标点，强制切分发送
+        const bool term = HasSentenceTerminator(send_buffer_) && send_buffer_.size() >= 15;
+        const bool clause = HasClausePunctuation(send_buffer_) && send_buffer_.size() >= 45;
+        const bool overflow = send_buffer_.size() >= 75;
+
+        if (term || clause || overflow) {
             to_send = std::move(send_buffer_);
             send_buffer_.clear();
         }
@@ -500,6 +529,11 @@ bool MiniMaxBidiTts::PopAudioPcm(std::vector<int16_t>& chunk, size_t max_samples
 bool MiniMaxBidiTts::HasAudioPcm() const {
     std::lock_guard<std::mutex> lk(pcm_mutex_);
     return !pcm_queue_.empty();
+}
+
+size_t MiniMaxBidiTts::GetQueuedSamples() const {
+    std::lock_guard<std::mutex> lk(pcm_mutex_);
+    return pcm_queue_.size();
 }
 
 std::string MiniMaxBidiTts::GetLastError() const {

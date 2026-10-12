@@ -32,7 +32,7 @@ struct VoiceConfig {
     float vol = 1.0f;                        // 音量: 0.1 ~ 10.0 (默认 1.0)
     int pitch = 0;                           // 音调: -12 ~ 12 (默认 0)
     std::string emotion = "neutral";         // 情绪: neutral, happy, sad, angry
-    std::string model = "speech-02-turbo";   // 模型: speech-02-turbo, speech-02-hd
+    std::string model = "speech-2.8-turbo";   // 模型: speech-2.8-turbo(极速对话), speech-2.8-hd
 };
 
 // 读取与设置当前音色配置 (线程安全 RAM 缓存 + NVS 持久化)
