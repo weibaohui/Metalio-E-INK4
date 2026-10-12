@@ -240,8 +240,9 @@ public:
         std::string u_clip = user.size() > 1500 ? user.substr(0, 1500) : user;
         std::string r_clip = reply.size() > 1500 ? reply.substr(0, 1500) : reply;
 
-        char* u_copy = AllocPsramStr(u_clip);
-        char* r_copy = AllocPsramStr(r_clip);
+        // 预转义并存入 PSRAM，消除后续 BuildMessagesJson 每次调用时的重复 EscapeJson 遍历与临时分配
+        char* u_copy = AllocPsramStr(EscapeJson(u_clip));
+        char* r_copy = AllocPsramStr(EscapeJson(r_clip));
         if (!u_copy || !r_copy) {
             if (u_copy) heap_caps_free(u_copy);
             if (r_copy) heap_caps_free(r_copy);
@@ -275,10 +276,14 @@ public:
         size_t start_idx = count_ - take;
 
         std::string out;
+        out.reserve(take * 512);
         for (size_t i = start_idx; i < count_; ++i) {
             if (turns_[i].user && turns_[i].reply) {
-                out += "{\"role\":\"user\",\"content\":\"" + EscapeJson(turns_[i].user) + "\"},";
-                out += "{\"role\":\"assistant\",\"content\":\"" + EscapeJson(turns_[i].reply) + "\"},";
+                out += "{\"role\":\"user\",\"content\":\"";
+                out += turns_[i].user;
+                out += "\"},{\"role\":\"assistant\",\"content\":\"";
+                out += turns_[i].reply;
+                out += "\"},";
             }
         }
         return out;
@@ -685,9 +690,9 @@ void PipelineTask(void*) {
 
                     // 自适应抖动缓冲 (Jitter Buffer):
                     // 16kHz 16-bit 单声道: 16000 采样/秒
-                    // 预缓冲安全门限: 1.2 秒音频 (19200 采样点)
-                    constexpr size_t kPreBufferSamples = 16000 * 12 / 10;
-                    constexpr size_t kReBufferSamples = 16000 * 4 / 10; // 中途欠载补水门限 0.4s
+                    // 预缓冲安全门限: 0.5 秒音频 (8000 采样点, 缩短首音延迟)
+                    constexpr size_t kPreBufferSamples = 16000 * 5 / 10;
+                    constexpr size_t kReBufferSamples = 16000 * 3 / 10; // 中途欠载补水门限 0.3s
                     bool prebuffered = false;
                     int64_t first_audio_ts = 0;
 
@@ -695,14 +700,14 @@ void PipelineTask(void*) {
                         // 持续对 AudioService 保活, 防止 15s 省电定时器将 I2S 输出通道静默关闭
                         Application::GetInstance().GetAudioService().KeepOutputAlive();
 
-                        // 1. 预缓冲检查: 只有蓄足音频或服务端已完成时才起播, 根除句间空白与卡顿
+                        // 1. 预缓冲检查: 只有蓄足音频或服务端已完成时才起播, 兼顾连贯输出与极低首音延迟
                         if (!prebuffered) {
                             const size_t queued = a->tts->GetQueuedSamples();
                             const bool done_sending = a->tts->IsFlushed() || a->tts->IsFinished();
 
                             if (queued == 0) {
                                 if (done_sending) break; // 彻底无音频且已结束
-                                vTaskDelay(pdMS_TO_TICKS(20));
+                                vTaskDelay(pdMS_TO_TICKS(15));
                                 continue;
                             }
 
@@ -712,17 +717,17 @@ void PipelineTask(void*) {
                             const int64_t wait_ms = (esp_timer_get_time() - first_audio_ts) / 1000;
 
                             // 放行起播条件:
-                            // a. 缓冲达到 1.2 秒
+                            // a. 缓冲达到 0.5 秒 (8000 采样点)
                             // b. 服务端已确认全部音频下发完毕 (短回复免等)
-                            // c. 等待已达 800ms 且至少累积了 0.5s 音频 (防迟钝)
+                            // c. 等待已达 350ms 且至少累积了 0.3s (4800) 音频 (防迟钝)
                             if (queued >= kPreBufferSamples || done_sending ||
-                                (wait_ms >= 800 && queued >= 8000)) {
+                                (wait_ms >= 350 && queued >= 4800)) {
                                 prebuffered = true;
                                 first_audio_ts = 0;
                                 ESP_LOGI(TAG, "play: 预缓冲就绪, 当前存量 %u 采样 (~%.2fs), 开始连贯输出",
                                          (unsigned)queued, (float)queued / 16000.0f);
                             } else {
-                                vTaskDelay(pdMS_TO_TICKS(20));
+                                vTaskDelay(pdMS_TO_TICKS(15));
                                 continue;
                             }
                         }

@@ -4,6 +4,8 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_touch.h>
 #include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <chrono>
 #include <cstddef>
@@ -95,6 +97,9 @@ public:
     // CST816 硬件 RST 唤醒后，通知 esp_lv_adapter 重新读触摸（IRQ 路径）。
     void KickTouchInput();
 
+    // 唤醒 LVGL worker 任务（消除 ulTaskNotifyTake 睡眠延迟）
+    void WakeLvglTask();
+
 private:
     bool Lock(int timeout_ms = 0) override;
     void Unlock() override;
@@ -130,6 +135,7 @@ private:
 
     EpdFlushCtx* epd_flush_ctx_ = nullptr;
     lv_indev_t* touch_indev_ = nullptr;
+    TaskHandle_t lvgl_task_ = nullptr;
     mmap_assets_handle_t resources_assets_ = nullptr;
 
     static LVAdapterDisplay* instance_;

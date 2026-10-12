@@ -11,6 +11,7 @@
 #include "board.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
+#include "lv_adapter_display.h"
 #include "screen_common.h"
 #include "services/ai_chat/ai_chat_service.h"
 #include "services/ai_chat/minimax_speech.h"
@@ -407,10 +408,20 @@ void OpenVoiceSettingsModal(lv_obj_t* parent_screen) {
 static std::string s_last_rendered_user;
 static std::string s_last_rendered_reply;
 static std::string s_last_rendered_err;
+static std::string s_last_rendered_status;
+static int64_t s_last_reply_render_us = 0;
 
 void RefreshState() {
     if (!s_alive || s_ui.status_lbl == nullptr) return;
-    lv_label_set_text(s_ui.status_lbl, AiChat_GetStateText().c_str());
+
+    // 用户正在触摸按住或手势滑动中：暂停流式文本更新与自动滚动，独占墨水屏刷新带宽给手势操作
+    const bool user_interacting = TouchUiFingerIsDown() || (s_ui.chat_box != nullptr && lv_obj_is_scrolling(s_ui.chat_box));
+
+    const std::string state_text = AiChat_GetStateText();
+    if (state_text != s_last_rendered_status) {
+        s_last_rendered_status = state_text;
+        lv_label_set_text(s_ui.status_lbl, state_text.c_str());
+    }
     const auto st = AiChat_GetState();
     const bool recording = st == AiChatState::Recording;
     if (s_ui.talk_lbl != nullptr) {
@@ -422,7 +433,7 @@ void RefreshState() {
                                     recording ? lv_color_white() : lv_color_black(), 0);
     }
     const std::string user = AiChat_GetUserText();
-    if (s_ui.user_lbl != nullptr && user != s_last_rendered_user) {
+    if (s_ui.user_lbl != nullptr && user != s_last_rendered_user && !user_interacting) {
         s_last_rendered_user = user;
         if (!user.empty()) lv_label_set_text(s_ui.user_lbl, ("我:" + user).c_str());
         else lv_label_set_text(s_ui.user_lbl, "");
@@ -432,12 +443,29 @@ void RefreshState() {
     if (s_ui.reply_lbl != nullptr) {
         if (!reply.empty()) {
             if (reply != s_last_rendered_reply) {
-                s_last_rendered_reply = reply;
-                s_last_rendered_err.clear();
-                lv_label_set_text(s_ui.reply_lbl, ("AI:" + reply).c_str());
-                // 仅当大模型吐出新文本时自动跟随滚动到底部；生成完毕后不干扰用户自由上下滑动浏览
-                if (s_ui.chat_box != nullptr && (st == AiChatState::Thinking || st == AiChatState::Speaking)) {
-                    lv_obj_scroll_to_view(s_ui.reply_lbl, LV_ANIM_OFF);
+                // 如果用户正在交互滑动，暂缓更新避免重排打断手势
+                if (user_interacting) {
+                    return;
+                }
+                // 流式思考阶段节流控制：避免每 200ms 小碎片刷新占满墨水屏 (~250ms/局刷)
+                // 仅在满 500ms、或者出现句末标点、或者流式结束时才刷新画面
+                const int64_t now_us = esp_timer_get_time();
+                const bool is_streaming = (st == AiChatState::Thinking);
+                const bool elapsed = (now_us - s_last_reply_render_us) >= 500000LL;
+                char last_ch = reply.back();
+                const bool has_break = (last_ch == '\n' || last_ch == '。' || last_ch == '！' || last_ch == '？' ||
+                                        reply.size() - s_last_rendered_reply.size() >= 30);
+                if (!is_streaming || elapsed || has_break) {
+                    s_last_reply_render_us = now_us;
+                    s_last_rendered_reply = reply;
+                    s_last_rendered_err.clear();
+                    lv_label_set_text(s_ui.reply_lbl, ("AI:" + reply).c_str());
+                    // 仅当大模型吐出新文本且非手动滑动中时自动跟随
+                    if (s_ui.chat_box != nullptr && (st == AiChatState::Thinking || st == AiChatState::Speaking)) {
+                        if (!lv_obj_is_scrolling(s_ui.chat_box)) {
+                            lv_obj_scroll_to_view(s_ui.reply_lbl, LV_ANIM_OFF);
+                        }
+                    }
                 }
             }
         } else if (!err.empty()) {
@@ -450,6 +478,7 @@ void RefreshState() {
             if (!s_last_rendered_reply.empty() || !s_last_rendered_err.empty()) {
                 s_last_rendered_reply.clear();
                 s_last_rendered_err.clear();
+                s_last_reply_render_us = 0;
                 lv_label_set_text(s_ui.reply_lbl, "");
                 // 新提问清空时, 将滚动条复位到顶部
                 if (s_ui.chat_box != nullptr) {
@@ -514,6 +543,8 @@ void OnScreenUnloaded(lv_event_t*) {
     s_last_rendered_user.clear();
     s_last_rendered_reply.clear();
     s_last_rendered_err.clear();
+    s_last_rendered_status.clear();
+    s_last_reply_render_us = 0;
     s_press_down_us = 0;
     s_ui = {};
 }
@@ -619,11 +650,11 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     lv_obj_set_style_bg_color(chat, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(chat, LV_OPA_COVER, 0); // 不透明背景, 确保触摸判定 100% 命中
 
-    // 启用触摸点击与垂直手势滑动
+    // 启用触摸点击与垂直手势滑动 (禁用墨水屏不适用的弹性与惯性动量，避免画面滞后与连刷)
     lv_obj_add_flag(chat, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(chat, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(chat, LV_OBJ_FLAG_SCROLL_ELASTIC);
-    lv_obj_add_flag(chat, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    lv_obj_clear_flag(chat, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_clear_flag(chat, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     lv_obj_set_scroll_dir(chat, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(chat, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_style_width(chat, 4, LV_PART_SCROLLBAR);

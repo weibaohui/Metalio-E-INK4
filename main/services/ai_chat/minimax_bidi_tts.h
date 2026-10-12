@@ -148,6 +148,7 @@ private:
     std::atomic<bool> is_flushed_{false};
     std::atomic<bool> is_finished_{false};
     std::atomic<bool> is_canceled_{false};
+    std::atomic<bool> first_sentence_sent_{false};
     std::atomic<int64_t> last_active_us_{0};
 
     // 客户端发送平滑缓冲 (按标点或长度分批发送, 防暴洪)

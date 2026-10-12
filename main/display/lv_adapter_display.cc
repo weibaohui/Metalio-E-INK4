@@ -148,7 +148,7 @@ TouchVkHoldState s_vk_hold{};
 #define LV_ADAPTER_TOUCH_TRACE 0
 #endif
 constexpr int kTouchFeedPeriodMs = 10;
-constexpr UBaseType_t kTouchFeedPriority = 5; // > LVGL(1)
+constexpr UBaseType_t kTouchFeedPriority = 6; // > LVGL(5)
 constexpr uint8_t kTouchEdgeQueueDepth = 50; // LVGL 忙时 down/up 边沿积压上限
 struct TouchDownEdge {
     uint16_t x = 0;
@@ -916,7 +916,11 @@ static void CoalesceKickAsync(void* user_data) {
 
 static void CoalesceEspTimerCb(void* arg) {
     // 勿在 timer 任务里直接碰 panel/LVGL：投递到 LVGL 线程
-    if (lv_async_call(CoalesceKickAsync, arg) != LV_RESULT_OK) {
+    if (lv_async_call(CoalesceKickAsync, arg) == LV_RESULT_OK) {
+        if (auto* disp = LVAdapterDisplay::Instance()) {
+            disp->WakeLvglTask();
+        }
+    } else {
         auto* ctx = static_cast<EpdFlushCtx*>(arg);
         if (ctx != nullptr) {
             ctx->coalesce_kick_armed = false;
@@ -938,7 +942,7 @@ static void ArmCoalesceKick(EpdFlushCtx* ctx) {
         return;
     }
     ctx->coalesce_kick_armed = true;
-    if (esp_timer_start_once(ctx->coalesce_timer, 50000) != ESP_OK) { // 50ms
+    if (esp_timer_start_once(ctx->coalesce_timer, 15000) != ESP_OK) { // 15ms (原 50ms)
         ctx->coalesce_kick_armed = false;
     }
 }
@@ -1086,7 +1090,9 @@ esp_err_t EpdLvglDrawBitmap(lv_display_t* disp, esp_lcd_panel_handle_t panel, in
     }
 
     // 退待机后首帧（0xC7）/ 每 10 次局刷或其它强制全刷（0xC4）
-    if (ctx->force_next_full || ctx->partial_refresh_count >= kPartialsPerFull) {
+    // 交互优化：手指按住/滑动中(TouchUiFingerIsDown)延后周期性全刷，避免手势操作中途突然全刷卡顿
+    const bool allow_periodic_full = !TouchUiFingerIsDown();
+    if (ctx->force_next_full || (allow_periodic_full && ctx->partial_refresh_count >= kPartialsPerFull)) {
         const bool from_force = ctx->force_next_full;
         const bool use_c7 = from_force && ctx->force_full_c7;
         ctx->force_next_full = false;
@@ -1242,7 +1248,7 @@ LVAdapterDisplay::LVAdapterDisplay(const esp_lcd_panel_handle_t panel,
     // PSRAM 栈上禁止调用 spi_flash/NVS（会触发 cache_utils assert）。
     // 业务里凡 EnsureAudioServiceRunning / Settings 等须放到 DRAM 栈任务（参见录音/翻译）。
     adapter_cfg.stack_in_psram = true;
-    adapter_cfg.task_priority = 1;
+    adapter_cfg.task_priority = 5;
     adapter_cfg.task_core_id = 1;
 
     ESP_ERROR_CHECK(esp_lv_adapter_init(&adapter_cfg));
@@ -1275,6 +1281,10 @@ LVAdapterDisplay::LVAdapterDisplay(const esp_lcd_panel_handle_t panel,
         touch_cfg.callbacks.custom_touch_read = CustomTouchRead;
         touch_indev_ = esp_lv_adapter_register_touch(&touch_cfg);
         ESP_ERROR_CHECK(touch_indev_ ? ESP_OK : ESP_FAIL);
+        if (lv_timer_t* read_timer = lv_indev_get_read_timer(touch_indev_)) {
+            lv_timer_set_period(read_timer, 15);
+        }
+        lv_indev_set_scroll_limit(touch_indev_, 6);
         StartTouchFeed(touch_handle, touch_poll);
     }
 
@@ -1332,6 +1342,16 @@ void LVAdapterDisplay::SetupUI() {
 void LVAdapterDisplay::KickTouchInput() {
     if (touch_indev_ != nullptr) {
         esp_lv_adapter_touch_notify_interrupt(touch_indev_);
+    }
+    WakeLvglTask();
+}
+
+void LVAdapterDisplay::WakeLvglTask() {
+    if (lvgl_task_ == nullptr) {
+        lvgl_task_ = xTaskGetHandle("lvgl");
+    }
+    if (lvgl_task_ != nullptr) {
+        xTaskNotifyGive(lvgl_task_);
     }
 }
 

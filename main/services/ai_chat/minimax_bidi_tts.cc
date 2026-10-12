@@ -129,6 +129,7 @@ bool MiniMaxBidiTts::StartSession(const std::string& key,
     is_finished_.store(false);
     is_canceled_.store(false);
     session_active_.store(false);
+    first_sentence_sent_.store(false);
     total_pcm_received_ = 0;
 
     {
@@ -357,14 +358,27 @@ bool MiniMaxBidiTts::SendText(const std::string& text) {
         std::lock_guard<std::mutex> lk(send_buf_mutex_);
         send_buffer_ += text;
         // 智能分句策略 (避免切碎短句，减少服务端分句断点开销):
-        // 1. 强断句终结符 (。！？\n): 积攒 >=15 字节 (约 5 汉字) 即切分发送成句
-        // 2. 次级从句标点 (，、；：): 需积攒满自然意群 (>=45 字节, 约 15 汉字) 才切分发送
-        // 3. 长句保底: 若长达 75 字节 (约 25 汉字) 仍无标点，强制切分发送
-        const bool term = HasSentenceTerminator(send_buffer_) && send_buffer_.size() >= 15;
-        const bool clause = HasClausePunctuation(send_buffer_) && send_buffer_.size() >= 45;
-        const bool overflow = send_buffer_.size() >= 75;
+        // 1. 首句抢跑优化：第一句对交互延迟最敏感，遇任意从句标点(，、；：)或强标点即切分，或满 36 字节即发
+        // 2. 后续句子平滑合成：
+        //    a. 强断句终结符 (。！？\n): 积攒 >=15 字节 (约 5 汉字) 即切分发送成句
+        //    b. 次级从句标点 (，、；：): 需积攒满自然意群 (>=45 字节, 约 15 汉字) 才切分发送
+        //    c. 长句保底: 若长达 75 字节 (约 25 汉字) 仍无标点，强制切分发送
+        bool should_send = false;
+        if (!first_sentence_sent_.load()) {
+            if ((HasSentenceTerminator(send_buffer_) && send_buffer_.size() >= 6) ||
+                (HasClausePunctuation(send_buffer_) && send_buffer_.size() >= 12) ||
+                send_buffer_.size() >= 36) {
+                should_send = true;
+                first_sentence_sent_.store(true);
+            }
+        } else {
+            const bool term = HasSentenceTerminator(send_buffer_) && send_buffer_.size() >= 15;
+            const bool clause = HasClausePunctuation(send_buffer_) && send_buffer_.size() >= 45;
+            const bool overflow = send_buffer_.size() >= 75;
+            should_send = term || clause || overflow;
+        }
 
-        if (term || clause || overflow) {
+        if (should_send) {
             to_send = std::move(send_buffer_);
             send_buffer_.clear();
         }

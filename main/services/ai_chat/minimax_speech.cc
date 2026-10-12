@@ -242,12 +242,17 @@ bool TranscribeStream(const std::string& url,
         err = "STT URL 或 Key 为空";
         return false;
     }
-    const std::string wav = BuildWav(pcm);
+    const uint32_t data_bytes = (uint32_t)(pcm.size() * sizeof(int16_t));
     const std::string boundary = "----aichat_boundary";
     std::string body;
-    body.reserve(wav.size() + 512);
+    body.reserve(data_bytes + 512);
     body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
-    body.append(wav);
+    // 零拷贝优化：直接在 body 中组装 WAV 头与数据，避免生成完整的 wav 中间副本
+    body += "RIFF"; PutLE32(body, 36 + data_bytes); body += "WAVE";
+    body += "fmt "; PutLE32(body, 16); PutLE16(body, 1); PutLE16(body, 1);  // PCM, mono
+    PutLE32(body, kSampleRate); PutLE32(body, kSampleRate * 2); PutLE16(body, 2); PutLE16(body, 16);
+    body += "data"; PutLE32(body, data_bytes);
+    body.append(reinterpret_cast<const char*>(pcm.data()), data_bytes);
     body += "\r\n--" + boundary + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n" +
             (model.empty() ? std::string("asr-1.0") : model) + "\r\n";
     body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n";
@@ -259,7 +264,7 @@ bool TranscribeStream(const std::string& url,
     http->SetTimeout(25000);
     http->SetHeader("Authorization", "Bearer " + key);
     http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
-    http->SetContent(std::string(body));
+    http->SetContent(std::move(body));
     if (!http->Open("POST", url)) {
         err = "STT 连接失败 code=" + std::to_string(http->GetLastError());
         http->Close();
