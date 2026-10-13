@@ -533,8 +533,24 @@ void OnTimer(lv_timer_t*) {
     RefreshState();
 }
 
+// 触摸层竖向滑动(#47):touch_feed 任务上下文回调,投递回 LVGL 一次滚动。
+// 只认本屏的 chat;离屏后 s_alive=false 丢弃。dy 经文件级暂存传递
+// (lv_async 的 user_data 只有一个槽,touch_feed 单任务串行无竞争)。
+static int32_t s_pending_swipe_dy = 0;
+static void OnSwipeScrollFromFeed(int32_t dy, void* user_data) {
+    s_pending_swipe_dy = dy;
+    lv_async_call([](void* p) {
+        if (!s_alive || s_ui.chat_box == nullptr || s_ui.chat_box != p) {
+            return;
+        }
+        ESP_LOGI("AiChatDiag", "chat scroll_by dy=%d", (int)s_pending_swipe_dy);
+        lv_obj_scroll_by(s_ui.chat_box, 0, -s_pending_swipe_dy, LV_ANIM_OFF);
+    }, user_data);
+}
+
 void OnScreenUnloaded(lv_event_t*) {
     s_alive = false;
+    SetSwipeScrollCb(nullptr, nullptr);
     CloseVoiceSettingsModal();
     // 忙就取消:录音/播报/转写/思考任一进行中都停(播报也立刻断),
     // 否则退出后任务还在后台跑,"播报中"状态残留到下次进屏
@@ -652,15 +668,52 @@ lv_obj_t* AiVoiceChatScreen::Create() {
 
     // 启用触摸点击与垂直手势滑动 (禁用墨水屏不适用的弹性与惯性动量，避免画面滞后与连刷)
     lv_obj_add_flag(chat, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(chat, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(chat, LV_OBJ_FLAG_SCROLL_ELASTIC);
-    lv_obj_clear_flag(chat, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    // 墨水屏拖动滚动 = 每步一次 300-800ms 刷新,快速轻扫全被刷新窗口吞掉
+    // (#47 实测)。改为"抬手一次滚动":关掉 indev 拖动滚动(SCROLLABLE),
+    // 用 PRESSING 采集滑动距离,RELEASE 时 lv_obj_scroll_by 一次到位。
+    // 程序化 scroll_by 不受 SCROLLABLE 限制,滚动条/边界钳制照常工作。
+    lv_obj_clear_flag(chat, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(chat, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(chat, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scrollbar_mode(chat, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_scrollbar_mode(chat, LV_SCROLLBAR_MODE_OFF);
+    // 手动滑动采集:PRESSING 记录手指 y,RELEASE 时按位移一次滚动到位
+    static int16_t swipe_press_y = -1;
+    static int16_t swipe_last_y = -1;
+    lv_obj_add_event_cb(chat, [](lv_event_t* e) {
+        lv_indev_t* indev = lv_indev_active();
+        if (indev == nullptr) return;
+        lv_point_t p;
+        lv_indev_get_point(indev, &p);
+        const lv_event_code_t code = lv_event_get_code(e);
+        static int pressing_cnt = 0;
+        if (code == LV_EVENT_PRESSED) {
+            swipe_press_y = p.y;
+            swipe_last_y = p.y;
+            pressing_cnt = 0;
+            ESP_LOGI("AiChatDiag", "PRESSED y=%d", (int)p.y);
+        } else if (code == LV_EVENT_PRESSING) {
+            swipe_last_y = p.y;
+            if (++pressing_cnt % 10 == 1) {
+                ESP_LOGI("AiChatDiag", "PRESSING #%d y=%d", pressing_cnt, (int)p.y);
+            }
+        } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+            const int32_t dy = swipe_last_y - swipe_press_y;
+            ESP_LOGI("AiChatDiag", "RELEASED dy=%d (press_y=%d last_y=%d)",
+                     (int)dy, (int)swipe_press_y, (int)swipe_last_y);
+            if (swipe_press_y >= 0 && dy != 0) {
+                lv_obj_scroll_by(static_cast<lv_obj_t*>(lv_event_get_target(e)),
+                                 0, -dy, LV_ANIM_OFF);
+            }
+            swipe_press_y = -1;
+            swipe_last_y = -1;
+        }
+    }, LV_EVENT_ALL, nullptr);
     lv_obj_set_style_width(chat, 4, LV_PART_SCROLLBAR);
     lv_obj_set_style_bg_color(chat, lv_color_black(), LV_PART_SCROLLBAR);
     lv_obj_set_style_bg_opa(chat, LV_OPA_COVER, LV_PART_SCROLLBAR);
     s_ui.chat_box = chat;
+    // 触摸层竖向滑动回调(#47):按住-拖动-抬起 → 抬手一次滚动
+    SetSwipeScrollCb(OnSwipeScrollFromFeed, chat);
 
     // wrap=true: 宽 100% + 长文自动折行, 回复再长也不超屏宽;
     // 超出对话区高度由容器竖向滚动承载 (支持手势上下滑动看全文)

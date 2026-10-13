@@ -462,7 +462,31 @@ private:
     // 返回 true 表示触摸可用；检测不到时不崩溃，touch_ 保持 nullptr。
     bool InitializeTouch() {
         touch_ = nullptr;
-        return metalio_touch_init(i2c_bus_, &touch_) == ESP_OK;
+        // 先给 RST 脉冲唤醒可能残留休眠态的触摸芯片:待机写入的 0xA5=0x03
+        // 跨 ESP 软复位/刷机重启存活(2026-10-13 实测),下一 boot init 虽然
+        // I2C probe 成功(休眠态响应 I2C),但芯片永不报坐标 → 整个 boot
+        // 触摸全死。RST 脉冲 = 硬件级确保醒来;未休眠时脉冲无害。
+        {
+            auto& io = IOExpander::getInstance();
+            if (io.isInitialized() && io.handle() != nullptr) {
+                (void)metalio_touch_hw_reset_pulse(io.handle());
+            }
+        }
+        // 冷启动 I2C probe 竞争(2026-10-13 实测):控制器未就绪时 init 失败
+        // → touch_=null → 显示注册静默跳过 → 整个开机周期触摸全死。
+        // 重试至多 5×150ms;仍失败大声警告(此前静默,诊断走了大弯路)。
+        for (int attempt = 1; attempt <= 5; ++attempt) {
+            if (metalio_touch_init(i2c_bus_, &touch_) == ESP_OK) {
+                if (attempt > 1) {
+                    ESP_LOGI(TAG, "touch init ok on attempt %d", attempt);
+                }
+                return true;
+            }
+            ESP_LOGW(TAG, "touch init failed (attempt %d/5)", attempt);
+            vTaskDelay(pdMS_TO_TICKS(150));
+        }
+        ESP_LOGE(TAG, "touch init FAILED after retries; touch will be DEAD this boot");
+        return false;
     }
 
     void InitializeDisplay() {
