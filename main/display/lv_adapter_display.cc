@@ -141,13 +141,11 @@ static void SwipeMove(int y) {
 }
 
 static void SwipeFinish() {
-    if (s_swipe_cb != nullptr && s_swipe_active) {
-        const int32_t dy = s_swipe_last_y - s_swipe_origin_y;  // 手指下滑为正
-        ESP_LOGI(TAG, "swipe finish dy=%d -> cb", (int)dy);
-        s_swipe_cb(dy, s_swipe_user);
-    } else {
-        ESP_LOGI(TAG, "swipe finish dy=%d (no cb/active=%d)",
-                 (int)(s_swipe_last_y - s_swipe_origin_y), (int)s_swipe_active);
+    if (!s_swipe_active) {
+        return;   // 无活动手势(纯空闲采样):直接返回,别刷日志
+    }
+    if (s_swipe_cb != nullptr) {
+        s_swipe_cb(s_swipe_last_y - s_swipe_origin_y, s_swipe_user);
     }
     s_swipe_active = false;
 }
@@ -465,11 +463,6 @@ void TouchFeedTask(void* arg) {
         }
         const int x = count > 0 ? static_cast<int>(pts[0].x) : 0;
         const int y = count > 0 ? static_cast<int>(pts[0].y) : 0;
-        // #47 临时诊断:原始采样轨迹(控制器是否给连续坐标)
-        static int diag_n = 0;
-        if (count > 0 && ++diag_n % 3 == 1) {
-            ESP_LOGI(TAG, "RAW n=%d c=%u x=%d y=%d", diag_n, (unsigned)count, x, y);
-        }
         TouchFeedHandleSample(count, x, y);
         vTaskDelay(pdMS_TO_TICKS(kTouchFeedPeriodMs));
     }
