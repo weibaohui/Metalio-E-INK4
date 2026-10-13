@@ -103,7 +103,9 @@ esp_err_t metalio_touch_init(i2c_master_bus_handle_t i2c_bus, esp_lcd_touch_hand
         .x_max = SSD1677_PANEL_HEIGHT,
         .y_max = SSD1677_PANEL_WIDTH,
         .rst_gpio_num = GPIO_NUM_NC,
-        .int_gpio_num = TOUCH_INT_GPIO,
+        .int_gpio_num = TOUCH_INT_GPIO,  // INT 模式:轮询模式实测 100Hz 打共享 I2C
+                                         // 总线致读数间歇失败(count 闪 0)→ LVGL 看到
+                                         // 按下/松手频闪,滚动/点击全废(2026-10-13)
         .levels =
             {
                 .reset = 0,

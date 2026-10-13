@@ -32,6 +32,12 @@ enum class TouchVkEvent : uint8_t {
 };
 
 using TouchVirtualKeyEventCb = bool (*)(const char* name, TouchVkEvent event, void* user_data);
+
+// 对话区竖向滑动滚动回调(#47):touch_feed 层在 UI 区检测到按住-拖动-抬起,
+// dy 为手指位移(下滑为正)。由各屏幕注册(如 AI 对话滚动其回复区)。
+// 在 touch_feed 任务上下文调用,实现方须 lv_async 投递回 LVGL。
+using TouchSwipeScrollCb = void (*)(int32_t dy, void* user_data);
+void SetSwipeScrollCb(TouchSwipeScrollCb cb, void* user_data);
 using TouchPollCallback = esp_err_t (*)(esp_lcd_touch_handle_t touch,
                                         esp_lcd_touch_point_data_t* points, uint8_t* count,
                                         uint8_t max_points);

@@ -120,6 +120,37 @@ bool s_finger_was_down = false;
 // "滑动中"。此时 vk 不认领新键(滑动路过底栏不再误触),LVGL 不中途起新 press
 // (从底栏滑进内容区不再点开控件)。取 18px:CST816S 抖动容限之上、指腹误移之下。
 constexpr int kTouchSlopPx = 18;
+
+// 竖向滑动滚动(#47):UI 区按住后手指拖动,抬起时一次滚动。绕过 LVGL indev
+// (实测该路径在这台设备上每手势只交付一个静止点),用 touch_feed 已验证
+// 连续的原始坐标,一次手势一次刷新,墨水屏友好。
+TouchSwipeScrollCb s_swipe_cb = nullptr;
+void* s_swipe_user = nullptr;
+bool s_swipe_active = false;
+int16_t s_swipe_origin_y = 0;
+int16_t s_swipe_last_y = 0;
+
+static void SwipeBegin(int y) {
+    s_swipe_active = true;
+    s_swipe_origin_y = y;
+    s_swipe_last_y = y;
+}
+
+static void SwipeMove(int y) {
+    s_swipe_last_y = y;
+}
+
+static void SwipeFinish() {
+    if (s_swipe_cb != nullptr && s_swipe_active) {
+        const int32_t dy = s_swipe_last_y - s_swipe_origin_y;  // 手指下滑为正
+        ESP_LOGI(TAG, "swipe finish dy=%d -> cb", (int)dy);
+        s_swipe_cb(dy, s_swipe_user);
+    } else {
+        ESP_LOGI(TAG, "swipe finish dy=%d (no cb/active=%d)",
+                 (int)(s_swipe_last_y - s_swipe_origin_y), (int)s_swipe_active);
+    }
+    s_swipe_active = false;
+}
 int16_t s_touch_origin_x = -1;
 int16_t s_touch_origin_y = -1;
 
@@ -272,6 +303,7 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
         s_vk_instant_was_down = false;
         s_touch_origin_x = -1;
         s_touch_origin_y = -1;
+        SwipeFinish();
         EndHoldPress(true);
         bool kick = false;
         uint8_t pend_d = 0, pend_u = 0, live = 0;
@@ -294,11 +326,13 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
     }
 
     PowerPolicy::GetInstance().NotifyUserActivity();
+    SwipeMove(y);
 
     if (!s_finger_was_down) {
         s_finger_was_down = true;
         s_touch_origin_x = static_cast<int16_t>(x);
         s_touch_origin_y = static_cast<int16_t>(y);
+        SwipeBegin(y);
         const TouchVirtualKey* early_hit = HitVirtualKey(x, y);
         ESP_LOGI(TAG, "touch down x=%d y=%d %s", x, y,
                  early_hit != nullptr ? early_hit->name : "ui");
@@ -431,6 +465,11 @@ void TouchFeedTask(void* arg) {
         }
         const int x = count > 0 ? static_cast<int>(pts[0].x) : 0;
         const int y = count > 0 ? static_cast<int>(pts[0].y) : 0;
+        // #47 临时诊断:原始采样轨迹(控制器是否给连续坐标)
+        static int diag_n = 0;
+        if (count > 0 && ++diag_n % 3 == 1) {
+            ESP_LOGI(TAG, "RAW n=%d c=%u x=%d y=%d", diag_n, (unsigned)count, x, y);
+        }
         TouchFeedHandleSample(count, x, y);
         vTaskDelay(pdMS_TO_TICKS(kTouchFeedPeriodMs));
     }
@@ -571,6 +610,12 @@ esp_err_t CustomTouchRead(esp_lcd_touch_handle_t tp, esp_lcd_touch_point_data_t*
 }
 
 }  // namespace
+
+
+void SetSwipeScrollCb(TouchSwipeScrollCb cb, void* user_data) {
+    s_swipe_cb = cb;
+    s_swipe_user = user_data;
+}
 
 /*
  * LVGL I1 / HTILED：1=白、0=黑，与面板 VRAM（0xFF=白）一致，写屏不取反。
