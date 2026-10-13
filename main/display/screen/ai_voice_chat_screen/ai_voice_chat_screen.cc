@@ -557,8 +557,6 @@ static void ChatPageScrollAsyncCb(void* p) {
     if (target < 0) target = 0;
     if (target > max_offset) target = max_offset;
     s_read_offset = target;
-    ESP_LOGI("AiChatDiag", "page dir=%d offset=%d/%d", dir,
-             (int)s_read_offset, (int)max_offset);
     lv_obj_scroll_to_y(s_ui.chat_box, s_read_offset, LV_ANIM_OFF);
 }
 
@@ -732,21 +730,13 @@ lv_obj_t* AiVoiceChatScreen::Create() {
         lv_point_t p;
         lv_indev_get_point(indev, &p);
         const lv_event_code_t code = lv_event_get_code(e);
-        static int pressing_cnt = 0;
         if (code == LV_EVENT_PRESSED) {
             swipe_press_y = p.y;
             swipe_last_y = p.y;
-            pressing_cnt = 0;
-            ESP_LOGI("AiChatDiag", "PRESSED y=%d", (int)p.y);
         } else if (code == LV_EVENT_PRESSING) {
             swipe_last_y = p.y;
-            if (++pressing_cnt % 10 == 1) {
-                ESP_LOGI("AiChatDiag", "PRESSING #%d y=%d", pressing_cnt, (int)p.y);
-            }
         } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
             const int32_t dy = swipe_last_y - swipe_press_y;
-            ESP_LOGI("AiChatDiag", "RELEASED dy=%d (press_y=%d last_y=%d)",
-                     (int)dy, (int)swipe_press_y, (int)swipe_last_y);
             if (swipe_press_y >= 0 && dy != 0) {
                 lv_obj_scroll_by(static_cast<lv_obj_t*>(lv_event_get_target(e)),
                                  0, -dy, LV_ANIM_OFF);
