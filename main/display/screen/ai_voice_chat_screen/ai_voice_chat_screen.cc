@@ -589,7 +589,7 @@ static void OnSwipeScrollFromFeed(int32_t dy, void* user_data) {
             return;
         }
         // 触摸 y 轴与屏幕旋转后逻辑方向相反:手指上滑(物理向下注意核对)触摸 y 增大 = 看后文
-        ChatPageScroll(s_pending_swipe_dy > 0 ? 1 : -1);
+        ChatPageScroll(s_pending_swipe_dy < 0 ? 1 : -1);  // 内容跟随手指
     }, user_data);
 }
 
