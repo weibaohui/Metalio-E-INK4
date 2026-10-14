@@ -141,11 +141,10 @@ static appfw_stream_err_t try_connect(appfw_stream_t *s, const char *url)
         .url = url,
         .user_agent = "AI-Passport-Radio/1.0",   // 别伪装浏览器:有的 CDN 对
                                                  // 浏览器 UA 会在 32KB 处掐断
-        .buffer_size = 2048,
+        .buffer_size = 8192,
         .buffer_size_tx = 512,
-        // 1s:播放循环靠"读返回"发现换台/停止请求,超时值就是切台的最大延迟。
-        // 连续流正常远快于 1s;不用更小值是为了给弱网留重传余量。
-        .timeout_ms = 1000,
+        // 1.5s: 留足弱网 TCP 重传余量, 切台感知仍敏捷
+        .timeout_ms = 1500,
         .keep_alive_enable = true,
         .event_handler = metaint_cb,
         .user_data = s,

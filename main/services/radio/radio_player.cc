@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -271,37 +273,100 @@ private:
 };
 RadioAudioEnhancer s_enhancer;
 
-// 把 16k 单声道 PCM 送板载 codec。
-// 输出暂存:内部 RAM + TTS 同尺寸分片。
-// 实测二分结论:用 PSRAM 里的 16KB 大缓冲整块 i2s_channel_write 时,设备会在
-// 开播 ~10s 后网络栈死掉(WiFi 仍关联、ping/TCP 全断、无 panic)。百问 TTS 在
-// 同一块板上长期稳定,差别只在:TTS 用内部 RAM 的小块(~960 样本=60ms)喂 codec。
-// 这里按 TTS 的方式分片输出。
-constexpr size_t kStageSamples = 960;   // 60ms @16k,与 OPUS_FRAME_DURATION_MS 对齐
-std::vector<int16_t> s_stage;           // 内部 RAM(小容量不会进 PSRAM)
+// ---- 专职 I2S 喂流流水线(解耦网络拉流与硬件播放, 彻底根除网络抖动卡顿) ----
+// 环形缓冲队列配置: 16kHz 16-bit 单声道
+// 32000 个采样点 = 2.0 秒抗抖动缓冲 (64KB PSRAM)
+constexpr size_t kRadioBufferMaxSamples = 16000 * 2;
+// 起播安全门限: 0.6 秒缓冲 (9600 采样点)
+constexpr size_t kRadioPreBufferSamples = 16000 * 6 / 10;
+constexpr size_t kStageSamples = 960;   // 60ms @16k, 与 OPUS_FRAME_DURATION_MS 对齐
+
+std::mutex s_radio_pcm_mutex;
+std::condition_variable s_radio_pcm_cv;
+std::deque<int16_t> s_radio_pcm_queue;
+std::atomic<bool> s_radio_play_active{false};
+std::atomic<bool> s_radio_stream_alive{false};
+TaskHandle_t s_play_task = nullptr;
 
 void OutputPcm(std::vector<int16_t>& pcm) {
     if (pcm.empty()) return;
-    auto* codec = Board::GetInstance().GetAudioCodec();
-    if (codec == nullptr) {
-        pcm.clear();
-        return;
+    std::unique_lock<std::mutex> lk(s_radio_pcm_mutex);
+    // 若缓冲已满（>= 2秒），阻塞等待播放端消费，防止无限占用 PSRAM
+    if (s_radio_pcm_queue.size() >= kRadioBufferMaxSamples) {
+        s_radio_pcm_cv.wait_for(lk, std::chrono::milliseconds(50), []() {
+            return s_radio_pcm_queue.size() < kRadioBufferMaxSamples || s_quit.load() || !s_radio_stream_alive.load();
+        });
     }
-    // 关键:必须让 AudioService 知道输出还在用。否则它的电源状态机会在
-    // AUDIO_POWER_TIMEOUT_MS(15s)后 EnableOutput(false),而此刻本任务正阻塞
-    // 在 i2s_channel_write(portMAX_DELAY) 上持着 codec 锁,写永不返回 ->
-    // 锁永久占用 -> LVGL 刷新拿不到锁 -> 界面与 MCP 一起无响应。
-    Application::GetInstance().GetAudioService().KeepOutputAlive();
-    // 音质增强(需求三.4/三.7):AGC 削高补低 + 换台淡入 + 软限幅,再分片喂 codec。
-    s_enhancer.Process(pcm.data(), pcm.size());
-    size_t off = 0;
-    while (off < pcm.size()) {
-        const size_t n = std::min(kStageSamples, pcm.size() - off);
-        s_stage.assign(pcm.begin() + off, pcm.begin() + off + n);
-        codec->OutputData(s_stage);
-        off += n;
-    }
+    s_radio_pcm_queue.insert(s_radio_pcm_queue.end(), pcm.begin(), pcm.end());
     pcm.clear();
+    s_radio_pcm_cv.notify_one();
+}
+
+void RadioPlayTask(void*) {
+    ESP_LOGI(TAG, "radio_play 任务启动 (PSRAM 栈, 专职 I2S 喂流)");
+    std::vector<int16_t> chunk;
+    chunk.reserve(kStageSamples);
+    bool prebuffered = false;
+    int underflow_stalls = 0;
+
+    while (s_radio_play_active.load() && !s_quit.load()) {
+        Application::GetInstance().GetAudioService().KeepOutputAlive();
+
+        // 1. 预缓冲检查: 只有蓄足 0.6s 音频或流已结束时才起播, 彻底杜绝起播毛刺与断流
+        if (!prebuffered) {
+            std::unique_lock<std::mutex> lk(s_radio_pcm_mutex);
+            s_radio_pcm_cv.wait_for(lk, std::chrono::milliseconds(30), []() {
+                return s_radio_pcm_queue.size() >= kRadioPreBufferSamples ||
+                       !s_radio_stream_alive.load() || s_quit.load() || !s_radio_play_active.load();
+            });
+            if (!s_radio_play_active.load() || s_quit.load()) break;
+            if (s_radio_pcm_queue.size() >= kRadioPreBufferSamples || !s_radio_stream_alive.load()) {
+                prebuffered = true;
+                underflow_stalls = 0;
+            } else {
+                continue;
+            }
+        }
+
+        // 2. 从环形队列中取出一批样本 (最多 kStageSamples = 960 个, 60ms)
+        {
+            std::unique_lock<std::mutex> lk(s_radio_pcm_mutex);
+            if (s_radio_pcm_queue.empty()) {
+                if (!s_radio_stream_alive.load()) {
+                    // 当前流已结束且缓冲已播完, 重新等待新流
+                    prebuffered = false;
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                    continue;
+                }
+                // 短时取空(网络严重欠载): 如果连续 3 次取空, 触发重新轻度补水
+                if (++underflow_stalls > 3) {
+                    prebuffered = false;
+                    continue;
+                }
+                s_radio_pcm_cv.wait_for(lk, std::chrono::milliseconds(30));
+                continue;
+            }
+            underflow_stalls = 0;
+            const size_t n = std::min(kStageSamples, s_radio_pcm_queue.size());
+            chunk.assign(s_radio_pcm_queue.begin(), s_radio_pcm_queue.begin() + n);
+            s_radio_pcm_queue.erase(s_radio_pcm_queue.begin(), s_radio_pcm_queue.begin() + n);
+            s_radio_pcm_cv.notify_one(); // 通知拉流端可继续生产
+        }
+
+        // 3. 送板载 codec 输出
+        if (!chunk.empty()) {
+            auto* codec = Board::GetInstance().GetAudioCodec();
+            if (codec != nullptr) {
+                if (!codec->output_enabled()) codec->EnableOutput(true);
+                s_enhancer.Process(chunk.data(), chunk.size());
+                codec->OutputData(chunk);
+            }
+        }
+    }
+
+    ESP_LOGI(TAG, "radio_play 任务退出");
+    s_play_task = nullptr;
+    vTaskDeleteWithCaps(nullptr);
 }
 
 // 喂一段 MP3 给解码器;解出的 PCM 经下混+重采样进 codec。返回 0 继续其它错误码。
@@ -474,6 +539,8 @@ bool RunOneStream(const PlayReq& req, uint64_t seq) {
         }
         SetSnapState(RADIO_PLAYING, nullptr);
         s_enhancer.OnStreamStart();   // 换台/开播/重连:淡入重置,避免音量突变(需求三.4)
+        s_radio_stream_alive.store(true);
+        s_radio_pcm_cv.notify_all();
         ESP_LOGI(TAG, "开播: %s (%s)", req.name.c_str(), appfw_stream_url(stream));
 
         int err_streak = 0;
@@ -513,6 +580,8 @@ bool RunOneStream(const PlayReq& req, uint64_t seq) {
         }
     } while (false);
 
+    s_radio_stream_alive.store(false);
+    s_radio_pcm_cv.notify_all();
     if (stream != nullptr) appfw_stream_close(stream);
     if (dec != nullptr) esp_audio_simple_dec_close(dec);
     free(pcm);
@@ -526,6 +595,9 @@ bool RunOneStream(const PlayReq& req, uint64_t seq) {
     {
         std::lock_guard<std::mutex> lock(s_req_mutex);
         if (s_pending_valid || s_gen != seq) {
+            std::lock_guard<std::mutex> lk(s_radio_pcm_mutex);
+            s_radio_pcm_queue.clear();
+            s_radio_pcm_cv.notify_all();
             return true;
         }
     }
@@ -645,6 +717,9 @@ void RadioTask(void*) {
             if (errored) vTaskDelay(pdMS_TO_TICKS(600));
         }
     }
+    s_radio_play_active.store(false);
+    s_radio_stream_alive.store(false);
+    s_radio_pcm_cv.notify_all();
     s_task = nullptr;
     // 任务由 xTaskCreateWithCaps(PSRAM 栈)创建,必须用 vTaskDeleteWithCaps 配对释放,
     // 否则 PSRAM 栈释放路径错误。(此前 s_quit 恒为 false、此分支不可达,是潜伏死代码;
@@ -659,19 +734,30 @@ extern "C" int radio_player_start(void) {
     // 否则会"看到旧任务还在就 return 0、结果旧任务随即因 s_quit 退出、新播放
     // 请求没人执行"。不持 s_req_mutex 等待 —— 任务循环每轮都短暂持锁自检,
     // 持锁等会死锁。
-    if (s_task != nullptr && s_quit.load()) {
-        ESP_LOGI(TAG, "start: 上一个收音任务正在退出,等待其收尾...");
+    if ((s_task != nullptr || s_play_task != nullptr) && s_quit.load()) {
+        ESP_LOGI(TAG, "start: 上一个收音/播放任务正在退出,等待其收尾...");
         int waited = 0;
-        while (s_task != nullptr && waited < 3000) {
+        while ((s_task != nullptr || s_play_task != nullptr) && waited < 3000) {
             vTaskDelay(pdMS_TO_TICKS(50));
             waited += 50;
         }
-        if (s_task != nullptr) {
-            ESP_LOGE(TAG, "start: 旧任务 3s 未退出(可能卡在 i2s 写),放弃本次重建");
+        if (s_task != nullptr || s_play_task != nullptr) {
+            ESP_LOGE(TAG, "start: 旧任务 3s 未退出,放弃本次重建");
             return -1;
         }
         s_quit.store(false);
     }
+
+    // 确保专职播放喂流任务在跑 (PSRAM 栈, 专职向板载 I2S 喂流)
+    if (s_play_task == nullptr) {
+        s_radio_play_active.store(true);
+        if (xTaskCreateWithCaps(RadioPlayTask, "radio_play", 4096, nullptr, 5, &s_play_task,
+                                MALLOC_CAP_SPIRAM) != pdPASS) {
+            ESP_LOGE(TAG, "radio_play alloc failed");
+            s_play_task = nullptr;
+        }
+    }
+
     if (s_task != nullptr) return 0;   // 正常在跑:幂等,新请求会经 s_pending 被它拾取
     // 解码器注册是全局一次性动作，放在任务创建前(启动路径)完成
     if (!s_decoders_registered) {
@@ -726,18 +812,26 @@ extern "C" void radio_stop(void) {
     s_pending.stop = true;
     s_pending.seq = ++s_gen;
     s_pending_valid = true;
+    s_radio_stream_alive.store(false);
+    {
+        std::lock_guard<std::mutex> lk(s_radio_pcm_mutex);
+        s_radio_pcm_queue.clear();
+    }
+    s_radio_pcm_cv.notify_all();
 }
 
 extern "C" void radio_player_shutdown(void) {
-    // 非阻塞:只置退出标志(可在 LVGL worker 上直调)。任务的读循环与外层循环
-    // 检测到 s_quit 即自行退出并 vTaskDelete 自删,释放 8K PSRAM 栈。
-    // 最坏等待 ≈ 重连 vTaskDelay(2s) 或读超时 1s;期间任务仍活着(s_task!=nullptr)。
-    // 同步置位(而非异步调度)很关键:这样 unload 后立刻置 s_quit,紧随其后的播放
-    // 请求在 radio_player_start 里会看到 dying 任务并等其退出后重建 —— 不会丢请求。
-    // s_quit 不复位:留在 true 也无妨,radio_player_start 重建时会复位(并先等旧任务死)。
-    if (s_task != nullptr) {
+    s_radio_play_active.store(false);
+    s_radio_stream_alive.store(false);
+    {
+        std::lock_guard<std::mutex> lk(s_radio_pcm_mutex);
+        s_radio_pcm_queue.clear();
+    }
+    s_radio_pcm_cv.notify_all();
+
+    if (s_task != nullptr || s_play_task != nullptr) {
         s_quit.store(true);
-        ESP_LOGI(TAG, "shutdown: 已置退出标志,收音任务将自行退出并释放 8K 栈");
+        ESP_LOGI(TAG, "shutdown: 已置退出标志,收音与播放任务将自行退出并释放栈");
     }
 }
 
