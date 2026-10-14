@@ -172,6 +172,7 @@ bool MiniMaxBidiTts::StartSession(const std::string& key,
         if (event_group_) {
             xEventGroupSetBits(event_group_, kBitTaskFinished | kBitTaskFlushed);
         }
+        pcm_cv_.notify_all();
     });
 
     ws_->OnError([this](int err_code) {
@@ -183,6 +184,7 @@ bool MiniMaxBidiTts::StartSession(const std::string& key,
         if (event_group_) {
             xEventGroupSetBits(event_group_, kBitTaskFailed);
         }
+        pcm_cv_.notify_all();
     });
 
     ESP_LOGI(TAG, "Connecting to %s ...", ws_url.c_str());
@@ -304,15 +306,18 @@ void MiniMaxBidiTts::OnWebSocketData(const char* data, size_t len, bool binary) 
                  (float)total_pcm_received_ / 16000.0f);
         is_flushed_.store(true);
         xEventGroupSetBits(event_group_, kBitTaskFlushed);
+        pcm_cv_.notify_all();
     } else if (strcmp(event_str, "task_finished") == 0) {
         ESP_LOGI(TAG, "全部合成结束 (task_finished)");
         is_finished_.store(true);
         session_active_.store(false);
         xEventGroupSetBits(event_group_, kBitTaskFinished);
+        pcm_cv_.notify_all();
     } else if (strcmp(event_str, "task_canceled") == 0) {
         ESP_LOGI(TAG, "打断已生效 (task_canceled)");
         session_active_.store(false);
         xEventGroupSetBits(event_group_, kBitTaskCanceled);
+        pcm_cv_.notify_all();
     } else if (strcmp(event_str, "task_failed") == 0) {
         const cJSON* msg = base_resp ? cJSON_GetObjectItem(base_resp, "status_msg") : nullptr;
         std::string err_msg = (cJSON_IsString(msg) && msg->valuestring) ? msg->valuestring : "未知错误";
@@ -323,6 +328,7 @@ void MiniMaxBidiTts::OnWebSocketData(const char* data, size_t len, bool binary) 
         }
         session_active_.store(false);
         xEventGroupSetBits(event_group_, kBitTaskFailed);
+        pcm_cv_.notify_all();
     }
 
     cJSON_Delete(root);
@@ -330,13 +336,16 @@ void MiniMaxBidiTts::OnWebSocketData(const char* data, size_t len, bool binary) 
 
 void MiniMaxBidiTts::PushPcm(const int16_t* samples, size_t count) {
     if (samples == nullptr || count == 0) return;
-    std::lock_guard<std::mutex> lk(pcm_mutex_);
-    if (pcm_queue_.size() + count > kMaxQueueSamples) {
-        size_t overflow = (pcm_queue_.size() + count) - kMaxQueueSamples;
-        pcm_queue_.erase(pcm_queue_.begin(), pcm_queue_.begin() + std::min(overflow, pcm_queue_.size()));
-        ESP_LOGW(TAG, "PCM 缓冲溢出(>60s), 丢弃 %u 样本", (unsigned)overflow);
+    {
+        std::lock_guard<std::mutex> lk(pcm_mutex_);
+        if (pcm_queue_.size() + count > kMaxQueueSamples) {
+            size_t overflow = (pcm_queue_.size() + count) - kMaxQueueSamples;
+            pcm_queue_.erase(pcm_queue_.begin(), pcm_queue_.begin() + std::min(overflow, pcm_queue_.size()));
+            ESP_LOGW(TAG, "PCM 缓冲溢出(>60s), 丢弃 %u 样本", (unsigned)overflow);
+        }
+        pcm_queue_.insert(pcm_queue_.end(), samples, samples + count);
     }
-    pcm_queue_.insert(pcm_queue_.end(), samples, samples + count);
+    pcm_cv_.notify_one();
 }
 
 bool MiniMaxBidiTts::DoSendContinue(const std::string& str) {
@@ -358,23 +367,23 @@ bool MiniMaxBidiTts::SendText(const std::string& text) {
         std::lock_guard<std::mutex> lk(send_buf_mutex_);
         send_buffer_ += text;
         // 智能分句策略 (避免切碎短句，减少服务端分句断点开销):
-        // 1. 首句抢跑优化：第一句对交互延迟最敏感，遇任意从句标点(，、；：)或强标点即切分，或满 36 字节即发
+        // 1. 首句抢跑优化：第一句对交互延迟最敏感，遇任意从句标点(，、；：)或强标点即切分，或满 30 字节即发
         // 2. 后续句子平滑合成：
-        //    a. 强断句终结符 (。！？\n): 积攒 >=15 字节 (约 5 汉字) 即切分发送成句
-        //    b. 次级从句标点 (，、；：): 需积攒满自然意群 (>=45 字节, 约 15 汉字) 才切分发送
-        //    c. 长句保底: 若长达 75 字节 (约 25 汉字) 仍无标点，强制切分发送
+        //    a. 强断句终结符 (。！？\n): 积攒 >=12 字节 (约 4 汉字) 即切分发送成句
+        //    b. 次级从句标点 (，、；：): 需积攒满自然意群 (>=30 字节, 约 10 汉字) 才切分发送
+        //    c. 长句保底: 若长达 60 字节 (约 20 汉字) 仍无标点，强制切分发送
         bool should_send = false;
         if (!first_sentence_sent_.load()) {
             if ((HasSentenceTerminator(send_buffer_) && send_buffer_.size() >= 6) ||
                 (HasClausePunctuation(send_buffer_) && send_buffer_.size() >= 12) ||
-                send_buffer_.size() >= 36) {
+                send_buffer_.size() >= 30) {
                 should_send = true;
                 first_sentence_sent_.store(true);
             }
         } else {
-            const bool term = HasSentenceTerminator(send_buffer_) && send_buffer_.size() >= 15;
-            const bool clause = HasClausePunctuation(send_buffer_) && send_buffer_.size() >= 45;
-            const bool overflow = send_buffer_.size() >= 75;
+            const bool term = HasSentenceTerminator(send_buffer_) && send_buffer_.size() >= 12;
+            const bool clause = HasClausePunctuation(send_buffer_) && send_buffer_.size() >= 30;
+            const bool overflow = send_buffer_.size() >= 60;
             should_send = term || clause || overflow;
         }
 
@@ -481,6 +490,7 @@ void MiniMaxBidiTts::Cancel() {
         std::lock_guard<std::mutex> lk(send_buf_mutex_);
         send_buffer_.clear();
     }
+    pcm_cv_.notify_all();
 }
 
 void MiniMaxBidiTts::Close() {
@@ -498,6 +508,7 @@ void MiniMaxBidiTts::Close() {
         std::lock_guard<std::mutex> lk(send_buf_mutex_);
         send_buffer_.clear();
     }
+    pcm_cv_.notify_all();
 }
 
 bool MiniMaxBidiTts::IsConnected() const {
@@ -518,33 +529,26 @@ bool MiniMaxBidiTts::IsFlushed() const {
 
 bool MiniMaxBidiTts::PopAudioPcm(std::vector<int16_t>& chunk, size_t max_samples, uint32_t wait_ms) {
     chunk.clear();
-    const int64_t deadline = esp_timer_get_time() + (int64_t)wait_ms * 1000LL;
+    std::unique_lock<std::mutex> lk(pcm_mutex_);
 
-    while (true) {
-        if (is_canceled_.load()) return false;
+    auto predicate = [this]() {
+        return is_canceled_.load() || !pcm_queue_.empty() || is_flushed_.load() || is_finished_.load();
+    };
 
-        {
-            std::lock_guard<std::mutex> lk(pcm_mutex_);
-            if (!pcm_queue_.empty()) {
-                size_t count = std::min(max_samples, pcm_queue_.size());
-                chunk.assign(pcm_queue_.begin(), pcm_queue_.begin() + count);
-                pcm_queue_.erase(pcm_queue_.begin(), pcm_queue_.begin() + count);
-                return true;
-            }
-        }
-
-        // 队列为空时: 若已收到 task_flushed 或 task_finished 且缓冲无数据, 则确认取完
-        if (is_flushed_.load() || is_finished_.load()) {
-            std::lock_guard<std::mutex> lk(pcm_mutex_);
-            return !pcm_queue_.empty();
-        }
-
-        if (esp_timer_get_time() >= deadline) {
-            return false;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(15));
+    if (!predicate()) {
+        pcm_cv_.wait_for(lk, std::chrono::milliseconds(wait_ms), predicate);
     }
+
+    if (is_canceled_.load()) return false;
+
+    if (!pcm_queue_.empty()) {
+        size_t count = std::min(max_samples, pcm_queue_.size());
+        chunk.assign(pcm_queue_.begin(), pcm_queue_.begin() + count);
+        pcm_queue_.erase(pcm_queue_.begin(), pcm_queue_.begin() + count);
+        return true;
+    }
+
+    return false;
 }
 
 bool MiniMaxBidiTts::HasAudioPcm() const {

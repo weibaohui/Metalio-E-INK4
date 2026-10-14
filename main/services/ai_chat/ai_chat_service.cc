@@ -690,11 +690,11 @@ void PipelineTask(void*) {
 
                     // 自适应抖动缓冲 (Jitter Buffer):
                     // 16kHz 16-bit 单声道: 16000 采样/秒
-                    // 预缓冲安全门限: 0.5 秒音频 (8000 采样点, 缩短首音延迟)
-                    constexpr size_t kPreBufferSamples = 16000 * 5 / 10;
-                    constexpr size_t kReBufferSamples = 16000 * 3 / 10; // 中途欠载补水门限 0.3s
+                    // 预缓冲安全门限: 0.35 秒音频 (5600 采样点, 兼顾超低首音延迟与连贯播放)
+                    constexpr size_t kPreBufferSamples = 16000 * 35 / 100;
                     bool prebuffered = false;
                     int64_t first_audio_ts = 0;
+                    int underflow_stalls = 0;
 
                     while (a->running->load() && !s_cancel.load() && !s_interrupt_tts.load() && !a->tts->IsCanceled()) {
                         // 持续对 AudioService 保活, 防止 15s 省电定时器将 I2S 输出通道静默关闭
@@ -717,13 +717,14 @@ void PipelineTask(void*) {
                             const int64_t wait_ms = (esp_timer_get_time() - first_audio_ts) / 1000;
 
                             // 放行起播条件:
-                            // a. 缓冲达到 0.5 秒 (8000 采样点)
+                            // a. 缓冲达到 0.35 秒 (5600 采样点)
                             // b. 服务端已确认全部音频下发完毕 (短回复免等)
-                            // c. 等待已达 350ms 且至少累积了 0.3s (4800) 音频 (防迟钝)
+                            // c. 等待已达 250ms 且至少累积了 0.2s (3200) 音频 (防迟钝)
                             if (queued >= kPreBufferSamples || done_sending ||
-                                (wait_ms >= 350 && queued >= 4800)) {
+                                (wait_ms >= 250 && queued >= 3200)) {
                                 prebuffered = true;
                                 first_audio_ts = 0;
+                                underflow_stalls = 0;
                                 ESP_LOGI(TAG, "play: 预缓冲就绪, 当前存量 %u 采样 (~%.2fs), 开始连贯输出",
                                          (unsigned)queued, (float)queued / 16000.0f);
                             } else {
@@ -732,8 +733,9 @@ void PipelineTask(void*) {
                             }
                         }
 
-                        // 2. 连续稳定消费音频数据
-                        if (a->tts->PopAudioPcm(chunk, 960, 30)) {
+                        // 2. 连续稳定消费音频数据: 80ms 条件变量等待, 有数据微秒级唤醒, 完美覆盖网络抖动
+                        if (a->tts->PopAudioPcm(chunk, 960, 80)) {
+                            underflow_stalls = 0;
                             if (!chunk.empty() && c) {
                                 if (!a->speaking->exchange(true)) {
                                     SetState(AiChatState::Speaking);
@@ -751,12 +753,18 @@ void PipelineTask(void*) {
                                     break;
                                 }
                             } else {
-                                // 服务端还在生成中, 发生中途欠载: 触发轻微重缓冲避免高频断音
-                                const size_t queued = a->tts->GetQueuedSamples();
-                                if (queued < kReBufferSamples) {
-                                    prebuffered = false;
-                                    first_audio_ts = esp_timer_get_time();
-                                    ESP_LOGD(TAG, "play: 队列微欠载, 触发补水缓冲");
+                                // 服务端仍在流式生成中，轻度欠载平滑过渡：
+                                // 短暂让出 CPU 给网络接收线程，避免粗暴掐断导致口吃；
+                                // 只有在连续多次取空（极弱网严重断流）时才做短暂补水（蓄存 1600 采样即可放行）
+                                if (++underflow_stalls > 4) {
+                                    const size_t queued = a->tts->GetQueuedSamples();
+                                    if (queued < 1600) {
+                                        prebuffered = false;
+                                        first_audio_ts = esp_timer_get_time();
+                                        ESP_LOGD(TAG, "play: 严重欠载, 触发平滑补水");
+                                    }
+                                } else {
+                                    vTaskDelay(pdMS_TO_TICKS(15));
                                 }
                             }
                         }

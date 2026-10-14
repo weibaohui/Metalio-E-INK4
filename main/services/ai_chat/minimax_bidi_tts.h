@@ -10,7 +10,9 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -157,7 +159,8 @@ private:
 
     // 音频 PCM 队列缓冲 (保存在 PSRAM 中, 容量充足不丢帧)
     mutable std::mutex pcm_mutex_;
-    std::vector<int16_t> pcm_queue_;
+    std::condition_variable pcm_cv_;
+    std::deque<int16_t> pcm_queue_;
     static constexpr size_t kMaxQueueSamples = 16000 * 60; // 允许缓冲 60 秒音频 (约 1.9MB PSRAM)
 
     VoiceConfig voice_cfg_;
