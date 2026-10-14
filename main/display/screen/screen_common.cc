@@ -2,6 +2,7 @@
 
 #include "application.h"
 #include "assets/lang_config.h"
+#include "display/modal_manager.h"
 #include "display/status_bar_manager.h"
 #include "haptic_feedback.h"
 #include "home_screen/home_screen.h"
@@ -105,6 +106,10 @@ void GoHomeAsync(void* /*user_data*/) {
 }
 
 void NavigateBackAsync(void* /*user_data*/) {
+    if (ModalManager::GetInstance().PopModal()) {
+        ESP_LOGI(TAG, "navigate back consumed by dismissing top modal");
+        return;
+    }
     ScreenFactory prev = PopBackFactory();
     if (prev != nullptr) {
         ESP_LOGI(TAG, "navigate back -> recreate (stack left=%d)", s_back_depth);
@@ -267,6 +272,7 @@ bool ScreenIsHome() {
 }
 
 void ScreenLoadReplace(lv_obj_t* new_scr) {
+    ModalManager::GetInstance().DismissAll();
     lv_obj_t* old_scr = lv_screen_active();
     lv_screen_load(new_scr);
     if (old_scr != nullptr && old_scr != new_scr) {
