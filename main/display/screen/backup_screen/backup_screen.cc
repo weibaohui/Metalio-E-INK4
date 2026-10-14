@@ -11,6 +11,9 @@
 #include <freertos/task.h>
 
 #include "application.h"
+#include "display/modal_manager.h"
+#include "display/status_bar_manager.h"
+#include "display/screen/epd_widget_kit.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "nvs_backup_service.h"
@@ -27,6 +30,7 @@ constexpr const char* kScreenId = "backup_screen";
 struct BackupUi {
     lv_obj_t* screen = nullptr;
     lv_obj_t* body = nullptr;
+    EpdWidgetKit::EpdPageScaffold* scaffold = nullptr;
     lv_obj_t* status_card = nullptr;
     lv_obj_t* sd_status_lbl = nullptr;
     lv_obj_t* path_lbl = nullptr;
@@ -35,14 +39,11 @@ struct BackupUi {
     lv_obj_t* export_btn_lbl = nullptr;
     lv_obj_t* refresh_btn = nullptr;
     lv_obj_t* list_container = nullptr;
-    lv_obj_t* tip_lbl = nullptr;
 
-    // 模态对话框 / 浮层
-    lv_obj_t* overlay = nullptr;
-    lv_obj_t* overlay_card = nullptr;
-    lv_obj_t* overlay_msg_lbl = nullptr;
+    bool has_wait_modal = false;
     lv_timer_t* reboot_timer = nullptr;
     int reboot_remaining = 0;
+    lv_obj_t* reboot_msg_lbl = nullptr;
 };
 
 BackupUi s_ui;
@@ -52,16 +53,10 @@ bool s_op_busy = false;
 const lv_font_t* UiFont() { return fontpack_lv_font_ui(); }
 void DisableScroll(lv_obj_t* o) { if (o) lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE); }
 
-void CloseModal() {
-    if (s_ui.reboot_timer != nullptr) {
-        lv_timer_delete(s_ui.reboot_timer);
-        s_ui.reboot_timer = nullptr;
-    }
-    if (s_ui.overlay != nullptr) {
-        lv_obj_delete(s_ui.overlay);
-        s_ui.overlay = nullptr;
-        s_ui.overlay_card = nullptr;
-        s_ui.overlay_msg_lbl = nullptr;
+void CloseWaitModal() {
+    if (s_ui.has_wait_modal) {
+        s_ui.has_wait_modal = false;
+        ModalManager::GetInstance().PopModal();
     }
 }
 
@@ -133,137 +128,72 @@ void RefreshStatusHeader() {
 }
 
 void ShowWaitModal(const char* text) {
-    if (!s_alive || s_ui.screen == nullptr) return;
-    CloseModal();
+    if (!s_alive) return;
+    CloseWaitModal();
+    s_ui.has_wait_modal = true;
 
-    lv_obj_t* mask = lv_obj_create(s_ui.screen);
-    lv_obj_remove_style_all(mask);
-    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_pos(mask, 0, 0);
-    ScreenApplyDotBackdrop(mask);
-    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    s_ui.overlay = mask;
-
-    lv_obj_t* card = lv_obj_create(mask);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_HOR_RES - 60, 160);
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 3, 0);
-    lv_obj_set_style_radius(card, 16, 0);
-    lv_obj_set_style_pad_all(card, 16, 0);
-    DisableScroll(card);
-    s_ui.overlay_card = card;
-
-    lv_obj_t* lbl = lv_label_create(card);
-    lv_label_set_text(lbl, text);
-    lv_obj_set_width(lbl, lv_pct(100));
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(lbl, UiFont(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(lbl);
-    s_ui.overlay_msg_lbl = lbl;
-}
-
-void ShowNoticeModal(const char* text) {
-    if (!s_alive || s_ui.screen == nullptr) return;
-    CloseModal();
-
-    lv_obj_t* mask = lv_obj_create(s_ui.screen);
-    lv_obj_remove_style_all(mask);
-    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_pos(mask, 0, 0);
-    ScreenApplyDotBackdrop(mask);
-    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    s_ui.overlay = mask;
-
-    lv_obj_t* card = lv_obj_create(mask);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_HOR_RES - 60, 200);
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 3, 0);
-    lv_obj_set_style_radius(card, 16, 0);
-    lv_obj_set_style_pad_all(card, 16, 0);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    DisableScroll(card);
-    s_ui.overlay_card = card;
-
-    lv_obj_t* lbl = lv_label_create(card);
-    lv_label_set_text(lbl, text);
-    lv_obj_set_width(lbl, lv_pct(100));
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(lbl, UiFont(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-
-    CreateCustomBtn(card, "确定", 140, 44, [](lv_event_t*) {
-        CloseModal();
-    }, nullptr);
+    ModalManager::GetInstance().PushCustomModal([text](lv_obj_t* card) {
+        lv_obj_set_size(card, LV_HOR_RES - 60, 160);
+        lv_obj_set_style_pad_all(card, 16, 0);
+        lv_obj_t* lbl = lv_label_create(card);
+        lv_label_set_text(lbl, text);
+        lv_obj_set_width(lbl, lv_pct(100));
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_font(lbl, UiFont(), 0);
+        lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_center(lbl);
+    }, []() {
+        s_ui.has_wait_modal = false;
+    });
 }
 
 void StartRebootCountdown(const char* headline, int seconds = 2) {
-    if (!s_alive || s_ui.screen == nullptr) return;
-    CloseModal();
-
-    lv_obj_t* mask = lv_obj_create(s_ui.screen);
-    lv_obj_remove_style_all(mask);
-    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_pos(mask, 0, 0);
-    ScreenApplyDotBackdrop(mask);
-    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    s_ui.overlay = mask;
-
-    lv_obj_t* card = lv_obj_create(mask);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_HOR_RES - 60, 160);
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 3, 0);
-    lv_obj_set_style_radius(card, 16, 0);
-    lv_obj_set_style_pad_all(card, 16, 0);
-    DisableScroll(card);
-    s_ui.overlay_card = card;
-
-    lv_obj_t* lbl = lv_label_create(card);
-    s_ui.overlay_msg_lbl = lbl;
-    lv_obj_set_width(lbl, lv_pct(100));
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(lbl, UiFont(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(lbl);
+    if (!s_alive) return;
+    CloseWaitModal();
 
     s_ui.reboot_remaining = seconds;
 
-    char msg[128];
-    snprintf(msg, sizeof(msg), "%s\n%d 秒后自动重启...", headline, seconds);
-    lv_label_set_text(lbl, msg);
+    ModalManager::GetInstance().PushCustomModal([headline, seconds](lv_obj_t* card) {
+        lv_obj_set_size(card, LV_HOR_RES - 60, 160);
+        lv_obj_set_style_pad_all(card, 16, 0);
 
-    s_ui.reboot_timer = lv_timer_create([](lv_timer_t* t) {
-        s_ui.reboot_remaining--;
-        if (s_ui.reboot_remaining > 0) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "导入成功！\n%d 秒后自动重启...", s_ui.reboot_remaining);
-            if (s_ui.overlay_msg_lbl) lv_label_set_text(s_ui.overlay_msg_lbl, buf);
-        } else {
-            lv_timer_delete(t);
+        lv_obj_t* lbl = lv_label_create(card);
+        s_ui.reboot_msg_lbl = lbl;
+        lv_obj_set_width(lbl, lv_pct(100));
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_font(lbl, UiFont(), 0);
+        lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_center(lbl);
+
+        char msg[128];
+        snprintf(msg, sizeof(msg), "%s\n%d 秒后自动重启...", headline, seconds);
+        lv_label_set_text(lbl, msg);
+
+        s_ui.reboot_timer = lv_timer_create([](lv_timer_t* t) {
+            s_ui.reboot_remaining--;
+            if (s_ui.reboot_remaining > 0) {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "导入成功！\n%d 秒后自动重启...", s_ui.reboot_remaining);
+                if (s_ui.reboot_msg_lbl) lv_label_set_text(s_ui.reboot_msg_lbl, buf);
+            } else {
+                lv_timer_delete(t);
+                s_ui.reboot_timer = nullptr;
+                if (s_ui.reboot_msg_lbl) lv_label_set_text(s_ui.reboot_msg_lbl, "正在重启设备…");
+                Application::GetInstance().Schedule([]() {
+                    vTaskDelay(pdMS_TO_TICKS(300));
+                    Application::GetInstance().Reboot();
+                });
+            }
+        }, 1000, nullptr);
+    }, []() {
+        if (s_ui.reboot_timer != nullptr) {
+            lv_timer_delete(s_ui.reboot_timer);
             s_ui.reboot_timer = nullptr;
-            if (s_ui.overlay_msg_lbl) lv_label_set_text(s_ui.overlay_msg_lbl, "正在重启设备…");
-            Application::GetInstance().Schedule([]() {
-                vTaskDelay(pdMS_TO_TICKS(300));
-                Application::GetInstance().Reboot();
-            });
         }
-    }, 1000, nullptr);
+        s_ui.reboot_msg_lbl = nullptr;
+    });
 }
 
 // 刷新备份文件列表
@@ -298,6 +228,7 @@ void ImportWorkerTask(void* param) {
         s_op_busy = false;
         auto* m = static_cast<ResultMsg*>(p);
         if (s_alive) {
+            CloseWaitModal();
             if (m->res.success) {
                 if (m->reboot) {
                     char h[80];
@@ -307,14 +238,14 @@ void ImportWorkerTask(void* param) {
                     backup_restore::NvsBackupService::GetInstance().ReloadRuntimeCaches();
                     char h[128];
                     snprintf(h, sizeof(h), "导入成功！\n已覆盖 %d 项配置，已直接生效。", m->res.count);
-                    ShowNoticeModal(h);
+                    ModalManager::GetInstance().ShowAlert("导入成功", h, "确定");
                     RefreshStatusHeader();
                     RefreshBackupList();
                 }
             } else {
                 char err[128];
                 snprintf(err, sizeof(err), "导入失败: %s", m->res.error_msg.c_str());
-                ShowNoticeModal(err);
+                ModalManager::GetInstance().ShowAlert("导入失败", err, "确定");
             }
         }
         delete m;
@@ -330,100 +261,88 @@ void StartImportTask(const std::string& path, bool reboot) {
     if (xTaskCreate(ImportWorkerTask, "nvs_imp_task", 8192, ctx, 5, nullptr) != pdPASS) {
         delete ctx;
         s_op_busy = false;
-        ShowNoticeModal("创建导入任务失败，内存不足");
+        CloseWaitModal();
+        ModalManager::GetInstance().ShowAlert("错误", "创建导入任务失败，内存不足", "确定");
     }
 }
 
 // 弹出文件详情及操作弹窗
 void OpenActionDialog(const ActionDialogData& data) {
-    if (!s_alive || s_ui.screen == nullptr) return;
-    CloseModal();
+    if (!s_alive) return;
 
-    lv_obj_t* mask = lv_obj_create(s_ui.screen);
-    lv_obj_remove_style_all(mask);
-    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_pos(mask, 0, 0);
-    ScreenApplyDotBackdrop(mask);
-    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    s_ui.overlay = mask;
+    ModalManager::GetInstance().PushCustomModal([data](lv_obj_t* card) {
+        lv_obj_set_size(card, LV_HOR_RES - 40, 360);
+        lv_obj_set_style_pad_all(card, 16, 0);
+        lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_row(card, 10, 0);
 
-    lv_obj_t* card = lv_obj_create(mask);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_HOR_RES - 40, 360);
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 3, 0);
-    lv_obj_set_style_radius(card, 16, 0);
-    lv_obj_set_style_pad_all(card, 16, 0);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(card, 10, 0);
-    DisableScroll(card);
-    s_ui.overlay_card = card;
+        lv_obj_t* title = lv_label_create(card);
+        lv_label_set_text(title, "备份文件操作");
+        const lv_font_t* tf = fontpack_lv_font_get(28, 2);
+        lv_obj_set_style_text_font(title, tf ? tf : UiFont(), 0);
+        lv_obj_set_style_text_color(title, lv_color_black(), 0);
 
-    lv_obj_t* title = lv_label_create(card);
-    lv_label_set_text(title, "备份文件操作");
-    const lv_font_t* tf = fontpack_lv_font_get(28, 2);
-    lv_obj_set_style_text_font(title, tf ? tf : UiFont(), 0);
-    lv_obj_set_style_text_color(title, lv_color_black(), 0);
+        lv_obj_t* fn_lbl = lv_label_create(card);
+        lv_label_set_text(fn_lbl, data.filename.c_str());
+        lv_obj_set_width(fn_lbl, lv_pct(100));
+        lv_label_set_long_mode(fn_lbl, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_font(fn_lbl, UiFont(), 0);
+        lv_obj_set_style_text_color(fn_lbl, lv_color_black(), 0);
 
-    lv_obj_t* fn_lbl = lv_label_create(card);
-    lv_label_set_text(fn_lbl, data.filename.c_str());
-    lv_obj_set_width(fn_lbl, lv_pct(100));
-    lv_label_set_long_mode(fn_lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_font(fn_lbl, UiFont(), 0);
-    lv_obj_set_style_text_color(fn_lbl, lv_color_black(), 0);
-
-    char info_buf[128];
-    char sz_str[32];
-    reader::FormatFileSize(sz_str, sizeof(sz_str), data.size_bytes);
-    if (data.entry_count > 0) {
-        snprintf(info_buf, sizeof(info_buf), "大小: %s · 约 %d 项配置", sz_str, data.entry_count);
-    } else {
-        snprintf(info_buf, sizeof(info_buf), "大小: %s", sz_str);
-    }
-    lv_obj_t* sub_lbl = lv_label_create(card);
-    lv_label_set_text(sub_lbl, info_buf);
-    lv_obj_set_style_text_font(sub_lbl, UiFont(), 0);
-    lv_obj_set_style_text_color(sub_lbl, lv_color_black(), 0);
-
-    auto* path_heap1 = new std::string(data.full_path);
-    CreateCustomBtn(card, "导入覆盖并重启 (推荐)", lv_pct(100), 48, [](lv_event_t* e) {
-        auto* p = static_cast<std::string*>(lv_event_get_user_data(e));
-        std::string path = *p;
-        delete p;
-        CloseModal();
-        StartImportTask(path, true);
-    }, path_heap1);
-
-    auto* path_heap2 = new std::string(data.full_path);
-    CreateCustomBtn(card, "导入覆盖 (直接生效)", lv_pct(100), 48, [](lv_event_t* e) {
-        auto* p = static_cast<std::string*>(lv_event_get_user_data(e));
-        std::string path = *p;
-        delete p;
-        CloseModal();
-        StartImportTask(path, false);
-    }, path_heap2);
-
-    auto* path_heap3 = new std::string(data.full_path);
-    CreateCustomBtn(card, "删除此备份", lv_pct(100), 44, [](lv_event_t* e) {
-        auto* p = static_cast<std::string*>(lv_event_get_user_data(e));
-        std::string path = *p;
-        delete p;
-        CloseModal();
-        bool ok = backup_restore::NvsBackupService::GetInstance().DeleteBackup(path);
-        if (ok) {
-            ShowNoticeModal("已成功删除该备份文件");
+        char info_buf[128];
+        char sz_str[32];
+        reader::FormatFileSize(sz_str, sizeof(sz_str), data.size_bytes);
+        if (data.entry_count > 0) {
+            snprintf(info_buf, sizeof(info_buf), "大小: %s · 约 %d 项配置", sz_str, data.entry_count);
         } else {
-            ShowNoticeModal("删除备份文件失败");
+            snprintf(info_buf, sizeof(info_buf), "大小: %s", sz_str);
         }
-        RefreshBackupList();
-    }, path_heap3);
+        lv_obj_t* sub_lbl = lv_label_create(card);
+        lv_label_set_text(sub_lbl, info_buf);
+        lv_obj_set_style_text_font(sub_lbl, UiFont(), 0);
+        lv_obj_set_style_text_color(sub_lbl, lv_color_black(), 0);
 
-    CreateCustomBtn(card, "取消", lv_pct(100), 44, [](lv_event_t*) {
-        CloseModal();
-    }, nullptr);
+        auto* path_heap1 = new std::string(data.full_path);
+        CreateCustomBtn(card, "导入覆盖并重启 (推荐)", lv_pct(100), 48, [](lv_event_t* e) {
+            auto* p = static_cast<std::string*>(lv_event_get_user_data(e));
+            std::string path = *p;
+            delete p;
+            ModalManager::GetInstance().PopModal();
+            StartImportTask(path, true);
+        }, path_heap1);
+
+        auto* path_heap2 = new std::string(data.full_path);
+        CreateCustomBtn(card, "导入覆盖 (直接生效)", lv_pct(100), 48, [](lv_event_t* e) {
+            auto* p = static_cast<std::string*>(lv_event_get_user_data(e));
+            std::string path = *p;
+            delete p;
+            ModalManager::GetInstance().PopModal();
+            StartImportTask(path, false);
+        }, path_heap2);
+
+        auto* path_heap3 = new std::string(data.full_path);
+        CreateCustomBtn(card, "删除此备份", lv_pct(100), 44, [](lv_event_t* e) {
+            auto* p = static_cast<std::string*>(lv_event_get_user_data(e));
+            std::string path = *p;
+            delete p;
+            ModalManager::GetInstance().PopModal();
+            ModalManager::GetInstance().ShowDialog("删除确认", "确定要删除该备份文件吗？此操作无法撤销。", "删除", "取消", [path](bool confirmed) {
+                if (confirmed) {
+                    bool ok = backup_restore::NvsBackupService::GetInstance().DeleteBackup(path);
+                    if (ok) {
+                        StatusBarManager::GetInstance().ShowToast("已删除备份文件", 2000);
+                    } else {
+                        ModalManager::GetInstance().ShowAlert("错误", "删除备份文件失败", "确定");
+                    }
+                    RefreshBackupList();
+                }
+            });
+        }, path_heap3);
+
+        CreateCustomBtn(card, "取消", lv_pct(100), 44, [](lv_event_t*) {
+            ModalManager::GetInstance().PopModal();
+        }, nullptr);
+    });
 }
 
 void OnFileItemClicked(lv_event_t* e) {
@@ -447,6 +366,9 @@ void RefreshBackupList() {
         lv_obj_set_style_pad_top(tip, 20, 0);
         lv_obj_set_style_text_font(tip, UiFont(), 0);
         lv_obj_set_style_text_color(tip, lv_color_black(), 0);
+        if (s_ui.scaffold != nullptr && s_ui.scaffold->GetScrollView() != nullptr) {
+            s_ui.scaffold->GetScrollView()->UpdatePageInfo();
+        }
         return;
     }
 
@@ -459,6 +381,9 @@ void RefreshBackupList() {
         lv_obj_set_style_pad_top(tip, 20, 0);
         lv_obj_set_style_text_font(tip, UiFont(), 0);
         lv_obj_set_style_text_color(tip, lv_color_black(), 0);
+        if (s_ui.scaffold != nullptr && s_ui.scaffold->GetScrollView() != nullptr) {
+            s_ui.scaffold->GetScrollView()->UpdatePageInfo();
+        }
         return;
     }
 
@@ -525,6 +450,10 @@ void RefreshBackupList() {
         lv_obj_set_style_text_color(meta_lbl, lv_color_black(), 0);
         lv_obj_clear_flag(meta_lbl, LV_OBJ_FLAG_CLICKABLE);
     }
+
+    if (s_ui.scaffold != nullptr && s_ui.scaffold->GetScrollView() != nullptr) {
+        s_ui.scaffold->GetScrollView()->UpdatePageInfo();
+    }
 }
 
 // 导出任务执行
@@ -536,17 +465,18 @@ void ExportWorkerTask(void* /*arg*/) {
         s_op_busy = false;
         auto* m = static_cast<backup_restore::ExportResult*>(p);
         if (s_alive) {
+            CloseWaitModal();
             if (m->success) {
                 char ok_text[160];
                 snprintf(ok_text, sizeof(ok_text), "导出成功！\n已备份至: %s\n共导出 %d 项配置。",
                          m->filename.c_str(), m->count);
-                ShowNoticeModal(ok_text);
+                ModalManager::GetInstance().ShowAlert("导出成功", ok_text, "确定");
                 RefreshStatusHeader();
                 RefreshBackupList();
             } else {
                 char err_text[128];
                 snprintf(err_text, sizeof(err_text), "导出失败: %s", m->error_msg.c_str());
-                ShowNoticeModal(err_text);
+                ModalManager::GetInstance().ShowAlert("导出失败", err_text, "确定");
             }
         }
         delete m;
@@ -560,14 +490,15 @@ void OnExportClicked(lv_event_t* /*e*/) {
     if (s_op_busy) return;
     auto& svc = backup_restore::NvsBackupService::GetInstance();
     if (!svc.IsSdMounted()) {
-        ShowNoticeModal("未检测到 SD 卡，请先插入 SD 卡！");
+        ModalManager::GetInstance().ShowAlert("提示", "未检测到 SD 卡，请先插入 SD 卡！", "我知道了");
         return;
     }
     s_op_busy = true;
     ShowWaitModal("正在导出本机 NVS 配置到 SD 卡，请稍候…");
     if (xTaskCreate(ExportWorkerTask, "nvs_exp_task", 8192, nullptr, 5, nullptr) != pdPASS) {
         s_op_busy = false;
-        ShowNoticeModal("创建导出任务失败，内存不足");
+        CloseWaitModal();
+        ModalManager::GetInstance().ShowAlert("错误", "创建导出任务失败，内存不足", "确定");
     }
 }
 
@@ -575,11 +506,16 @@ void OnRefreshClicked(lv_event_t* /*e*/) {
     HapticPulseIfEnabled();
     RefreshStatusHeader();
     RefreshBackupList();
+    StatusBarManager::GetInstance().ShowToast("已刷新备份列表", 1500);
 }
 
 void OnScreenUnloaded(lv_event_t* /*e*/) {
     s_alive = false;
-    CloseModal();
+    if (s_ui.reboot_timer != nullptr) {
+        lv_timer_delete(s_ui.reboot_timer);
+        s_ui.reboot_timer = nullptr;
+    }
+    ModalManager::GetInstance().DismissAll();
     s_ui = {};
 }
 
@@ -591,55 +527,29 @@ lv_obj_t* BackupScreen::Create() {
     s_op_busy = false;
     ScreenSetIsHome(false);
 
-    lv_obj_t* screen = lv_obj_create(nullptr);
-    s_ui.screen = screen;
-    lv_obj_remove_style_all(screen);
-    lv_obj_set_size(screen, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(screen, lv_color_black(), 0);
-    lv_obj_set_style_text_font(screen, UiFont(), 0);
-    DisableScroll(screen);
-    lv_obj_add_event_cb(screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
+    auto* scaffold = EpdWidgetKit::EpdPageScaffold::Create({
+        .title = "备份恢复",
+        .show_status_bar = true,
+        .show_back_btn = true,
+        .scrollable = true,
+        .pad_h = 12,
+        .pad_v = 10,
+        .row_gap = 10,
+    });
+    s_ui.scaffold = scaffold;
+    s_ui.screen = scaffold->GetScreen();
+    s_ui.body = scaffold->GetContentContainer();
+    lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
 
-    const EpdStatusBar status = ScreenCreateStatusBar(screen);
-
-    lv_obj_t* body = lv_obj_create(screen);
-    s_ui.body = body;
-    lv_obj_remove_style_all(body);
-    lv_obj_set_size(body, LV_HOR_RES, LV_VER_RES - status.height);
-    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, status.height);
-    lv_obj_set_style_pad_all(body, 12, 0);
-    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(body, 8, 0);
-    DisableScroll(body);
-    lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
-
-    // 头部行：标题 + 刷新按钮
-    lv_obj_t* head = lv_obj_create(body);
-    lv_obj_remove_style_all(head);
-    lv_obj_set_size(head, lv_pct(100), 50);
-    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    DisableScroll(head);
-    lv_obj_clear_flag(head, LV_OBJ_FLAG_CLICKABLE);
-
-    CreateCustomBtn(head, "‹ 返回", 86, 42, [](lv_event_t*) {
-        HapticPulseIfEnabled();
-        ScreenRequestBack();
-    }, nullptr);
-
-    lv_obj_t* title = lv_label_create(head);
-    lv_label_set_text(title, "备份恢复");
-    const lv_font_t* title_font = fontpack_lv_font_get(30, 2);
-    lv_obj_set_style_text_font(title, title_font ? title_font : UiFont(), 0);
-    lv_obj_set_style_text_color(title, lv_color_black(), 0);
-    lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
-
-    s_ui.refresh_btn = CreateCustomBtn(head, "刷新", 86, 42, OnRefreshClicked, nullptr);
+    // 头部右侧挂载刷新按钮
+    lv_obj_t* head = scaffold->GetHeader();
+    if (head != nullptr) {
+        s_ui.refresh_btn = CreateCustomBtn(head, "刷新", 80, 38, OnRefreshClicked, nullptr);
+        lv_obj_set_style_radius(s_ui.refresh_btn, LV_RADIUS_CIRCLE, 0);
+    }
 
     // 状态概览卡片
-    lv_obj_t* status_card = lv_obj_create(body);
+    lv_obj_t* status_card = lv_obj_create(s_ui.body);
     s_ui.status_card = status_card;
     lv_obj_remove_style_all(status_card);
     lv_obj_set_size(status_card, lv_pct(100), LV_SIZE_CONTENT);
@@ -668,7 +578,7 @@ lv_obj_t* BackupScreen::Create() {
     lv_obj_set_style_text_color(s_ui.nvs_info_lbl, lv_color_black(), 0);
 
     // 主操作按钮：导出本机配置
-    s_ui.export_btn = CreateCustomBtn(body, "导出本机配置到 SD 卡", lv_pct(100), 50, OnExportClicked, nullptr, &s_ui.export_btn_lbl);
+    s_ui.export_btn = CreateCustomBtn(s_ui.body, "导出本机配置到 SD 卡", lv_pct(100), 50, OnExportClicked, nullptr, &s_ui.export_btn_lbl);
     lv_obj_set_style_border_width(s_ui.export_btn, 3, 0);
     const lv_font_t* btn_f = fontpack_lv_font_get(26, 2);
     if (btn_f && s_ui.export_btn_lbl) {
@@ -676,23 +586,21 @@ lv_obj_t* BackupScreen::Create() {
     }
 
     // 分隔标题
-    MakeSection(body, "SD 卡中的备份文件列表");
+    MakeSection(s_ui.body, "SD 卡中的备份文件列表");
 
     // 滚动列表容器
-    lv_obj_t* list = lv_obj_create(body);
+    lv_obj_t* list = lv_obj_create(s_ui.body);
     s_ui.list_container = list;
     lv_obj_remove_style_all(list);
     lv_obj_set_width(list, lv_pct(100));
-    lv_obj_set_flex_grow(list, 1);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(list, 8, 0);
     lv_obj_set_style_pad_bottom(list, 10, 0);
-    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    DisableScroll(list);
 
     RefreshStatusHeader();
     RefreshBackupList();
 
-    VkKey_AttachScreen(screen, kScreenId, VkKeyScreenDesc{BackupScreen::Create, nullptr});
-    return screen;
+    VkKey_AttachScreen(s_ui.screen, kScreenId, VkKeyScreenDesc{BackupScreen::Create, nullptr});
+    return s_ui.screen;
 }
