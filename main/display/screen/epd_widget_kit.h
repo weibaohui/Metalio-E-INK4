@@ -47,4 +47,139 @@ public:
     static void Show(const char* title, const char* message, const char* confirm_text, ResultCallback on_result);
 };
 
+/**
+ * @brief 墨水屏滚动与上下翻页底层函数族 (EpdScroll)
+ * 
+ * 专为墨水屏设计的整页视口翻动与手势算法:
+ * 1. 禁用高频动画渲染 (LV_ANIM_OFF), 杜绝滑动过程中的严重拖影与 SPI 阻塞;
+ * 2. 自动预留重叠留白 (overlap_px), 保证阅读长文本/列表时长行不被视口截断;
+ * 3. 集成 Claim-and-Cancel 机制, 手势翻页时自动抑制子控件误触 (防止松手误点卡片或按钮)。
+ */
+namespace EpdScroll {
+    /**
+     * @brief 视口整页翻动 (Page Scroll)
+     * @param scrollable 可滚动的 LVGL 容器对象
+     * @param dir 翻页方向: +1 向下/后翻 (下一页), -1 向上/前翻 (上一页)
+     * @param overlap_px 两页重叠留白像素 (默认 40px)
+     * @return true 实际发生了位移; false 已处于边界
+     */
+    bool PageTurn(lv_obj_t* scrollable, int dir, int overlap_px = 40);
+
+    /** @brief 快速滚动到开头 */
+    void ScrollToTop(lv_obj_t* scrollable);
+
+    /** @brief 快速滚动到结尾 */
+    void ScrollToBottom(lv_obj_t* scrollable);
+
+    /**
+     * @brief 计算当前对象的分页信息
+     * @param scrollable 可滚动的 LVGL 容器对象
+     * @param cur_page 当前页码 (从 1 开始)
+     * @param total_pages 总页数 (至少为 1)
+     * @param overlap_px 两页重叠留白像素
+     */
+    void GetPageInfo(lv_obj_t* scrollable, int* cur_page, int* total_pages, int overlap_px = 40);
+
+    /**
+     * @brief 为任意控件绑定上下滑动手势, 自动转化为整页翻动
+     * @param touch_target 接收触摸手势的对象 (如当前 Screen 或滚动容器本身)
+     * @param scrollable 实际被滚动的容器 (若为 nullptr 则与 touch_target 相同)
+     * @param overlap_px 重叠留白像素
+     * @param on_turn 翻页完成后的可选回调
+     */
+    void AttachSwipeGesture(lv_obj_t* touch_target, lv_obj_t* scrollable = nullptr, int overlap_px = 40, std::function<void(int dir)> on_turn = nullptr);
+}
+
+/**
+ * @brief 墨水屏专用翻页滚动容器控件 (EpdPageScrollView)
+ * 
+ * 开箱即用的高级复合控件, 解决墨水屏无痛浏览长列表、长文本与卡片流的核心痛点:
+ * 1. 内部集成专为墨水屏优化的视口容器, 零拖动残影;
+ * 2. 原生支持触摸上下滑动 (Swipe Up/Down) 顺畅翻页;
+ * 3. 内置高对比度大热区翻页控制栏 ([ ▲ 上一页 ] [ 第 1 / 4 页 ] [ ▼ 下一页 ]), 附带触觉振动反馈;
+ * 4. 自动管理页码计算与首尾边界禁用状态;
+ * 5. 生命周期绑定: 外部删除父容器时, C++ 控件对象自动安全析构。
+ */
+struct EpdPageScrollConfig {
+    bool show_page_bar = true;       ///< 是否显示翻页控制栏
+    bool enable_swipe = true;         ///< 是否启用触摸上下滑动手势
+    int overlap_px = 40;              ///< 翻页视口重叠留白 (像素)
+    int bar_height = 48;              ///< 控制栏高度
+    bool bar_at_bottom = true;        ///< 控制栏置于底部 (true) 或顶部 (false)
+};
+
+/**
+ * @brief 墨水屏专用翻页滚动容器控件 (EpdPageScrollView)
+ * 
+ * 开箱即用的高级复合控件, 解决墨水屏无痛浏览长列表、长文本与卡片流的核心痛点:
+ * 1. 内部集成专为墨水屏优化的视口容器, 零拖动残影;
+ * 2. 原生支持触摸上下滑动 (Swipe Up/Down) 顺畅翻页;
+ * 3. 内置高对比度大热区翻页控制栏 ([ ▲ 上一页 ] [ 第 1 / 4 页 ] [ ▼ 下一页 ]), 附带触觉振动反馈;
+ * 4. 自动管理页码计算与首尾边界禁用状态;
+ * 5. 生命周期绑定: 外部删除父容器时, C++ 控件对象自动安全析构。
+ */
+class EpdPageScrollView {
+public:
+    using Config = EpdPageScrollConfig;
+
+    /**
+     * @brief 创建墨水屏翻页滚动视图
+     * @param parent 父容器
+     * @param cfg 配置选项
+     * @return 控件实例指针 (生命周期与 LVGL 关联, 销毁时自动析构)
+     */
+    static EpdPageScrollView* Create(lv_obj_t* parent, const Config& cfg = Config{});
+
+    /**
+     * @brief 获取可向内放置子控件/内容的内容容器
+     */
+    lv_obj_t* GetContainer() const { return container_; }
+
+    /**
+     * @brief 获取外层根对象 (用于排版布局)
+     */
+    lv_obj_t* GetRoot() const { return root_; }
+
+    /** @brief 向上翻一页 (上一页) */
+    bool PageUp();
+
+    /** @brief 向下翻一页 (下一页) */
+    bool PageDown();
+
+    /** @brief 回到顶部 */
+    void ScrollToTop();
+
+    /** @brief 跳到底部 */
+    void ScrollToBottom();
+
+    /** @brief 内容动态增减后, 重新测量并刷新页码指示与按钮可用状态 */
+    void UpdatePageInfo();
+
+    int GetCurrentPage() const { return cur_page_; }
+    int GetTotalPages() const { return total_pages_; }
+
+    /** @brief 注册翻页事件回调 */
+    void SetOnPageChanged(std::function<void(int cur_page, int total_pages)> cb) {
+        on_page_changed_ = cb;
+    }
+
+private:
+    EpdPageScrollView() = default;
+    ~EpdPageScrollView() = default;
+
+    Config cfg_;
+    lv_obj_t* root_ = nullptr;
+    lv_obj_t* container_ = nullptr;
+    lv_obj_t* bar_ = nullptr;
+    lv_obj_t* prev_btn_ = nullptr;
+    lv_obj_t* next_btn_ = nullptr;
+    lv_obj_t* page_lbl_ = nullptr;
+
+    int cur_page_ = 1;
+    int total_pages_ = 1;
+    std::function<void(int cur_page, int total_pages)> on_page_changed_;
+
+    void RefreshBarUI();
+};
+
 } // namespace EpdWidgetKit
