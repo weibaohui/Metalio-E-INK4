@@ -1,6 +1,8 @@
 // main/display/screen/epd_widget_kit.cc
 #include "epd_widget_kit.h"
 #include "screen_common.h"
+#include "display/modal_manager.h"
+#include "display/status_bar_manager.h"
 #include "haptic_feedback.h"
 #include <esp_log.h>
 
@@ -105,37 +107,7 @@ lv_obj_t* EpdCell::CreateSwitch(lv_obj_t* parent, const char* title, bool initia
 
 void EpdToast::Show(const char* message, uint32_t duration_ms) {
     if (message == nullptr || message[0] == '\0') return;
-
-    ScreenLvAsync([](void* arg) {
-        auto* msg = static_cast<std::string*>(arg);
-        lv_obj_t* top = lv_layer_top();
-        if (top == nullptr) { delete msg; return; }
-
-        lv_obj_t* toast = lv_obj_create(top);
-        lv_obj_set_size(toast, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-        lv_obj_set_style_max_width(toast, 400, 0);
-        lv_obj_set_style_bg_color(toast, lv_color_white(), 0);
-        lv_obj_set_style_border_width(toast, 2, 0);
-        lv_obj_set_style_border_color(toast, lv_color_black(), 0);
-        lv_obj_set_style_radius(toast, 8, 0);
-        lv_obj_set_style_pad_all(toast, 12, 0);
-        lv_obj_align(toast, LV_ALIGN_BOTTOM_MID, 0, -60);
-
-        lv_obj_t* lbl = ScreenMakeLabel(toast, msg->c_str(), 24, true);
-        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-
-        // 定时 2 秒自删
-        lv_timer_t* t = lv_timer_create([](lv_timer_t* timer) {
-            lv_obj_t* obj = static_cast<lv_obj_t*>(lv_timer_get_user_data(timer));
-            if (obj && lv_obj_is_valid(obj)) {
-                lv_obj_del(obj);
-            }
-            lv_timer_del(timer);
-        }, 2000, toast);
-        lv_timer_set_repeat_count(t, 1);
-
-        delete msg;
-    }, new std::string(message));
+    StatusBarManager::GetInstance().ShowToast(message, duration_ms);
 }
 
 void EpdDialog::Show(const char* title, const char* message, const char* confirm_text, ResultCallback on_result) {
@@ -155,84 +127,8 @@ void EpdDialog::Show(const char* title, const char* message, const char* confirm
 
     ScreenLvAsync([](void* p) {
         auto* a = static_cast<DialogArg*>(p);
-        lv_obj_t* top = lv_layer_top();
-        if (top == nullptr) { delete a; return; }
-
-        // 遮罩容器
-        lv_obj_t* mask = lv_obj_create(top);
-        lv_obj_set_size(mask, lv_pct(100), lv_pct(100));
-        lv_obj_set_style_bg_color(mask, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(mask, LV_OPA_50, 0);
-        lv_obj_set_style_border_width(mask, 0, 0);
-
-        // 居中对话框卡片 (墨水屏高对比度白底黑边)
-        lv_obj_t* card = lv_obj_create(mask);
-        lv_obj_set_size(card, 380, LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-        lv_obj_set_style_border_width(card, 2, 0);
-        lv_obj_set_style_border_color(card, lv_color_black(), 0);
-        lv_obj_set_style_radius(card, 8, 0);
-        lv_obj_set_style_pad_all(card, 16, 0);
-        lv_obj_center(card);
-
-        // 标题
-        ScreenMakeLabel(card, a->title.c_str(), 26, true);
-
-        // 内容
-        lv_obj_t* body = ScreenMakeLabel(card, a->message.c_str(), 22, true);
-        lv_obj_set_style_pad_top(body, 12, 0);
-
-        // 按钮行
-        lv_obj_t* btn_row = lv_obj_create(card);
-        lv_obj_set_size(btn_row, lv_pct(100), 50);
-        lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(btn_row, 0, 0);
-        lv_obj_set_style_pad_top(btn_row, 16, 0);
-        lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-        struct CbPayload {
-            lv_obj_t* mask;
-            ResultCallback cb;
-        };
-
-        // 取消按钮
-        lv_obj_t* cancel_btn = lv_btn_create(btn_row);
-        lv_obj_set_size(cancel_btn, 120, 42);
-        lv_obj_set_style_bg_color(cancel_btn, lv_color_white(), 0);
-        lv_obj_set_style_border_width(cancel_btn, 1, 0);
-        lv_obj_set_style_border_color(cancel_btn, lv_color_black(), 0);
-        lv_obj_t* cancel_lbl = lv_label_create(cancel_btn);
-        lv_label_set_text(cancel_lbl, "取消");
-        lv_obj_center(cancel_lbl);
-
-        auto* cancel_p = new CbPayload{mask, a->callback};
-        lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
-            auto* p = static_cast<CbPayload*>(lv_event_get_user_data(e));
-            if (p && p->cb) p->cb(false);
-            if (p && p->mask && lv_obj_is_valid(p->mask)) lv_obj_del(p->mask);
-            delete p;
-        }, LV_EVENT_CLICKED, cancel_p);
-
-        // 确认按钮 (反色黑底白字, 强调主操作)
-        lv_obj_t* ok_btn = lv_btn_create(btn_row);
-        lv_obj_set_size(ok_btn, 120, 42);
-        lv_obj_set_style_bg_color(ok_btn, lv_color_black(), 0);
-        lv_obj_set_style_border_width(ok_btn, 1, 0);
-        lv_obj_set_style_border_color(ok_btn, lv_color_black(), 0);
-        lv_obj_t* ok_lbl = lv_label_create(ok_btn);
-        lv_label_set_text(ok_lbl, a->confirm_text.c_str());
-        lv_obj_set_style_text_color(ok_lbl, lv_color_white(), 0);
-        lv_obj_center(ok_lbl);
-
-        auto* ok_p = new CbPayload{mask, a->callback};
-        lv_obj_add_event_cb(ok_btn, [](lv_event_t* e) {
-            auto* p = static_cast<CbPayload*>(lv_event_get_user_data(e));
-            if (p && p->cb) p->cb(true);
-            if (p && p->mask && lv_obj_is_valid(p->mask)) lv_obj_del(p->mask);
-            delete p;
-        }, LV_EVENT_CLICKED, ok_p);
-
+        ModalManager::GetInstance().ShowDialog(
+            a->title.c_str(), a->message.c_str(), a->confirm_text.c_str(), "取消", a->callback);
         delete a;
     }, arg);
 }
