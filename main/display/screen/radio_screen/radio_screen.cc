@@ -8,7 +8,6 @@
 #include <cstring>
 #include <string>
 #include <vector>
-
 #include <utility>
 
 #include <esp_log.h>
@@ -19,6 +18,8 @@
 #include "audio_codec.h"
 #include "application.h"
 #include "board.h"
+#include "display/screen/epd_widget_kit.h"
+#include "display/status_bar_manager.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "screen_common.h"
@@ -32,18 +33,18 @@ namespace {
 constexpr const char* TAG = "RadioScreen";
 constexpr const char* kScreenId = "radio";
 
-constexpr lv_coord_t kPad = 16;
-constexpr lv_coord_t kRowGap = 10;
+constexpr lv_coord_t kPad = 14;
+constexpr lv_coord_t kRowGap = 8;
 constexpr lv_coord_t kCardPad = 12;
-constexpr lv_coord_t kCardRadius = 18;
+constexpr lv_coord_t kCardRadius = 16;
 constexpr lv_coord_t kButtonH = 44;
 constexpr lv_coord_t kListRowH = 32;
 constexpr lv_coord_t kListRowGap = 4;
-constexpr int kRowsPerPage = 10;  // 电台列表每页 10 行(需求:电台列表 6→10)
-constexpr const char* kNvsNs = "radio";
+constexpr int kRowsPerPage = 10;  // 电台列表每页 10 行
 
 struct RadioUi {
     lv_obj_t* screen = nullptr;
+    EpdWidgetKit::EpdPageScaffold* scaffold = nullptr;
     lv_obj_t* station_lbl = nullptr;
     lv_obj_t* title_lbl = nullptr;
     lv_obj_t* state_lbl = nullptr;
@@ -65,12 +66,10 @@ std::vector<std::string> s_favs;  // 收藏台名列表
 
 const lv_font_t* UiFont() { return fontpack_lv_font_ui(); }
 
-void DisableScroll(lv_obj_t* obj) { lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE); }
+void DisableScroll(lv_obj_t* obj) { if (obj) lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE); }
 
 // ---- 收藏持久化:台名以 '\n' 连接存 NVS ----
 
-// 本任务(LVGL worker)栈在 PSRAM,NVS 读写一律禁止 —— 全部走
-// radio_player 的 RAM 缓存(开机 main 任务载入,写由内部栈短任务落地)。
 void LoadFavs() { s_favs = RadioGetFavs(); }
 
 bool IsFav(const std::string& name) {
@@ -181,7 +180,7 @@ void OnPlayStopClicked(lv_event_t*) {
     }
 }
 
-void SyncStateLabels();   // 前置声明:OnVolumeClicked 在定义之前就要刷新音量读数
+void SyncStateLabels();   // 前置声明
 
 void OnVolumeClicked(lv_event_t* e) {
     const uintptr_t delta = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
@@ -190,10 +189,11 @@ void OnVolumeClicked(lv_event_t* e) {
     int vol = codec->output_volume() + ((delta != 0) ? 10 : -10);
     if (vol > 100) vol = 100;
     if (vol < 0) vol = 0;
-    // SetOutputVolume 已是"立即更新成员 + NVS 去抖延迟落盘到 main"(audio_codec.cc),
-    // LVGL worker(PSRAM 栈)直调安全;音量立即生效、可立刻读回 —— 不再开持久化任务。
     codec->SetOutputVolume(vol);
-    SyncStateLabels();   // 立即刷新音量读数(状态行显示"音量 NN%")
+    SyncStateLabels();
+    char vbuf[32];
+    snprintf(vbuf, sizeof(vbuf), "音量 %d%%", vol);
+    StatusBarManager::GetInstance().ShowToast(vbuf, 1000);
 }
 
 void RefreshList() {
@@ -263,17 +263,19 @@ void OnScopeClicked(lv_event_t*) {
     s_fav_only = !s_fav_only;
     s_page = 0;
     if (s_ui.scope_btn_lbl != nullptr) {
-        // 按钮固定显示"收藏夹"(功能名):点了在 全部列表 ↔ 收藏夹 之间切换,
-        // 当前在哪个视图由列表内容与页码自明。
-        lv_label_set_text(s_ui.scope_btn_lbl, "收藏夹");
+        lv_label_set_text(s_ui.scope_btn_lbl, s_fav_only ? "全部电台" : "收藏夹");
     }
     RefreshList();
+    StatusBarManager::GetInstance().ShowToast(s_fav_only ? "已切换至收藏夹" : "已切换至全部电台", 1200);
 }
 
 void OnFavClicked(lv_event_t*) {
     if (s_playing.empty()) return;
+    const bool was_fav = IsFav(s_playing);
     ToggleFav(s_playing);
     RefreshList();
+    SyncStateLabels();
+    StatusBarManager::GetInstance().ShowToast(was_fav ? "已取消收藏" : "已加入收藏", 1200);
 }
 
 void OnPrevNextClicked(lv_event_t* e) {
@@ -322,8 +324,6 @@ lv_obj_t* MakeRow(lv_obj_t* parent, lv_coord_t height) {
 }
 
 void SyncStateLabels() {
-    // 全量判空:任一 label 缺失就整体跳过,绝不把 NULL 喂给 lv_label_set_text
-    // (NULL 会以垃圾坐标触发无限重绘,整机假死 —— 见 Create 里的注释)
     if (!s_alive || s_ui.station_lbl == nullptr || s_ui.title_lbl == nullptr ||
         s_ui.state_lbl == nullptr || s_ui.play_btn_lbl == nullptr ||
         s_ui.fav_btn_lbl == nullptr || s_ui.page_lbl == nullptr ||
@@ -334,7 +334,6 @@ void SyncStateLabels() {
     radio_player_snapshot(&snap);
     if (snap.station[0] != '\0') {
         lv_label_set_text(s_ui.station_lbl, snap.station);
-        // MCP/语音路径切台不经过本文件的状态变量,这里对齐
         if (snap.state == RADIO_PLAYING || snap.state == RADIO_CONNECTING) {
             s_playing = snap.station;
         }
@@ -351,13 +350,11 @@ void SyncStateLabels() {
     } else {
         state = "已停止";
     }
-    // 状态行附带实时音量,让"音量变了、数字跟着变"(需求三.3)。
-    // output_volume() 是纯成员读(无 flash),LVGL worker 上安全。
     int vol = 0;
     if (auto* codec = Board::GetInstance().GetAudioCodec()) {
         vol = codec->output_volume();
     }
-    char state_buf[128];   // state 可能来自 snap.err(最长 95 字节),64 会截断触发 -Werror=format-truncation
+    char state_buf[128];
     snprintf(state_buf, sizeof(state_buf), "%s · 音量 %d%%", state, vol);
     lv_label_set_text(s_ui.state_lbl, state_buf);
     lv_label_set_text(s_ui.play_btn_lbl,
@@ -384,9 +381,6 @@ void OnTimer(lv_timer_t*) { SyncStateLabels(); }
 
 bool OnVkKey(const char* key) {
     if (key == nullptr || !s_alive) return false;
-    // 盖板触摸 vk_prev/vk_next 在收音机屏=切上一台/下一台(实体音量键仍调音量,
-    // 不经此处);列表翻页用屏内 </> 按钮。
-    // return true 消费掉,避免 vk_prev 落到 DispatchDefault 的"返回上级"。
     if (strcmp(key, "vk_prev") == 0) {
         StepStation(-1);
         return true;
@@ -400,10 +394,8 @@ bool OnVkKey(const char* key) {
 
 void OnScreenUnloaded(lv_event_t*) {
     s_alive = false;
-    radio_stop();           // 先投停止请求,让流尽快结束(LVGL 线程上即可,无 flash 操作)
-    radio_player_shutdown(); // 非阻塞置退出标志,任务异步自删释放 8K PSRAM 栈。
-    // 同步置位很关键:unload 立刻置 s_quit,紧随其后的播放请求会在 radio_player_start
-    // 里等到旧任务退出再重建 —— 不会丢请求。此处不再 Schedule(本身不阻塞)。
+    radio_stop();
+    radio_player_shutdown();
     s_playing.clear();
     if (s_timer != nullptr) {
         lv_timer_delete(s_timer);
@@ -419,16 +411,12 @@ lv_obj_t* RadioScreen::Create() {
     s_alive = true;
     s_page = 0;
     LoadFavs();
-    // 需求:进屏默认定位到"上次最后播放的电台"(只定位高亮,不自动开播)。
-    // 台名+URL 已由 PlayCatalog 持久化(RadioSetLast);后台在播时 snapshot
-    // 会经 SyncStateLabels 对齐 s_playing,这里只在无在播台时用记忆兜底。
     if (s_playing.empty()) {
         std::string last_name, last_url;
         RadioGetLast(last_name, last_url);
         if (!last_name.empty()) s_playing = last_name;
     }
     if (!s_playing.empty()) {
-        // 列表翻到该台所在页(进屏默认"全部"视图);目录里已下架则自然落回第 1 页
         for (int i = 0; i < TotalCount(); ++i) {
             const int ci = ViewToCatalog(i);
             radio_station_t st;
@@ -438,31 +426,21 @@ lv_obj_t* RadioScreen::Create() {
             }
         }
     }
-    // 导航框架靠这个标志区分"首页/子页"。所有子屏都调了(assistant/book/cloud/
-    // glm/settings/wallpaper...),漏掉会让导航把它当首页处理 -> 点了进不去。
     ScreenSetIsHome(false);
 
-    lv_obj_t* screen = lv_obj_create(nullptr);
-    s_ui.screen = screen;
-    lv_obj_remove_style_all(screen);
-    lv_obj_set_size(screen, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(screen, lv_color_black(), 0);
-    lv_obj_set_style_text_font(screen, UiFont(), 0);
-    DisableScroll(screen);
-    lv_obj_add_event_cb(screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
-
-    const EpdStatusBar status = ScreenCreateStatusBar(screen);
-    lv_obj_t* body = lv_obj_create(screen);
-    lv_obj_remove_style_all(body);
-    lv_obj_set_size(body, LV_HOR_RES, LV_VER_RES - status.height);
-    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, status.height);
-    lv_obj_set_style_pad_all(body, kPad, 0);
-    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(body, kRowGap, 0);
-    DisableScroll(body);
-    lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
+    auto* scaffold = EpdWidgetKit::EpdPageScaffold::Create({
+        .title = "网络收音机",
+        .show_status_bar = true,
+        .show_back_btn = true,
+        .scrollable = false,
+        .pad_h = kPad,
+        .pad_v = 8,
+        .row_gap = kRowGap,
+    });
+    s_ui.scaffold = scaffold;
+    s_ui.screen = scaffold->GetScreen();
+    lv_obj_t* body = scaffold->GetContentContainer();
+    lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
 
     // 正在收听卡片
     lv_obj_t* card = lv_obj_create(body);
@@ -488,9 +466,6 @@ lv_obj_t* RadioScreen::Create() {
     constexpr lv_coord_t kBtnW3 = 136;
     lv_obj_t* row1 = MakeRow(body, kButtonH);
     MakeButton(row1, "上一台", kBtnW3, OnPrevNextClicked, (void*)0);
-    // MakeButton 返回的就是 label 本身,不能再 get_child(0)(label 无子对象,
-    // 返回 NULL → 后续 lv_label_set_text(NULL) 把垃圾坐标喂进渲染器,收音机页
-    // 一打开就陷入无限重绘,整机假死 —— 实测 OpenOCD 采样定位)。
     s_ui.play_btn_lbl = MakeButton(row1, "播放", kBtnW3, OnPlayStopClicked, nullptr);
     MakeButton(row1, "下一台", kBtnW3, OnPrevNextClicked, (void*)1);
 
@@ -505,7 +480,6 @@ lv_obj_t* RadioScreen::Create() {
     // 列表头:翻页 + 范围切换
     lv_obj_t* row3 = MakeRow(body, kButtonH);
     MakeButton(row3, "<", 90, OnPageClicked, (void*)0);
-    // 页码是纯展示,不做成按钮(原来是个点了没反应的假按钮,易误以为坏了)。
     s_ui.page_lbl = lv_label_create(row3);
     lv_label_set_text(s_ui.page_lbl, "1/1");
     lv_obj_set_width(s_ui.page_lbl, 90);
@@ -513,10 +487,9 @@ lv_obj_t* RadioScreen::Create() {
     lv_obj_set_style_text_font(s_ui.page_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.page_lbl, lv_color_black(), 0);
     MakeButton(row3, ">", 90, OnPageClicked, (void*)1);
-    // 默认显示"全部"列表;按钮固定叫"收藏夹",点了在 全部 ↔ 收藏夹 间切换。
-    s_ui.scope_btn_lbl = MakeButton(row3, "收藏夹", 110, OnScopeClicked, nullptr);
+    s_ui.scope_btn_lbl = MakeButton(row3, s_fav_only ? "全部电台" : "收藏夹", 110, OnScopeClicked, nullptr);
 
-    // 电台列表(6 行整页重画,不滚动)
+    // 电台列表
     s_ui.list = lv_obj_create(body);
     lv_obj_remove_style_all(s_ui.list);
     lv_obj_set_size(s_ui.list, lv_pct(100),
@@ -526,6 +499,14 @@ lv_obj_t* RadioScreen::Create() {
     DisableScroll(s_ui.list);
     lv_obj_clear_flag(s_ui.list, LV_OBJ_FLAG_CLICKABLE);
     RefreshList();
+
+    // 绑定触摸上下滑动手势, 支持全屏滑动手势翻电台页
+    EpdWidgetKit::EpdScroll::AttachSwipeGesture(s_ui.screen, nullptr, 40, [](int dir) {
+        if (!s_alive) return;
+        s_page += (dir > 0) ? 1 : -1;
+        ClampPage();
+        RefreshList();
+    });
 
     s_ui.footer_lbl = lv_label_create(body);
     lv_label_set_text(s_ui.footer_lbl, "");
@@ -538,13 +519,9 @@ lv_obj_t* RadioScreen::Create() {
 
     SyncStateLabels();
     s_timer = lv_timer_create(OnTimer, 1000, nullptr);
-    // 进收音机页即停掉语音管线(唤醒词/AFE/opus/采麦任务),把内存让给收音机的
-    // 流拉取与可能的 TLS。语音页/其它页再进时各自 EnsureAudioServiceRunning 重建。
-    // StopAudioServiceIfRunning 内部 Deinitialize AFE 会碰 flash,必须走 main 任务
-    // 内部栈;本回调在 LVGL worker(PSRAM 栈),故 Schedule 上去。
     Application::GetInstance().Schedule([]() {
         Application::GetInstance().StopAudioServiceIfRunning();
     });
-    VkKey_AttachScreen(screen, kScreenId, VkKeyScreenDesc{RadioScreen::Create, OnVkKey});
-    return screen;
+    VkKey_AttachScreen(s_ui.screen, kScreenId, VkKeyScreenDesc{RadioScreen::Create, OnVkKey});
+    return s_ui.screen;
 }
