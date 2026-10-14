@@ -105,8 +105,8 @@ void OnToggleServerClicked(lv_event_t* /*e*/) {
             ModalManager::GetInstance().ShowAlert("提示", "当前设备未连接 WiFi，请先进入设置连接 WiFi 后再启动传书服务。", "我知道了");
             return;
         }
-        if (svc.Start(8080)) {
-            StatusBarManager::GetInstance().ShowToast("WiFi 传书服务已启动 (端口 8080)", 1500);
+        if (svc.Start()) {
+            StatusBarManager::GetInstance().ShowToast("WiFi 传书服务已启动", 1500);
         } else {
             ModalManager::GetInstance().ShowAlert("错误", "启动传书服务失败，端口可能已被占用", "确定");
         }
@@ -141,7 +141,7 @@ void RefreshUi() {
         } else if (!is_net) {
             lv_label_set_text(s_ui.url_lbl, "未连接 WiFi");
         } else {
-            lv_label_set_text(s_ui.url_lbl, "服务未运行");
+            lv_label_set_text(s_ui.url_lbl, "服务未运行 (请点击下方启动)");
         }
     }
 
@@ -149,20 +149,19 @@ void RefreshUi() {
         lv_label_set_text(s_ui.switch_btn_lbl, running ? "停止传书服务" : "启动传书服务");
     }
 
-    // 2. 二维码展示
-    if (s_ui.qr_card != nullptr) {
+    // 2. 二维码展示与更新
+    if (s_ui.qr_obj != nullptr) {
         if (running && !url.empty()) {
-            lv_obj_clear_flag(s_ui.qr_card, LV_OBJ_FLAG_HIDDEN);
-            if (s_ui.qr_obj == nullptr) {
-                s_ui.qr_obj = lv_qrcode_create(s_ui.qr_card);
-                lv_qrcode_set_size(s_ui.qr_obj, 160);
-                lv_qrcode_set_dark_color(s_ui.qr_obj, lv_color_black());
-                lv_qrcode_set_light_color(s_ui.qr_obj, lv_color_white());
-                lv_obj_center(s_ui.qr_obj);
-            }
             lv_qrcode_update(s_ui.qr_obj, url.c_str(), url.size());
+            lv_obj_clear_flag(s_ui.qr_obj, LV_OBJ_FLAG_HIDDEN);
+            if (s_ui.qr_tip_lbl != nullptr) {
+                lv_label_set_text(s_ui.qr_tip_lbl, "手机微信 / 相机扫码打开");
+            }
         } else {
-            lv_obj_add_flag(s_ui.qr_card, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_ui.qr_obj, LV_OBJ_FLAG_HIDDEN);
+            if (s_ui.qr_tip_lbl != nullptr) {
+                lv_label_set_text(s_ui.qr_tip_lbl, "服务未运行，暂无二维码");
+            }
         }
     }
 
@@ -240,78 +239,113 @@ lv_obj_t* WifiTransferScreen::Create() {
         lv_obj_set_style_radius(ref_btn, LV_RADIUS_CIRCLE, 0);
     }
 
-    // 1. 服务与访问卡片
-    lv_obj_t* card1 = MakeCard(body, 14);
+    const lv_font_t* title_font = fontpack_lv_font_get(24, 2);
 
-    s_ui.wifi_status_lbl = lv_label_create(card1);
+    // 顶部双列并排容器 (左侧输入网址卡片 475px，右侧扫码卡片 280px)
+    lv_obj_t* top_row = lv_obj_create(body);
+    lv_obj_remove_style_all(top_row);
+    lv_obj_set_width(top_row, lv_pct(100));
+    lv_obj_set_height(top_row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(top_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(top_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(top_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    // 1. 左侧卡片：电脑/手机浏览器网址访问
+    lv_obj_t* left_card = MakeCard(top_row, 12);
+    lv_obj_set_width(left_card, 475);
+    lv_obj_set_style_pad_row(left_card, 5, 0);
+
+    lv_obj_t* title_left = lv_label_create(left_card);
+    lv_label_set_text(title_left, "电脑 / 手机浏览器访问");
+    lv_obj_set_style_text_font(title_left, title_font ? title_font : UiFont(), 0);
+    lv_obj_set_style_text_color(title_left, lv_color_black(), 0);
+
+    s_ui.wifi_status_lbl = lv_label_create(left_card);
     lv_obj_set_style_text_font(s_ui.wifi_status_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.wifi_status_lbl, lv_color_black(), 0);
 
-    lv_obj_t* tip_h = lv_label_create(card1);
-    lv_label_set_text(tip_h, "局域网访问网址 (在手机/电脑浏览器中打开):");
+    lv_obj_t* tip_h = lv_label_create(left_card);
+    lv_label_set_text(tip_h, "同局域网浏览器输入下方网址即可传书:");
     lv_obj_set_style_text_font(tip_h, UiFont(), 0);
     lv_obj_set_style_text_color(tip_h, lv_color_black(), 0);
-    lv_obj_set_style_pad_top(tip_h, 4, 0);
 
-    s_ui.url_lbl = lv_label_create(card1);
+    s_ui.url_lbl = lv_label_create(left_card);
     const lv_font_t* big_f = fontpack_lv_font_get(28, 2);
     lv_obj_set_style_text_font(s_ui.url_lbl, big_f ? big_f : UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.url_lbl, lv_color_black(), 0);
     lv_obj_set_width(s_ui.url_lbl, lv_pct(100));
     lv_label_set_long_mode(s_ui.url_lbl, LV_LABEL_LONG_WRAP);
 
-    s_ui.switch_btn = CreateCustomBtn(card1, "启动传书服务", lv_pct(100), 46,
+    s_ui.switch_btn = CreateCustomBtn(left_card, "启动传书服务", lv_pct(100), 40,
                                       OnToggleServerClicked, nullptr, &s_ui.switch_btn_lbl);
-    lv_obj_set_style_border_width(s_ui.switch_btn, 3, 0);
+    lv_obj_set_style_border_width(s_ui.switch_btn, 2, 0);
 
-    // 2. 扫码快速直达卡片
-    s_ui.qr_card = MakeCard(body, 14);
+    s_ui.storage_lbl = lv_label_create(left_card);
+    lv_obj_set_width(s_ui.storage_lbl, lv_pct(100));
+    lv_obj_set_style_text_font(s_ui.storage_lbl, UiFont(), 0);
+    lv_obj_set_style_text_color(s_ui.storage_lbl, lv_color_black(), 0);
+
+    lv_obj_t* fmt_lbl = lv_label_create(left_card);
+    lv_label_set_text(fmt_lbl, "支持格式: .txt / .epub / .ebook / .pdf (直存图书库)");
+    lv_obj_set_style_text_font(fmt_lbl, UiFont(), 0);
+    lv_obj_set_style_text_color(fmt_lbl, lv_color_black(), 0);
+
+    // 2. 右侧卡片：手机扫码直达 (直接相机/微信扫一扫打开网页上传)
+    s_ui.qr_card = MakeCard(top_row, 10);
+    lv_obj_set_width(s_ui.qr_card, 280);
     lv_obj_set_flex_align(s_ui.qr_card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(s_ui.qr_card, 4, 0);
 
     lv_obj_t* qr_title = lv_label_create(s_ui.qr_card);
-    lv_label_set_text(qr_title, "手机相机扫码极速传书");
-    lv_obj_set_style_text_font(qr_title, UiFont(), 0);
+    lv_label_set_text(qr_title, "手机扫码直达");
+    lv_obj_set_style_text_font(qr_title, title_font ? title_font : UiFont(), 0);
     lv_obj_set_style_text_color(qr_title, lv_color_black(), 0);
 
     s_ui.qr_tip_lbl = lv_label_create(s_ui.qr_card);
-    lv_label_set_text(s_ui.qr_tip_lbl, "无需手动输入网址，扫码即刻打开传书页面");
+    lv_label_set_text(s_ui.qr_tip_lbl, "手机微信 / 相机扫码打开");
     lv_obj_set_style_text_font(s_ui.qr_tip_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.qr_tip_lbl, lv_color_black(), 0);
-    lv_obj_set_style_pad_top(s_ui.qr_tip_lbl, 6, 0);
 
-    // 3. 动态活动记录卡片
-    lv_obj_t* card3 = MakeCard(body, 12);
-    lv_obj_t* ltitle = lv_label_create(card3);
-    lv_label_set_text(ltitle, "实时传输记录");
-    const lv_font_t* tf = fontpack_lv_font_get(26, 2);
-    lv_obj_set_style_text_font(ltitle, tf ? tf : UiFont(), 0);
+    // 二维码白底黑框包装容器
+    lv_obj_t* qr_box = lv_obj_create(s_ui.qr_card);
+    lv_obj_remove_style_all(qr_box);
+    lv_obj_set_size(qr_box, 196, 196);
+    lv_obj_set_style_bg_color(qr_box, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(qr_box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(qr_box, lv_color_black(), 0);
+    lv_obj_set_style_border_width(qr_box, 2, 0);
+    lv_obj_set_style_radius(qr_box, 8, 0);
+    lv_obj_clear_flag(qr_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_ui.qr_obj = lv_qrcode_create(qr_box);
+    lv_qrcode_set_size(s_ui.qr_obj, 184);
+    lv_qrcode_set_dark_color(s_ui.qr_obj, lv_color_black());
+    lv_qrcode_set_light_color(s_ui.qr_obj, lv_color_white());
+    lv_obj_center(s_ui.qr_obj);
+
+    lv_obj_t* qr_subtip = lv_label_create(s_ui.qr_card);
+    lv_label_set_text(qr_subtip, "免输网址 · 手机直接选书上传");
+    lv_obj_set_style_text_font(qr_subtip, UiFont(), 0);
+    lv_obj_set_style_text_color(qr_subtip, lv_color_black(), 0);
+
+    // 3. 底部卡片：实时动态记录
+    lv_obj_t* bottom_card = MakeCard(body, 10);
+    lv_obj_set_width(bottom_card, lv_pct(100));
+    lv_obj_set_style_pad_row(bottom_card, 4, 0);
+
+    lv_obj_t* ltitle = lv_label_create(bottom_card);
+    lv_label_set_text(ltitle, "实时传输动态");
+    lv_obj_set_style_text_font(ltitle, title_font ? title_font : UiFont(), 0);
     lv_obj_set_style_text_color(ltitle, lv_color_black(), 0);
 
-    s_ui.log_lbl = lv_label_create(card3);
+    s_ui.log_lbl = lv_label_create(bottom_card);
     lv_obj_set_width(s_ui.log_lbl, lv_pct(100));
     lv_label_set_long_mode(s_ui.log_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.log_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.log_lbl, lv_color_black(), 0);
 
-    // 4. 存储说明卡片
-    lv_obj_t* card4 = MakeCard(body, 12);
-    s_ui.storage_lbl = lv_label_create(card4);
-    lv_obj_set_width(s_ui.storage_lbl, lv_pct(100));
-    lv_obj_set_style_text_font(s_ui.storage_lbl, UiFont(), 0);
-    lv_obj_set_style_text_color(s_ui.storage_lbl, lv_color_black(), 0);
-
-    lv_obj_t* path_lbl = lv_label_create(card4);
-    lv_label_set_text(path_lbl, "保存目录: metalio/e-ink/books/");
-    lv_obj_set_style_text_font(path_lbl, UiFont(), 0);
-    lv_obj_set_style_text_color(path_lbl, lv_color_black(), 0);
-
-    lv_obj_t* fmt_lbl = lv_label_create(card4);
-    lv_label_set_text(fmt_lbl, "支持格式: .txt / .epub / .ebook / .pdf");
-    lv_obj_set_style_text_font(fmt_lbl, UiFont(), 0);
-    lv_obj_set_style_text_color(fmt_lbl, lv_color_black(), 0);
-
-    lv_obj_t* hint = lv_label_create(card4);
-    lv_label_set_text(hint, "说明: 退出本页面时后台 Web 服务自动完全关闭，不占任何内存。");
+    lv_obj_t* hint = lv_label_create(bottom_card);
+    lv_label_set_text(hint, "💡 提示: 退出本界面将自动关闭 Web 传书服务，零常驻后台内存。");
     lv_obj_set_width(hint, lv_pct(100));
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(hint, UiFont(), 0);
@@ -345,7 +379,7 @@ lv_obj_t* WifiTransferScreen::Create() {
 
     // 默认进入页面自动启动服务
     if (Board::GetInstance().IsNetworkReady()) {
-        wifi_transfer::WifiTransferService::GetInstance().Start(8080);
+        wifi_transfer::WifiTransferService::GetInstance().Start();
     }
 
     RefreshUi();

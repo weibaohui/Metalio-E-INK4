@@ -22,10 +22,10 @@ public:
 
     /**
      * @brief 启动 WiFi 传书 Web 服务
-     * @param port 监听端口，默认 8080
+     * @param port 监听端口，默认 80 (标准 HTTP)
      * @return true 启动成功，false 启动失败（如端口被占或未联网）
      */
-    bool Start(uint16_t port = 8080);
+    bool Start(uint16_t port = 80);
 
     /**
      * @brief 停止 WiFi 传书 Web 服务，释放所有内存和 Socket
