@@ -29,6 +29,7 @@
 #include "audio_focus_manager.h"
 #include "boards/common/power_policy/power_policy.h"
 #include "board.h"
+#include "core/system_event_bus.h"
 #include "display/status_bar_manager.h"
 #include "radio_catalog.h"
 #include "settings.h"
@@ -149,8 +150,12 @@ void SetSnapState(radio_state_t st, const char* err) {
     if (st == RADIO_PLAYING) {
         std::string msg = "电台: " + (station_name.empty() ? std::string("播放中") : station_name);
         StatusBarManager::GetInstance().SetOngoing("radio", msg);
+        SystemEventBus::GetInstance().Publish(SystemEvent::AudioPlayback(SystemAudioPlaybackState::kPlaying, "radio"));
     } else if (st == RADIO_STOPPED || st == RADIO_ERROR) {
         StatusBarManager::GetInstance().ClearOngoing("radio");
+        SystemEventBus::GetInstance().Publish(SystemEvent::AudioPlayback(SystemAudioPlaybackState::kStopped, "radio"));
+    } else if (st == RADIO_CONNECTING) {
+        SystemEventBus::GetInstance().Publish(SystemEvent::AudioPlayback(SystemAudioPlaybackState::kConnecting, "radio"));
     }
 }
 
