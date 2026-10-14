@@ -13,6 +13,8 @@
 #include "board.h"
 #include "application.h"
 #include "display.h"
+#include "display/screen/epd_widget_kit.h"
+#include "display/status_bar_manager.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "screen_common.h"
@@ -24,7 +26,7 @@ namespace {
 constexpr const char* TAG = "GlmUsage";
 constexpr const char* kScreenId = "glm_usage";
 
-constexpr lv_coord_t kPad = 16;
+constexpr lv_coord_t kPad = 14;
 constexpr lv_coord_t kRowGap = 12;
 constexpr lv_coord_t kCardPad = 14;
 constexpr lv_coord_t kCardRadius = 18;
@@ -34,6 +36,7 @@ constexpr lv_coord_t kFooterH = 42;
 
 struct GlmUi {
     lv_obj_t* screen = nullptr;
+    EpdWidgetKit::EpdPageScaffold* scaffold = nullptr;
     lv_obj_t* context_row = nullptr;
     lv_obj_t* refresh_btn = nullptr;
     lv_obj_t* title_lbl = nullptr;
@@ -55,7 +58,7 @@ size_t s_rendered_context_count = 0;
 lv_timer_t* s_status_timer = nullptr;
 // 进/出屏代际:每次 Create/Unload 自增。离屏的 Stop 是异步 Schedule 到 main 的,
 // 快速"退出→重进"时旧的 Stop 可能在新会话重建 worker 后才跑到 —— 若不加守卫,
-// 它会把新会话的 worker 误杀(需求二"多试几次才有概率刷新"的另一根因)。
+// 它会把新会话的 worker 误杀。
 std::atomic<int> s_open_gen{0};
 
 const lv_font_t* UiFont() {
@@ -63,7 +66,7 @@ const lv_font_t* UiFont() {
 }
 
 void DisableScroll(lv_obj_t* obj) {
-    lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    if (obj) lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
 }
 
 lv_obj_t* MakeCard(lv_obj_t* parent) {
@@ -241,6 +244,10 @@ void RefreshUsageUi() {
             : "周重置次数 --";
     lv_label_set_text(s_ui.five_reset_lbl, five_reset_text.c_str());
     lv_label_set_text(s_ui.week_reset_lbl, week_reset_text.c_str());
+
+    if (s_ui.scaffold != nullptr && s_ui.scaffold->GetScrollView() != nullptr) {
+        s_ui.scaffold->GetScrollView()->UpdatePageInfo();
+    }
 }
 
 void SyncFooter() {
@@ -273,10 +280,7 @@ void OnScreenUnloaded(lv_event_t* /*event*/) {
     }
     s_ui = {};
     s_rendered_context_count = 0;
-    // 离页停掉 16K 常驻 worker,释放任务栈。Stop() 轮询任务退出会阻塞(最多 3s,
-    // 等 worker 收尾),不能在 LVGL worker 上跑,故 Schedule 到 main 任务。
-    // 代际守卫:若 Schedule 还没跑就又重进(Create 已把 s_open_gen 自增),这次
-    // 旧会话的 Stop 作废,worker 留给新会话复用 —— 不会误杀新 worker。
+    // 离页停掉 16K 常驻 worker,释放任务栈。
     const int gen = ++s_open_gen;
     Application::GetInstance().Schedule([gen]() {
         if (s_open_gen.load() == gen) {
@@ -343,15 +347,7 @@ bool OnVkKey(const char* key_name) {
     return false;
 }
 
-lv_obj_t* CreateBody(lv_obj_t* parent) {
-    lv_obj_t* page = lv_obj_create(parent);
-    lv_obj_remove_style_all(page);
-    lv_obj_set_size(page, lv_pct(100), lv_pct(100));
-    lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(page, kRowGap, 0);
-    DisableScroll(page);
-    lv_obj_clear_flag(page, LV_OBJ_FLAG_CLICKABLE);
-
+void BuildBody(lv_obj_t* page) {
     s_ui.context_row = lv_obj_create(page);
     lv_obj_remove_style_all(s_ui.context_row);
     lv_obj_set_size(s_ui.context_row, lv_pct(100), kContextTabH);
@@ -360,23 +356,6 @@ lv_obj_t* CreateBody(lv_obj_t* parent) {
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(s_ui.context_row, 12, 0);
     lv_obj_set_scroll_dir(s_ui.context_row, LV_DIR_HOR);
-
-    lv_obj_t* title_row = lv_obj_create(page);
-    lv_obj_remove_style_all(title_row);
-    lv_obj_set_width(title_row, lv_pct(100));
-    lv_obj_set_height(title_row, kButtonH);
-    lv_obj_set_flex_flow(title_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(title_row, 12, 0);
-    DisableScroll(title_row);
-    lv_obj_clear_flag(title_row, LV_OBJ_FLAG_CLICKABLE);
-
-    s_ui.title_lbl = ScreenMakeLabel(title_row, "GLM 用量", 30, true);
-    lv_obj_set_width(s_ui.title_lbl, LV_SIZE_CONTENT);
-    lv_obj_set_flex_grow(s_ui.title_lbl, 1);
-    s_ui.refresh_btn = MakeButton(title_row, "刷新", 110,
-        [](lv_event_t* /*event*/) {
-            GlmUsageService::GetInstance().RequestRefresh();
-        });
 
     s_ui.plan_lbl = ScreenMakeLabel(page, "尚未更新", 25, true);
 
@@ -411,7 +390,14 @@ lv_obj_t* CreateBody(lv_obj_t* parent) {
     lv_obj_t* extra_card = MakeCard(page);
     s_ui.five_reset_lbl = ScreenMakeLabel(extra_card, "5小时重置次数 --", 30, true);
     s_ui.week_reset_lbl = ScreenMakeLabel(extra_card, "周重置次数 --", 30, true);
-    return page;
+
+    s_ui.footer_lbl = lv_label_create(page);
+    lv_label_set_text(s_ui.footer_lbl, "正在初始化");
+    lv_obj_set_width(s_ui.footer_lbl, lv_pct(100));
+    lv_label_set_long_mode(s_ui.footer_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(s_ui.footer_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s_ui.footer_lbl, UiFont(), 0);
+    lv_obj_clear_flag(s_ui.footer_lbl, LV_OBJ_FLAG_CLICKABLE);
 }
 
 }  // namespace
@@ -422,53 +408,61 @@ lv_obj_t* GlmUsageScreen::Create() {
     s_rendered_context_count = 0;
     ScreenSetIsHome(false);
 
-    // 进屏自增代际:使任何还在路上的"旧会话 Stop"(异步 Schedule 到 main)失效。
+    // 进屏自增代际
     ++s_open_gen;
 
-    // 进页才启动 16K 常驻 worker(boot 期只 Init 注册工具+载入持久化)。
-    // Start() 不碰 NVS(inited_ 已 true),可在 LVGL worker 上直调;且 Start 内部
-    // 已配置就置刷新位 —— 进屏即自动查询(需求二)。
+    // 启动后台 worker
     GlmUsageService::GetInstance().Start();
 
-    lv_obj_t* screen = lv_obj_create(nullptr);
-    s_ui.screen = screen;
-    lv_obj_remove_style_all(screen);
-    lv_obj_set_size(screen, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(screen, lv_color_black(), 0);
-    DisableScroll(screen);
-    lv_obj_add_event_cb(screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
+    auto* scaffold = EpdWidgetKit::EpdPageScaffold::Create({
+        .title = "GLM 用量",
+        .show_status_bar = true,
+        .show_back_btn = true,
+        .scrollable = true,
+        .pad_h = kPad,
+        .pad_v = 10,
+        .row_gap = kRowGap,
+    });
+    s_ui.scaffold = scaffold;
+    s_ui.screen = scaffold->GetScreen();
+    lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
 
-    const EpdStatusBar status = ScreenCreateStatusBar(screen);
-    lv_obj_t* body = lv_obj_create(screen);
-    lv_obj_remove_style_all(body);
-    lv_obj_set_size(body, LV_HOR_RES, LV_VER_RES - status.height);
-    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, status.height);
-    lv_obj_set_style_pad_all(body, kPad, 0);
-    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(body, kRowGap, 0);
-    DisableScroll(body);
-    lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
+    // 头部右侧挂载刷新按钮
+    lv_obj_t* head = scaffold->GetHeader();
+    if (head != nullptr) {
+        // child 0: 返回按钮, child 1: 标题标签
+        s_ui.title_lbl = lv_obj_get_child(head, 1);
 
-    lv_obj_t* page = CreateBody(body);
-    lv_obj_set_width(page, lv_pct(100));
-    lv_obj_set_flex_grow(page, 1);
+        s_ui.refresh_btn = lv_obj_create(head);
+        lv_obj_remove_style_all(s_ui.refresh_btn);
+        lv_obj_set_size(s_ui.refresh_btn, 80, 38);
+        lv_obj_set_style_bg_color(s_ui.refresh_btn, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(s_ui.refresh_btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(s_ui.refresh_btn, lv_color_black(), 0);
+        lv_obj_set_style_border_width(s_ui.refresh_btn, 2, 0);
+        lv_obj_set_style_radius(s_ui.refresh_btn, LV_RADIUS_CIRCLE, 0);
+        lv_obj_add_flag(s_ui.refresh_btn, LV_OBJ_FLAG_CLICKABLE);
+        HapticAttachClick(s_ui.refresh_btn);
+        lv_obj_add_event_cb(s_ui.refresh_btn, [](lv_event_t*) {
+            GlmUsageService::GetInstance().RequestRefresh();
+            StatusBarManager::GetInstance().ShowToast("正在请求刷新用量...", 1500);
+        }, LV_EVENT_CLICKED, nullptr);
 
-    s_ui.footer_lbl = lv_label_create(body);
-    lv_label_set_text(s_ui.footer_lbl, "正在初始化");
-    lv_obj_set_width(s_ui.footer_lbl, lv_pct(100));
-    lv_obj_set_height(s_ui.footer_lbl, kFooterH);
-    lv_label_set_long_mode(s_ui.footer_lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(s_ui.footer_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(s_ui.footer_lbl, UiFont(), 0);
-    lv_obj_clear_flag(s_ui.footer_lbl, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_t* r_lbl = lv_label_create(s_ui.refresh_btn);
+        lv_label_set_text(r_lbl, "刷新");
+        lv_obj_set_style_text_font(r_lbl, UiFont(), 0);
+        lv_obj_set_style_text_color(r_lbl, lv_color_black(), 0);
+        lv_obj_center(r_lbl);
+        lv_obj_clear_flag(r_lbl, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    BuildBody(scaffold->GetContentContainer());
 
     RefreshUsageUi();
     SyncFooter();
     StartNetworkWaitIfNeeded();
     s_status_timer = lv_timer_create(OnStatusTimer, 1000, nullptr);
-    VkKey_AttachScreen(screen, kScreenId,
+    VkKey_AttachScreen(s_ui.screen, kScreenId,
                        VkKeyScreenDesc{GlmUsageScreen::Create, OnVkKey});
-    return screen;
+    return s_ui.screen;
 }
