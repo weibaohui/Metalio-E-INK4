@@ -31,6 +31,7 @@
 #include "tts_decoder.h"
 #include "minimax_speech.h"
 #include "minimax_bidi_tts.h"
+#include "audio_focus_manager.h"
 
 namespace {
 
@@ -670,6 +671,7 @@ void PipelineTask(void*) {
             if (bidi_tts->StartSession(tts_key, voice_cfg, bidi_err)) {
                 ESP_LOGI(TAG, "WSS TTS 会话已就绪, 开启实时音频播放流水线");
                 PowerPolicy::GetInstance().Acquire(PowerNeed::AiChatTts);
+                AudioFocusManager::GetInstance().RequestFocus("ai_chat", AudioClientType::Exclusive, nullptr);
                 if (codec) codec->EnableOutput(true);
 
                 play_running.store(true);
@@ -801,6 +803,7 @@ void PipelineTask(void*) {
                     vTaskDelay(pdMS_TO_TICKS(20));
                     ++wait_cycles;
                 }
+                AudioFocusManager::GetInstance().AbandonFocus("ai_chat");
                 PowerPolicy::GetInstance().Release(PowerNeed::AiChatTts);
                 bidi_tts->Close();
             }
@@ -832,6 +835,7 @@ void PipelineTask(void*) {
                 ++wait_cycles;
             }
 
+            AudioFocusManager::GetInstance().AbandonFocus("ai_chat");
             PowerPolicy::GetInstance().Release(PowerNeed::AiChatTts);
             bidi_tts->Finish();
             bidi_tts->Close();
@@ -839,6 +843,7 @@ void PipelineTask(void*) {
             // Fallback: WSS 失败时的 HTTP TTS 兜底
             SetState(AiChatState::Speaking);
             PowerPolicy::GetInstance().Acquire(PowerNeed::AiChatTts);
+            AudioFocusManager::GetInstance().RequestFocus("ai_chat", AudioClientType::Exclusive, nullptr);
             std::vector<int16_t> tts_pcm;
             try {
                 if (TtsSynthesize(cfg, reply, tts_pcm, err)) {
@@ -850,6 +855,7 @@ void PipelineTask(void*) {
                 ESP_LOGE(TAG, "tts exception: %s", e.what());
                 err = "播报异常,回复过长";
             }
+            AudioFocusManager::GetInstance().AbandonFocus("ai_chat");
             PowerPolicy::GetInstance().Release(PowerNeed::AiChatTts);
         }
 
@@ -866,6 +872,7 @@ void PipelineTask(void*) {
     }
 
 done:
+    AudioFocusManager::GetInstance().AbandonFocus("ai_chat");
     s_task = nullptr;   // SpawnPsrWorker 包装层 return 即配对自删
 }
 

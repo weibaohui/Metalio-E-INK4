@@ -1,7 +1,9 @@
 #pragma once
 
 #include "app_desc.h"
+#include "app_module.h"
 #include <vector>
+#include <memory>
 #include <cstdint>
 
 /**
@@ -11,7 +13,8 @@
  * 1. 统一维护系统中所有已注册应用元信息；
  * 2. 管理各应用的启用/禁用状态，维持内存缓存以保证在 PSRAM 栈（LVGL worker）安全读取；
  * 3. 解除 HomeScreen、SettingsAppsTab 与各具体 Screen 之间的硬编码强耦合；
- * 4. 统一调度开机阶段启用应用的 MCP 工具注册。
+ * 4. 统一调度开机阶段启用应用的 MCP 工具注册；
+ * 5. 支持现代面向对象的 AppModule 生命周期纳管。
  */
 class AppManager {
 public:
@@ -20,8 +23,9 @@ public:
     // 开机初始化：注册默认内置应用并从 NVS 加载开关状态到 RAM 缓存
     void Init();
 
-    // 动态注册应用
+    // 动态注册应用 (支持面向对象 AppModule 与传统 AppDesc)
     void RegisterApp(const AppDesc& desc);
+    void RegisterApp(std::shared_ptr<AppModule> module);
 
     // 获取所有应用
     const std::vector<AppDesc>& GetAllApps() const { return apps_; }
