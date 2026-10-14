@@ -33,6 +33,7 @@
 #include "reader/book_progress_cache.h"
 #include "display/font/epdfont.h"
 #include "display/font/ttf_convert.h"
+#include "display/status_bar_manager.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "lv_adapter_display.h"
@@ -360,7 +361,6 @@ struct BookUiState {
     lv_obj_t* list_body = nullptr;
     lv_obj_t* list_footer = nullptr; // 页码；多选时靠右下
     lv_obj_t* multi_bar = nullptr;   // 取消 / 全选 / 移除
-    lv_obj_t* status_label = nullptr;
     bool shelf_multi = false;
     std::vector<uint8_t> shelf_selected; // 与 books 等长
     int64_t shelf_suppress_click_until_us = 0;
@@ -1274,7 +1274,6 @@ void ReleaseReaderSessionForLeave() {
     st.open_pct_lbl = nullptr;
     st.status_bar = nullptr;
     st.status_overlay = nullptr;
-    st.status_label = nullptr;
     st.status_h = 0;
     st.settings_sheet = nullptr;
     ClearSettingsSheetWidgetRefs();
@@ -2309,11 +2308,9 @@ void RefreshShelfFooterMode() {
             lv_obj_align(st.list_footer, LV_ALIGN_RIGHT_MID, -10, 0);
             lv_obj_clear_flag(st.list_footer, LV_OBJ_FLAG_HIDDEN);
             lv_obj_move_foreground(st.list_footer);
-        }
-        if (st.status_label != nullptr && lv_obj_is_valid(st.status_label)) {
             char buf[32];
             std::snprintf(buf, sizeof(buf), Lang::Strings::BOOK_SELECTED_FMT, ShelfSelectedCount());
-            lv_label_set_text(st.status_label, buf);
+            StatusBarManager::GetInstance().SetOngoing("book", buf);
         }
     } else {
         if (st.multi_bar != nullptr) {
@@ -2328,9 +2325,7 @@ void RefreshShelfFooterMode() {
             lv_obj_align(st.list_footer, LV_ALIGN_CENTER, 0, 0);
             lv_obj_clear_flag(st.list_footer, LV_OBJ_FLAG_HIDDEN);
         }
-        if (st.status_label != nullptr && lv_obj_is_valid(st.status_label)) {
-            lv_label_set_text(st.status_label, Lang::Strings::BOOK_SHELF_TITLE);
-        }
+        StatusBarManager::GetInstance().SetOngoing("book", Lang::Strings::BOOK_SHELF_TITLE);
     }
 }
 
@@ -2466,11 +2461,9 @@ void PatchShelfVisibleCheckMarks() {
         PatchShelfRowCheckMark(
             static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(cell))));
     }
-    if (st.status_label != nullptr && lv_obj_is_valid(st.status_label)) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), Lang::Strings::BOOK_SELECTED_FMT, ShelfSelectedCount());
-        lv_label_set_text(st.status_label, buf);
-    }
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), Lang::Strings::BOOK_SELECTED_FMT, ShelfSelectedCount());
+    StatusBarManager::GetInstance().SetOngoing("book", buf);
 }
 
 void OnShelfMultiCancel(lv_event_t* /*e*/) {
@@ -2596,18 +2589,12 @@ void SetReadStatusVisible(bool visible) {
     }
 }
 
-/** @brief 状态栏中央（时钟位）：有文案则显示，nullptr/空则藏起 */
+/** @brief 状态栏中央（时钟位）：有文案则显示，nullptr/空则清除业务持续状态 */
 void SetReadStatusCenterTitle(const char* title) {
-    auto& st = State();
-    if (st.status_label == nullptr || !lv_obj_is_valid(st.status_label)) {
-        return;
-    }
     if (title != nullptr && title[0] != '\0') {
-        lv_label_set_text(st.status_label, title);
-        lv_obj_clear_flag(st.status_label, LV_OBJ_FLAG_HIDDEN);
+        StatusBarManager::GetInstance().SetOngoing("book", title);
     } else {
-        lv_label_set_text(st.status_label, "");
-        lv_obj_add_flag(st.status_label, LV_OBJ_FLAG_HIDDEN);
+        StatusBarManager::GetInstance().ClearOngoing("book");
     }
 }
 
@@ -5673,14 +5660,9 @@ lv_obj_t* CreateReaderScreen(const reader::BookInfo& info) {
     st.status_bar = status.bar;
     st.status_overlay = status.overlay;
     st.status_h = status.height;
-    st.status_label = status.status_label;
-    if (status.status_label) {
-        lv_label_set_text(status.status_label, "");
-        lv_obj_add_flag(status.status_label, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (status.notification_label) {
-        lv_obj_add_flag(status.notification_label, LV_OBJ_FLAG_HIDDEN);
-    }
+    lv_obj_add_event_cb(scr, [](lv_event_t*) {
+        StatusBarManager::GetInstance().ClearOngoing("book");
+    }, LV_EVENT_DELETE, nullptr);
     // 沉浸阅读：默认藏顶栏，正文占满状态栏区域
     SetReadStatusVisible(false);
 
@@ -5792,12 +5774,10 @@ lv_obj_t* CreateDetailScreen(int book_index) {
         LV_EVENT_DELETE, nullptr);
 
     EpdStatusBar status = ScreenCreateStatusBar(scr);
-    if (status.status_label) {
-        lv_label_set_text(status.status_label, Lang::Strings::BOOK_DETAIL);
-    }
-    if (status.notification_label) {
-        lv_obj_add_flag(status.notification_label, LV_OBJ_FLAG_HIDDEN);
-    }
+    StatusBarManager::GetInstance().SetOngoing("book", Lang::Strings::BOOK_DETAIL);
+    lv_obj_add_event_cb(scr, [](lv_event_t*) {
+        StatusBarManager::GetInstance().ClearOngoing("book");
+    }, LV_EVENT_DELETE, nullptr);
 
     lv_obj_t* body = lv_obj_create(scr);
     lv_obj_remove_style_all(body);
@@ -6732,7 +6712,6 @@ lv_obj_t* BookScreen::Create() {
     st.content = nullptr;
     st.page_label = nullptr;
     st.title_label = nullptr;
-    st.status_label = nullptr;
     st.status_bar = nullptr;
     st.status_overlay = nullptr;
     st.status_h = 0;
@@ -6803,10 +6782,10 @@ lv_obj_t* BookScreen::Create() {
         LV_EVENT_DELETE, nullptr);
 
     EpdStatusBar status = ScreenCreateStatusBar(scr);
-    st.status_label = status.status_label;
-    if (status.notification_label) {
-        lv_obj_add_flag(status.notification_label, LV_OBJ_FLAG_HIDDEN);
-    }
+    StatusBarManager::GetInstance().SetOngoing("book", Lang::Strings::BOOK_SHELF_TITLE);
+    lv_obj_add_event_cb(scr, [](lv_event_t*) {
+        StatusBarManager::GetInstance().ClearOngoing("book");
+    }, LV_EVENT_DELETE, nullptr);
 
     const lv_coord_t body_h = LV_VER_RES - status.height;
 
@@ -6947,13 +6926,10 @@ lv_obj_t* CreateBookshelfScreen() {
         LV_EVENT_DELETE, nullptr);
 
     EpdStatusBar status = ScreenCreateStatusBar(scr);
-    st.status_label = status.status_label;
-    if (status.status_label) {
-        lv_label_set_text(status.status_label, Lang::Strings::BOOK_SHELF_TITLE);
-    }
-    if (status.notification_label) {
-        lv_obj_add_flag(status.notification_label, LV_OBJ_FLAG_HIDDEN);
-    }
+    StatusBarManager::GetInstance().SetOngoing("book", Lang::Strings::BOOK_SHELF_TITLE);
+    lv_obj_add_event_cb(scr, [](lv_event_t*) {
+        StatusBarManager::GetInstance().ClearOngoing("book");
+    }, LV_EVENT_DELETE, nullptr);
 
     const lv_coord_t body_h = LV_VER_RES - status.height - kFooterH;
     if (st.list_page < 0) {

@@ -4,19 +4,22 @@
 
 #include <atomic>
 
-// 通用状态栏信息，包含网络、电量和通知文本。
+// 通用状态栏信息 (统一由 StatusBarManager 调度, 不对业务暴露内部控件裸指针)
 struct EpdStatusBar {
     lv_obj_t* bar = nullptr;
     lv_obj_t* overlay = nullptr;
-    lv_obj_t* network_label = nullptr;
-    lv_obj_t* mute_label = nullptr;
-    lv_obj_t* volume_label = nullptr;   // 喇叭图标后的音量数字(需求:音量数值提示)
-    lv_obj_t* battery_pct_label = nullptr;
-    lv_obj_t* battery_label = nullptr;
-    lv_obj_t* status_label = nullptr;
-    lv_obj_t* notification_label = nullptr;
-    lv_obj_t* low_battery_popup = nullptr;
     lv_coord_t height = 0;
+
+    void SetVisible(bool visible) {
+        if (bar != nullptr) {
+            if (visible) lv_obj_remove_flag(bar, LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (overlay != nullptr) {
+            if (visible) lv_obj_remove_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 };
 
 // 通用顶栏和占位页辅助接口。

@@ -22,6 +22,7 @@
 #include "assets/lang_config.h"
 #include "audio_codec.h"
 #include "board.h"
+#include "display/status_bar_manager.h"
 #include "power_policy.h"
 #include "esp_lv_adapter.h"
 #include "esp_lv_fs.h"
@@ -1840,34 +1841,19 @@ void LVAdapterDisplay::ApplyStatusTextLocked(const char* status) {
 }
 
 void LVAdapterDisplay::SetStatus(const char* status) {
-    DisplayLockGuard lock(this);
-    if (status_label_ == nullptr) {
-        return;
+    if (status != nullptr && status[0] != '\0') {
+        StatusBarManager::GetInstance().SetOngoing("xiaozhi", status);
+    } else {
+        StatusBarManager::GetInstance().ClearOngoing("xiaozhi");
     }
-    ApplyStatusTextLocked(status);
-    lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
-    if (notification_label_) {
-        lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
-    }
-    last_status_update_time_ = std::chrono::system_clock::now();
 }
 
 void LVAdapterDisplay::ShowNotification(const char* notification, int duration_ms) {
+    if (notification != nullptr && notification[0] != '\0') {
+        StatusBarManager::GetInstance().ShowToast(notification, duration_ms > 0 ? duration_ms : 3000);
+    }
     DisplayLockGuard lock(this);
-    if (notification_label_ == nullptr) {
-        return;
-    }
-    lv_label_set_text(notification_label_, notification);
-    lv_obj_remove_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
-    if (status_label_) {
-        lv_obj_add_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
-    }
-    // 音量键通知后同步顶栏喇叭图标+音量数字
     SyncVolumeWidgetsLocked();
-    if (notification_timer_) {
-        esp_timer_stop(notification_timer_);
-        ESP_ERROR_CHECK(esp_timer_start_once(notification_timer_, duration_ms * 1000ULL));
-    }
 }
 
 void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
@@ -1943,17 +1929,8 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
 
         SyncVolumeWidgetsLocked();   // 喇叭图标+音量数字(音量键/播报后更新)
 
-        if (set_time && status_label_ != nullptr) {
-            ApplyStatusTextLocked(time_str);
-            const bool notif_on =
-                notification_label_ != nullptr &&
-                !lv_obj_has_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
-            if (!notif_on) {
-                lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
-                if (notification_label_ != nullptr) {
-                    lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
-                }
-            }
+        if (set_time) {
+            StatusBarManager::GetInstance().UpdateClock(time_str);
             last_status_update_time_ = std::chrono::system_clock::now();
         }
 
