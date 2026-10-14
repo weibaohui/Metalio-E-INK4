@@ -481,7 +481,11 @@ std::string WifiTransferService::GetServerUrl() const {
     std::string ip = GetLocalIp();
     if (ip.empty()) return {};
     char buf[64];
-    snprintf(buf, sizeof(buf), "http://%s:%u/", ip.c_str(), port_);
+    if (port_ == 80) {
+        snprintf(buf, sizeof(buf), "http://%s/", ip.c_str());
+    } else {
+        snprintf(buf, sizeof(buf), "http://%s:%u/", ip.c_str(), port_);
+    }
     return std::string(buf);
 }
 
@@ -494,13 +498,19 @@ bool WifiTransferService::Start(uint16_t port) {
     port_ = port;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = port_;
-    config.ctrl_port = port_ + 1;
+    config.ctrl_port = 32770;  // 区别于 LocalMcp 的 32769
     config.max_uri_handlers = 8;
     config.stack_size = 8192;
     config.lru_purge_enable = true;
 
     httpd_handle_t handle = nullptr;
     esp_err_t err = httpd_start(&handle, &config);
+    if (err != ESP_OK && port_ == 80) {
+        ESP_LOGW(TAG, "httpd_start on port 80 failed (%s), fallback to 8088", esp_err_to_name(err));
+        port_ = 8088;
+        config.server_port = port_;
+        err = httpd_start(&handle, &config);
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
         return false;
