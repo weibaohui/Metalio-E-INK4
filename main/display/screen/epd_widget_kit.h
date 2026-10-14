@@ -7,6 +7,7 @@
 #include <lvgl.h>
 #include <functional>
 #include <string>
+#include "screen_common.h"
 
 namespace EpdWidgetKit {
 
@@ -182,4 +183,61 @@ private:
     void RefreshBarUI();
 };
 
+/**
+ * @brief 墨水屏标准页面脚手架配置
+ */
+struct EpdPageScaffoldConfig {
+    const char* title = nullptr;          ///< 页面标题 (若为 nullptr 则不创建 Header)
+    bool show_status_bar = true;          ///< 是否挂载统一系统状态栏
+    bool show_back_btn = true;            ///< Header 是否带返回键 (默认调 ScreenRequestBack)
+    lv_event_cb_t on_back = nullptr;      ///< 自定义返回回调 (若为空则默认 ScreenRequestBack)
+    bool scrollable = false;              ///< 内容区是否自动启用 EpdPageScrollView
+    EpdPageScrollConfig scroll_cfg;       ///< 滚动配置 (当 scrollable=true 时生效)
+    lv_coord_t pad_h = 16;                ///< 内容区左右内边距
+    lv_coord_t pad_v = 12;                ///< 内容区上下内边距
+    bool flex_column = true;              ///< 内容区是否默认启用纵向 Flex 流式排版
+    lv_coord_t row_gap = 12;              ///< 内容区项目纵向间距
+};
+
+/**
+ * @brief 墨水屏标准页面脚手架 (EpdPageScaffold)
+ * 
+ * 彻底消除各页面重复样板代码的标准页面脚手架:
+ * 1. 自动挂载统一系统状态栏 (StatusBarManager);
+ * 2. 自动生成标准墨水屏顶栏与大热区返回键;
+ * 3. 自动根据顶栏高度计算视口高度, 避免由于硬编码偏移导致的穿透与遮挡;
+ * 4. 可选一键装配墨水屏翻页滚动容器 (EpdPageScrollView);
+ * 5. 自动管理页面及其挂载组件生命周期。
+ */
+class EpdPageScaffold {
+public:
+    using Config = EpdPageScaffoldConfig;
+
+    /**
+     * @brief 构建标准页面脚手架
+     * @param cfg 配置选项
+     * @return 脚手架指针 (销毁 Screen 时自动安全析构)
+     */
+    static EpdPageScaffold* Create(const Config& cfg = Config{});
+
+    lv_obj_t* GetScreen() const { return scr_; }
+    lv_obj_t* GetHeader() const { return header_; }
+    lv_obj_t* GetBody() const { return body_; }
+    lv_obj_t* GetContentContainer() const;
+    EpdPageScrollView* GetScrollView() const { return scroll_view_; }
+    const EpdStatusBar& GetStatusBar() const { return status_bar_; }
+
+private:
+    EpdPageScaffold() = default;
+    ~EpdPageScaffold() = default;
+
+    Config cfg_;
+    lv_obj_t* scr_ = nullptr;
+    lv_obj_t* header_ = nullptr;
+    lv_obj_t* body_ = nullptr;
+    EpdStatusBar status_bar_{};
+    EpdPageScrollView* scroll_view_ = nullptr;
+};
+
 } // namespace EpdWidgetKit
+

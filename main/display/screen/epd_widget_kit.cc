@@ -505,5 +505,82 @@ void EpdPageScrollView::RefreshBarUI() {
     }
 }
 
+// ==================== EpdPageScaffold ====================
+
+EpdPageScaffold* EpdPageScaffold::Create(const Config& cfg) {
+    auto* scaffold = new EpdPageScaffold();
+    scaffold->cfg_ = cfg;
+
+    scaffold->scr_ = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(scaffold->scr_, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(scaffold->scr_, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(scaffold->scr_, lv_color_black(), 0);
+    lv_obj_clear_flag(scaffold->scr_, LV_OBJ_FLAG_SCROLLABLE);
+
+    // 绑定生命周期：Screen 被 LVGL 销毁时自动回收 C++ 对象
+    lv_obj_add_event_cb(scaffold->scr_, [](lv_event_t* e) {
+        auto* self = static_cast<EpdPageScaffold*>(lv_event_get_user_data(e));
+        delete self;
+    }, LV_EVENT_DELETE, scaffold);
+
+    lv_coord_t top_offset = 0;
+    if (cfg.show_status_bar) {
+        scaffold->status_bar_ = ScreenCreateStatusBar(scaffold->scr_);
+        top_offset += scaffold->status_bar_.height;
+    }
+
+    if (cfg.title != nullptr) {
+        scaffold->header_ = EpdHeader::Create(scaffold->scr_, cfg.title, cfg.on_back);
+        if (scaffold->header_ != nullptr) {
+            lv_obj_align(scaffold->header_, LV_ALIGN_TOP_MID, 0, top_offset);
+            top_offset += 56; // EpdHeader height
+            if (!cfg.show_back_btn) {
+                lv_obj_t* back_btn = lv_obj_get_child(scaffold->header_, 0);
+                if (back_btn) lv_obj_add_flag(back_btn, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+    }
+
+    const lv_coord_t body_h = LV_VER_RES - top_offset;
+    scaffold->body_ = lv_obj_create(scaffold->scr_);
+    lv_obj_remove_style_all(scaffold->body_);
+    lv_obj_set_size(scaffold->body_, LV_HOR_RES, body_h);
+    lv_obj_align(scaffold->body_, LV_ALIGN_TOP_MID, 0, top_offset);
+    lv_obj_set_style_bg_opa(scaffold->body_, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(scaffold->body_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(scaffold->body_, LV_OBJ_FLAG_CLICKABLE);
+
+    if (cfg.scrollable) {
+        scaffold->scroll_view_ = EpdPageScrollView::Create(scaffold->body_, cfg.scroll_cfg);
+        lv_obj_t* container = scaffold->scroll_view_->GetContainer();
+        if (cfg.flex_column) {
+            lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
+            lv_obj_set_style_pad_row(container, cfg.row_gap, 0);
+        }
+        lv_obj_set_style_pad_left(container, cfg.pad_h, 0);
+        lv_obj_set_style_pad_right(container, cfg.pad_h, 0);
+        lv_obj_set_style_pad_top(container, cfg.pad_v, 0);
+        lv_obj_set_style_pad_bottom(container, cfg.pad_v, 0);
+    } else {
+        if (cfg.flex_column) {
+            lv_obj_set_flex_flow(scaffold->body_, LV_FLEX_FLOW_COLUMN);
+            lv_obj_set_style_pad_row(scaffold->body_, cfg.row_gap, 0);
+        }
+        lv_obj_set_style_pad_left(scaffold->body_, cfg.pad_h, 0);
+        lv_obj_set_style_pad_right(scaffold->body_, cfg.pad_h, 0);
+        lv_obj_set_style_pad_top(scaffold->body_, cfg.pad_v, 0);
+        lv_obj_set_style_pad_bottom(scaffold->body_, cfg.pad_v, 0);
+    }
+
+    return scaffold;
+}
+
+lv_obj_t* EpdPageScaffold::GetContentContainer() const {
+    if (scroll_view_ != nullptr) {
+        return scroll_view_->GetContainer();
+    }
+    return body_;
+}
+
 } // namespace EpdWidgetKit
 
