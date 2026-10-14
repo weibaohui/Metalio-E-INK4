@@ -1,6 +1,7 @@
 #include "settings_storage_tab.h"
 
 #include "SdCardManager.hpp"
+#include "display/status_bar_manager.h"
 #include "fontpack_lvgl.h"
 #include "reader/file_size.h"
 #include "settings_common.h"
@@ -141,6 +142,7 @@ void OnUsbButtonClicked(lv_event_t* /*e*/) {
     }
     vd.Toggle();
     RefreshStorageUi();
+    StatusBarManager::GetInstance().ShowToast(vd.IsGadgetActive() ? "正在启动 USB 挂载..." : "已退出 USB 挂载", 1500);
 }
 
 }  // namespace
