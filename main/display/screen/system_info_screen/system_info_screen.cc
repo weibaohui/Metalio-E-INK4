@@ -14,6 +14,7 @@
 #include <nvs.h>
 
 #include "SdCardManager.hpp"
+#include "display/screen/epd_widget_kit.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "screen_common.h"
@@ -28,7 +29,8 @@ constexpr int kMaxNvsLines = 128;   // NVS 键名展示上限(防极端情况刷
 
 struct SysInfoUi {
     lv_obj_t* screen = nullptr;
-    lv_obj_t* body = nullptr;       // 可滚动内容区;刷新时整体重建(按钮在头部,不在其内)
+    lv_obj_t* body = nullptr;
+    EpdWidgetKit::EpdPageScaffold* scaffold = nullptr;
 };
 SysInfoUi s_ui;
 bool s_alive = false;
@@ -199,6 +201,9 @@ void FillBody() {
     FillStorage(s_ui.body);
     FillNvs(s_ui.body);
     FillSystem(s_ui.body);
+    if (s_ui.scaffold != nullptr && s_ui.scaffold->GetScrollView() != nullptr) {
+        s_ui.scaffold->GetScrollView()->UpdatePageInfo();
+    }
 }
 
 void OnRefreshClicked(lv_event_t*) {
@@ -230,82 +235,49 @@ lv_obj_t* SystemInfoScreen::Create() {
     s_alive = true;
     ScreenSetIsHome(false);
 
-    lv_obj_t* screen = lv_obj_create(nullptr);
-    s_ui.screen = screen;
-    lv_obj_remove_style_all(screen);
-    lv_obj_set_size(screen, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(screen, lv_color_black(), 0);
-    lv_obj_set_style_text_font(screen, UiFont(), 0);
-    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
+    auto* scaffold = EpdWidgetKit::EpdPageScaffold::Create({
+        .title = "系统信息",
+        .show_status_bar = true,
+        .show_back_btn = true,
+        .scrollable = true,
+        .pad_h = 12,
+        .pad_v = 8,
+        .row_gap = 6,
+    });
+    s_ui.scaffold = scaffold;
+    s_ui.screen = scaffold->GetScreen();
+    s_ui.body = scaffold->GetContentContainer();
+    lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
 
-    const EpdStatusBar status = ScreenCreateStatusBar(screen);
+    // 头部右侧挂载刷新按钮
+    lv_obj_t* head = scaffold->GetHeader();
+    if (head != nullptr) {
+        lv_obj_t* btn = lv_obj_create(head);
+        lv_obj_remove_style_all(btn);
+        lv_obj_set_size(btn, 80, 38);
+        lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(btn, lv_color_black(), 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        HapticAttachClick(btn);
+        lv_obj_add_event_cb(btn, OnRefreshClicked, LV_EVENT_CLICKED, nullptr);
 
-    lv_obj_t* body = lv_obj_create(screen);
-    lv_obj_remove_style_all(body);
-    lv_obj_set_size(body, LV_HOR_RES, LV_VER_RES - status.height);
-    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, status.height);
-    lv_obj_set_style_pad_all(body, 12, 0);
-    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(body, 6, 0);
-    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);   // 外层不动;只滚内容容器
-    lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
-
-    // 头部行:标题 + 刷新按钮(固定在顶部,不随内容滚动)
-    lv_obj_t* head = lv_obj_create(body);
-    lv_obj_remove_style_all(head);
-    lv_obj_set_size(head, lv_pct(100), 52);
-    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(head, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t* title = lv_label_create(head);
-    lv_label_set_text(title, "系统信息");
-    {
-        const lv_font_t* f = fontpack_lv_font_get(30, 2);
-        lv_obj_set_style_text_font(title, f != nullptr ? f : UiFont(), 0);
+        lv_obj_t* bl = lv_label_create(btn);
+        lv_label_set_text(bl, "刷新");
+        lv_obj_set_style_text_font(bl, UiFont(), 0);
+        lv_obj_set_style_text_color(bl, lv_color_black(), 0);
+        lv_obj_center(bl);
+        lv_obj_clear_flag(bl, LV_OBJ_FLAG_CLICKABLE);
     }
-    lv_obj_set_style_text_color(title, lv_color_black(), 0);
-    lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* btn = lv_obj_create(head);
-    lv_obj_remove_style_all(btn);
-    lv_obj_set_size(btn, 110, 44);
-    lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(btn, lv_color_black(), 0);
-    lv_obj_set_style_border_width(btn, 2, 0);
-    lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
-    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-    HapticAttachClick(btn);
-    lv_obj_add_event_cb(btn, OnRefreshClicked, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t* bl = lv_label_create(btn);
-    lv_label_set_text(bl, "刷新");
-    lv_obj_set_style_text_font(bl, UiFont(), 0);
-    lv_obj_set_style_text_color(bl, lv_color_black(), 0);
-    lv_obj_center(bl);
-    lv_obj_clear_flag(bl, LV_OBJ_FLAG_CLICKABLE);
-
-    // 可滚动内容容器(与设置页滑动同款;头部行在其外,固定)
-    lv_obj_t* scroll = lv_obj_create(body);
-    lv_obj_remove_style_all(scroll);
-    lv_obj_set_width(scroll, lv_pct(100));
-    lv_obj_set_flex_grow(scroll, 1);
-    lv_obj_set_style_pad_row(scroll, 6, 0);
-    lv_obj_set_flex_flow(scroll, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(scroll, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_add_flag(scroll, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(scroll, LV_DIR_VER);
-    lv_obj_clear_flag(scroll, LV_OBJ_FLAG_CLICKABLE);
-    s_ui.body = scroll;
 
     FillBody();
+
     if (s_refresh_timer != nullptr) {
         lv_timer_del(s_refresh_timer);
     }
     s_refresh_timer = lv_timer_create(OnRefreshTimer, 5000, nullptr);
-    VkKey_AttachScreen(screen, kScreenId, VkKeyScreenDesc{SystemInfoScreen::Create, nullptr});
-    return screen;
+    VkKey_AttachScreen(s_ui.screen, kScreenId, VkKeyScreenDesc{SystemInfoScreen::Create, nullptr});
+    return s_ui.screen;
 }
