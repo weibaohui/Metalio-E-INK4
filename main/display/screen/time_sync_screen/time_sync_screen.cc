@@ -8,6 +8,8 @@
 #include <esp_log.h>
 
 #include "board.h"
+#include "display/screen/epd_widget_kit.h"
+#include "display/status_bar_manager.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "screen_common.h"
@@ -33,7 +35,6 @@ bool s_alive = false;
 lv_timer_t* s_timer = nullptr;
 int s_hour = 12, s_min = 0, s_year = 2026, s_mon = 1, s_day = 1;  // 手动校准暂存
 
-const lv_font_t* UiFont() { return fontpack_lv_font_ui(); }
 void DisableScroll(lv_obj_t* o) { lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE); }
 
 lv_obj_t* MakeRow(lv_obj_t* parent, lv_coord_t h) {
@@ -119,7 +120,10 @@ void OnManualStep(lv_event_t* e) {
 
 void OnManualSave(lv_event_t*) {
     HapticPulseIfEnabled();
-    if (TimeService_SetManual(s_year, s_mon, s_day, s_hour, s_min)) RefreshClock();
+    if (TimeService_SetManual(s_year, s_mon, s_day, s_hour, s_min)) {
+        RefreshClock();
+        StatusBarManager::GetInstance().ShowToast("校准时间已生效", 2000);
+    }
 }
 
 void OnScreenUnloaded(lv_event_t*) {
@@ -135,27 +139,18 @@ lv_obj_t* TimeSyncScreen::Create() {
     s_alive = true;
     ScreenSetIsHome(false);
 
-    lv_obj_t* screen = lv_obj_create(nullptr);
-    s_ui.screen = screen;
-    lv_obj_remove_style_all(screen);
-    lv_obj_set_size(screen, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(screen, lv_color_black(), 0);
-    lv_obj_set_style_text_font(screen, UiFont(), 0);
-    DisableScroll(screen);
-    lv_obj_add_event_cb(screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
+    auto* scaffold = EpdWidgetKit::EpdPageScaffold::Create({
+        .title = "时间与对时",
+        .show_status_bar = true,
+        .show_back_btn = true,
+        .pad_h = 16,
+        .pad_v = 12,
+        .row_gap = 10,
+    });
 
-    const EpdStatusBar status = ScreenCreateStatusBar(screen);
-    lv_obj_t* body = lv_obj_create(screen);
-    lv_obj_remove_style_all(body);
-    lv_obj_set_size(body, LV_HOR_RES, LV_VER_RES - status.height);
-    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, status.height);
-    lv_obj_set_style_pad_all(body, 14, 0);
-    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(body, 10, 0);
-    DisableScroll(body);
-    lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
+    s_ui.screen = scaffold->GetScreen();
+    lv_obj_t* body = scaffold->GetBody();
+    lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
 
     // 大字时钟
     s_ui.clock_lbl = ScreenMakeLabel(body, "--:--:--", 64, false);
@@ -213,6 +208,6 @@ lv_obj_t* TimeSyncScreen::Create() {
     RefreshManual();
     RefreshClock();
     s_timer = lv_timer_create(OnTimer, 1000, nullptr);
-    VkKey_AttachScreen(screen, kScreenId, VkKeyScreenDesc{TimeSyncScreen::Create, nullptr});
-    return screen;
+    VkKey_AttachScreen(s_ui.screen, kScreenId, VkKeyScreenDesc{TimeSyncScreen::Create, nullptr});
+    return s_ui.screen;
 }
