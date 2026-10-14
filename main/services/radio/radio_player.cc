@@ -26,6 +26,7 @@
 #include "appfw_stream.h"
 #include "application.h"
 #include "audio_codec.h"
+#include "audio_focus_manager.h"
 #include "boards/common/power_policy/power_policy.h"
 #include "board.h"
 #include "radio_catalog.h"
@@ -778,10 +779,56 @@ extern "C" int radio_player_start(void) {
     return 0;
 }
 
+static std::atomic<bool> s_paused_by_focus{false};
+static std::string s_focus_resume_name;
+static std::string s_focus_resume_url;
+static int s_focus_resume_catalog_index = -1;
+
+static void RadioStopInternal() {
+    std::lock_guard<std::mutex> lock(s_req_mutex);
+    // 始终发一个"停"请求:代际前进可中止正在执行的流,也保证自己会被执行
+    s_pending.stop = true;
+    s_pending.seq = ++s_gen;
+    s_pending_valid = true;
+    s_radio_stream_alive.store(false);
+    {
+        std::lock_guard<std::mutex> lk(s_radio_pcm_mutex);
+        s_radio_pcm_queue.clear();
+    }
+    s_radio_pcm_cv.notify_all();
+}
+
+static void RadioFocusCallback(AudioFocusState state) {
+    if (state == AudioFocusState::LossTransient) {
+        ESP_LOGI(TAG, "音频焦点被独占业务抢占 (如 AI 语音对话), 自动暂停收音机");
+        s_paused_by_focus.store(true);
+        RadioStopInternal();
+    } else if (state == AudioFocusState::Gained) {
+        if (s_paused_by_focus.load()) {
+            s_paused_by_focus.store(false);
+            ESP_LOGI(TAG, "独占音频已释放, 收音机恢复播放: %s", s_focus_resume_name.c_str());
+            if (!s_focus_resume_url.empty()) {
+                radio_play_indexed(s_focus_resume_name.c_str(), s_focus_resume_url.c_str(), s_focus_resume_catalog_index);
+            }
+        }
+    } else if (state == AudioFocusState::Lost) {
+        ESP_LOGI(TAG, "音频焦点永久失去, 停止收音机");
+        s_paused_by_focus.store(false);
+        RadioStopInternal();
+    }
+}
+
 // 请求由其它任务发起时调用:标记打断 + 关闭当前流,使阻塞中的读立即返回。
 // 只做标记不关句柄也可以,但等 2s 读超时用户能感知到"没反应",故直接关。
 extern "C" void radio_play_indexed(const char* name, const char* url, int catalog_index) {
     if (name == nullptr || url == nullptr) return;
+    s_focus_resume_name = name;
+    s_focus_resume_url = url;
+    s_focus_resume_catalog_index = catalog_index;
+
+    // 申请媒体音频焦点, 登记焦点仲裁与抢占续播回调
+    AudioFocusManager::GetInstance().RequestFocus("radio", AudioClientType::Media, RadioFocusCallback);
+
     radio_player_start();
     // 请求一落即发布"目标台":收音任务可能还阻塞在上一条流的读上(最长 10s),
     // 若等它轮到才更新,界面与 MCP 会显示上一台 —— 表现为切台"没反应"。
@@ -807,20 +854,14 @@ extern "C" void radio_play(const char* name, const char* url) {
 }
 
 extern "C" void radio_stop(void) {
-    std::lock_guard<std::mutex> lock(s_req_mutex);
-    // 始终发一个"停"请求:代际前进可中止正在执行的流,也保证自己会被执行
-    s_pending.stop = true;
-    s_pending.seq = ++s_gen;
-    s_pending_valid = true;
-    s_radio_stream_alive.store(false);
-    {
-        std::lock_guard<std::mutex> lk(s_radio_pcm_mutex);
-        s_radio_pcm_queue.clear();
-    }
-    s_radio_pcm_cv.notify_all();
+    s_paused_by_focus.store(false);
+    AudioFocusManager::GetInstance().AbandonFocus("radio");
+    RadioStopInternal();
 }
 
 extern "C" void radio_player_shutdown(void) {
+    s_paused_by_focus.store(false);
+    AudioFocusManager::GetInstance().AbandonFocus("radio");
     s_radio_play_active.store(false);
     s_radio_stream_alive.store(false);
     {

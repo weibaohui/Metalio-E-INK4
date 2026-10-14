@@ -8,6 +8,7 @@
 #include <freertos/task.h>
 
 #include "application.h"
+#include "async_settings_store.h"
 #include "system_info.h"
 
 #define TAG "main"
@@ -25,6 +26,9 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    // 启动统一异步配置中心
+    AsyncSettingsStore::GetInstance().Init();
 
     // Launch the application
     auto& app = Application::GetInstance();

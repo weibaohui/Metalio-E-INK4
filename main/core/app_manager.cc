@@ -79,6 +79,40 @@ void AppManager::RegisterApp(const AppDesc& desc) {
     }
 }
 
+namespace {
+std::vector<std::shared_ptr<AppModule>> s_registered_modules;
+}
+
+void AppManager::RegisterApp(std::shared_ptr<AppModule> module) {
+    if (!module) return;
+    s_registered_modules.push_back(module);
+    AppModule* m = module.get();
+
+    AppDesc desc;
+    desc.id = m->GetId();
+    desc.icon_path = m->GetIconPath();
+    desc.is_mandatory = m->IsMandatory();
+    // 由于 AppDesc 使用纯函数指针, 通过静态查找派发
+    desc.name = []() -> const char* {
+        if (!s_registered_modules.empty()) {
+            return s_registered_modules.back()->GetName();
+        }
+        return "";
+    };
+    desc.create = []() -> lv_obj_t* {
+        if (!s_registered_modules.empty()) {
+            return s_registered_modules.back()->CreateUI(nullptr);
+        }
+        return nullptr;
+    };
+    desc.register_mcp = []() {
+        if (!s_registered_modules.empty()) {
+            s_registered_modules.back()->RegisterMcpTools();
+        }
+    };
+    RegisterApp(desc);
+}
+
 void AppManager::Init() {
     LoadTogglesFromNvs();
 }
