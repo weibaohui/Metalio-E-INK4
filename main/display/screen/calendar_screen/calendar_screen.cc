@@ -11,6 +11,7 @@
 
 #include <esp_log.h>
 
+#include "display/screen/epd_widget_kit.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "screen_common.h"
@@ -219,27 +220,18 @@ lv_obj_t* CalendarScreen::Create() {
     CalendarIcs_SetChangedCallback(&OnIcsChanged);   // 订阅同步完成→自动重画
     CalendarIcs_MaybeAutoRefresh();   // 已订阅且数据过期(>12h)时后台同步;离线用旧数据
 
-    lv_obj_t* screen = lv_obj_create(nullptr);
-    s_ui.screen = screen;
-    lv_obj_remove_style_all(screen);
-    lv_obj_set_size(screen, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(screen, lv_color_black(), 0);
-    lv_obj_set_style_text_font(screen, UiFont(), 0);
-    DisableScroll(screen);
-    lv_obj_add_event_cb(screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
+    auto* scaffold = EpdWidgetKit::EpdPageScaffold::Create({
+        .title = "日历",
+        .show_status_bar = true,
+        .show_back_btn = true,
+        .pad_h = kPad,
+        .pad_v = 8,
+        .row_gap = 8,
+    });
 
-    const EpdStatusBar status = ScreenCreateStatusBar(screen);
-    lv_obj_t* body = lv_obj_create(screen);
-    lv_obj_remove_style_all(body);
-    lv_obj_set_size(body, LV_HOR_RES, LV_VER_RES - status.height);
-    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, status.height);
-    lv_obj_set_style_pad_all(body, kPad, 0);
-    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(body, 8, 0);
-    DisableScroll(body);
-    lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
+    s_ui.screen = scaffold->GetScreen();
+    lv_obj_t* body = scaffold->GetBody();
+    lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
 
     // 头部:翻页 + 月份标签
     lv_obj_t* head = lv_obj_create(body);
@@ -278,6 +270,6 @@ lv_obj_t* CalendarScreen::Create() {
     lv_label_set_long_mode(s_ui.panel_lbl, LV_LABEL_LONG_WRAP);
 
     RebuildGrid();
-    VkKey_AttachScreen(screen, kScreenId, VkKeyScreenDesc{CalendarScreen::Create, nullptr});
-    return screen;
+    VkKey_AttachScreen(s_ui.screen, kScreenId, VkKeyScreenDesc{CalendarScreen::Create, nullptr});
+    return s_ui.screen;
 }
