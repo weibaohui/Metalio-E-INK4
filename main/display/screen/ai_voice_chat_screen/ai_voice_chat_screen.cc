@@ -10,6 +10,9 @@
 
 #include "application.h"
 #include "board.h"
+#include "display/modal_manager.h"
+#include "display/status_bar_manager.h"
+#include "display/screen/epd_widget_kit.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "lv_adapter_display.h"
@@ -44,7 +47,6 @@ void DisableScroll(lv_obj_t* o) { lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE); 
 
 // ---- 语音设置弹窗状态 ----
 minimax_speech::VoiceConfig s_temp_voice_cfg;
-lv_obj_t* s_settings_mask = nullptr;
 
 struct VoiceBtnItem {
     lv_obj_t* btn;
@@ -94,54 +96,21 @@ void RefreshVoiceSettingsUi() {
 }
 
 void CloseVoiceSettingsModal() {
-    if (s_settings_mask != nullptr && lv_obj_is_valid(s_settings_mask)) {
-        lv_obj_delete(s_settings_mask);
-    }
-    s_settings_mask = nullptr;
-    s_voice_btns.clear();
-    s_speed_btns.clear();
-    s_emotion_btns.clear();
-    s_vol_btns.clear();
+    ModalManager::GetInstance().PopModal();
 }
 
-void OpenVoiceSettingsModal(lv_obj_t* parent_screen) {
-    if (s_settings_mask != nullptr) {
-        CloseVoiceSettingsModal();
-    }
+void OpenVoiceSettingsModal() {
     s_temp_voice_cfg = minimax_speech::GetVoiceConfig();
     s_voice_btns.clear();
     s_speed_btns.clear();
     s_emotion_btns.clear();
     s_vol_btns.clear();
 
-    // 遮罩层 (全屏半透明/网点)
-    lv_obj_t* mask = lv_obj_create(parent_screen);
-    s_settings_mask = mask;
-    lv_obj_remove_style_all(mask);
-    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_pos(mask, 0, 0);
-    lv_obj_set_style_bg_color(mask, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(mask, LV_OPA_30, 0);
-    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(mask, [](lv_event_t*) { CloseVoiceSettingsModal(); }, LV_EVENT_CLICKED, nullptr);
-
-    // 弹窗卡片 (居中, 宽 LV_HOR_RES - 32, 高 LV_VER_RES - 100)
-    lv_obj_t* card = lv_obj_create(mask);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_HOR_RES - 32, LV_VER_RES - 100);
-    lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 12, 0);
-    lv_obj_set_style_pad_all(card, 14, 0);
-    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(card, 10, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(card, [](lv_event_t* e) { lv_event_stop_bubbling(e); }, LV_EVENT_CLICKED, nullptr);
+    ModalManager::GetInstance().PushCustomModal([](lv_obj_t* card) {
+        lv_obj_set_size(card, LV_HOR_RES - 32, LV_VER_RES - 100);
+        lv_obj_set_style_pad_all(card, 14, 0);
+        lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_row(card, 10, 0);
 
     // 顶部标题栏: 标题 + 关闭按钮
     lv_obj_t* head_row = lv_obj_create(card);
@@ -381,6 +350,7 @@ void OpenVoiceSettingsModal(lv_obj_t* parent_screen) {
     lv_obj_add_event_cb(save_btn, [](lv_event_t*) {
         minimax_speech::SaveVoiceConfig(s_temp_voice_cfg);
         CloseVoiceSettingsModal();
+        StatusBarManager::GetInstance().ShowToast("语音音色已保存", 1500);
     }, LV_EVENT_CLICKED, nullptr);
 
     // 关闭/取消按钮 (白底黑字)
@@ -404,6 +374,12 @@ void OpenVoiceSettingsModal(lv_obj_t* parent_screen) {
     lv_obj_add_event_cb(cancel_btn, [](lv_event_t*) {
         CloseVoiceSettingsModal();
     }, LV_EVENT_CLICKED, nullptr);
+    }, []() {
+        s_voice_btns.clear();
+        s_speed_btns.clear();
+        s_emotion_btns.clear();
+        s_vol_btns.clear();
+    });
 }
 
 static std::string s_last_rendered_user;
@@ -455,9 +431,13 @@ void RefreshState() {
                 const int64_t now_us = esp_timer_get_time();
                 const bool is_streaming = (st == AiChatState::Thinking);
                 const bool elapsed = (now_us - s_last_reply_render_us) >= 500000LL;
-                char last_ch = reply.back();
-                const bool has_break = (last_ch == '\n' || last_ch == '。' || last_ch == '！' || last_ch == '？' ||
-                                        reply.size() - s_last_rendered_reply.size() >= 30);
+                bool has_break = (reply.back() == '\n' || reply.size() - s_last_rendered_reply.size() >= 30);
+                if (!has_break && reply.size() >= 3) {
+                    const std::string tail = reply.substr(reply.size() - 3);
+                    if (tail == "。" || tail == "！" || tail == "？") {
+                        has_break = true;
+                    }
+                }
                 if (!is_streaming || elapsed || has_break) {
                     s_last_reply_render_us = now_us;
                     s_last_rendered_reply = reply;
@@ -656,7 +636,7 @@ static void OnSwipeScrollFromFeed(int32_t dy, void* /*user_data*/) {
 void OnScreenUnloaded(lv_event_t*) {
     s_alive = false;
     SetSwipeScrollCb(nullptr, nullptr);
-    CloseVoiceSettingsModal();
+    ModalManager::GetInstance().DismissAll();
     // 忙就取消:录音/播报/转写/思考任一进行中都停(播报也立刻断),
     // 否则退出后任务还在后台跑,"播报中"状态残留到下次进屏
     if (AiChat_IsBusy()) AiChat_AbortRecord();
@@ -677,27 +657,18 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     s_alive = true;
     ScreenSetIsHome(false);
 
-    lv_obj_t* screen = lv_obj_create(nullptr);
-    s_ui.screen = screen;
-    lv_obj_remove_style_all(screen);
-    lv_obj_set_size(screen, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(screen, lv_color_black(), 0);
-    lv_obj_set_style_text_font(screen, UiFont(), 0);
-    DisableScroll(screen);
-    lv_obj_add_event_cb(screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
-
-    const EpdStatusBar status = ScreenCreateStatusBar(screen);
-    lv_obj_t* body = lv_obj_create(screen);
-    lv_obj_remove_style_all(body);
-    lv_obj_set_size(body, LV_HOR_RES, LV_VER_RES - status.height);
-    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, status.height);
-    lv_obj_set_style_pad_all(body, 14, 0);
-    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(body, 10, 0);
-    DisableScroll(body);
-    lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
+    auto* scaffold = EpdWidgetKit::EpdPageScaffold::Create({
+        .title = "AI 语音对话",
+        .show_status_bar = true,
+        .show_back_btn = true,
+        .scrollable = false,
+        .pad_h = 14,
+        .pad_v = 8,
+        .row_gap = 8,
+    });
+    s_ui.screen = scaffold->GetScreen();
+    lv_obj_t* body = scaffold->GetContentContainer();
+    lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
 
     // 进屏:停掉语音管线(避免与采麦争抢),并确保 codec i2s 输入使能。
     // 两者都含 flash/NVS,须走 main 任务(内部栈);本回调在 LVGL worker(PSRAM 栈)。
@@ -707,54 +678,48 @@ lv_obj_t* AiVoiceChatScreen::Create() {
         if (codec != nullptr) codec->Start();
     });
 
-    // 标题行:左标题, 右边容器(自动发声勾选框 + 设置齿轮按钮)
-    lv_obj_t* head = lv_obj_create(body);
-    lv_obj_remove_style_all(head);
-    lv_obj_set_size(head, lv_pct(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    DisableScroll(head);
-    lv_obj_clear_flag(head, LV_OBJ_FLAG_CLICKABLE);
-    ScreenMakeLabel(head, "AI 语音对话", 30);
+    // 标题行右侧容器: 自动发声勾选框 + 设置齿轮按钮
+    lv_obj_t* head = scaffold->GetHeader();
+    if (head != nullptr) {
+        lv_obj_t* right_box = lv_obj_create(head);
+        lv_obj_remove_style_all(right_box);
+        lv_obj_set_size(right_box, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(right_box, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(right_box, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(right_box, 10, 0);
+        DisableScroll(right_box);
+        lv_obj_clear_flag(right_box, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t* right_box = lv_obj_create(head);
-    lv_obj_remove_style_all(right_box);
-    lv_obj_set_size(right_box, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(right_box, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(right_box, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(right_box, 10, 0);
-    DisableScroll(right_box);
-    lv_obj_clear_flag(right_box, LV_OBJ_FLAG_CLICKABLE);
+        s_ui.auto_tts_cb = lv_checkbox_create(right_box);
+        lv_checkbox_set_text(s_ui.auto_tts_cb, "自动发声");
+        lv_obj_set_style_text_color(s_ui.auto_tts_cb, lv_color_black(), 0);
+        lv_obj_add_state(s_ui.auto_tts_cb, AiChat_AutoTts() ? LV_STATE_CHECKED : LV_STATE_DEFAULT);
+        lv_obj_add_event_cb(s_ui.auto_tts_cb, [](lv_event_t* e) {
+            auto* cb = static_cast<lv_obj_t*>(lv_event_get_target(e));
+            AiChat_SetAutoTts(lv_obj_has_state(cb, LV_STATE_CHECKED));
+        }, LV_EVENT_VALUE_CHANGED, nullptr);
 
-    s_ui.auto_tts_cb = lv_checkbox_create(right_box);
-    lv_checkbox_set_text(s_ui.auto_tts_cb, "自动发声");
-    lv_obj_set_style_text_color(s_ui.auto_tts_cb, lv_color_black(), 0);
-    lv_obj_add_state(s_ui.auto_tts_cb, AiChat_AutoTts() ? LV_STATE_CHECKED : LV_STATE_DEFAULT);
-    lv_obj_add_event_cb(s_ui.auto_tts_cb, [](lv_event_t* e) {
-        auto* cb = static_cast<lv_obj_t*>(lv_event_get_target(e));
-        AiChat_SetAutoTts(lv_obj_has_state(cb, LV_STATE_CHECKED));
-    }, LV_EVENT_VALUE_CHANGED, nullptr);
-
-    // 齿轮设置按钮
-    lv_obj_t* gear_btn = lv_obj_create(right_box);
-    lv_obj_remove_style_all(gear_btn);
-    lv_obj_set_size(gear_btn, 68, 36);
-    lv_obj_set_style_bg_color(gear_btn, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(gear_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(gear_btn, lv_color_black(), 0);
-    lv_obj_set_style_border_width(gear_btn, 2, 0);
-    lv_obj_set_style_radius(gear_btn, 8, 0);
-    lv_obj_add_flag(gear_btn, LV_OBJ_FLAG_CLICKABLE);
-    HapticAttachClick(gear_btn);
-    lv_obj_t* gear_lbl = lv_label_create(gear_btn);
-    lv_label_set_text(gear_lbl, "设置");
-    lv_obj_set_style_text_font(gear_lbl, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(gear_lbl, lv_color_black(), 0);
-    lv_obj_center(gear_lbl);
-    lv_obj_clear_flag(gear_lbl, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(gear_btn, [](lv_event_t*) {
-        OpenVoiceSettingsModal(s_ui.screen);
-    }, LV_EVENT_CLICKED, nullptr);
+        // 齿轮设置按钮
+        lv_obj_t* gear_btn = lv_obj_create(right_box);
+        lv_obj_remove_style_all(gear_btn);
+        lv_obj_set_size(gear_btn, 68, 36);
+        lv_obj_set_style_bg_color(gear_btn, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(gear_btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(gear_btn, lv_color_black(), 0);
+        lv_obj_set_style_border_width(gear_btn, 2, 0);
+        lv_obj_set_style_radius(gear_btn, 8, 0);
+        lv_obj_add_flag(gear_btn, LV_OBJ_FLAG_CLICKABLE);
+        HapticAttachClick(gear_btn);
+        lv_obj_t* gear_lbl = lv_label_create(gear_btn);
+        lv_label_set_text(gear_lbl, "设置");
+        lv_obj_set_style_text_font(gear_lbl, fontpack_lv_font_ui(), 0);
+        lv_obj_set_style_text_color(gear_lbl, lv_color_black(), 0);
+        lv_obj_center(gear_lbl);
+        lv_obj_clear_flag(gear_lbl, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(gear_btn, [](lv_event_t*) {
+            OpenVoiceSettingsModal();
+        }, LV_EVENT_CLICKED, nullptr);
+    }
 
     s_ui.status_lbl = ScreenMakeLabel(body, "按住说话", 25);
     lv_obj_set_width(s_ui.status_lbl, lv_pct(100));
@@ -891,6 +856,6 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     desc.factory = AiVoiceChatScreen::Create;
     desc.on_key = OnVkKey;
     desc.on_key_long_press = OnVkKeyLongPress;
-    VkKey_AttachScreen(screen, kScreenId, desc);
-    return screen;
+    VkKey_AttachScreen(s_ui.screen, kScreenId, desc);
+    return s_ui.screen;
 }
