@@ -537,35 +537,86 @@ void OnTimer(lv_timer_t*) {
     RefreshState();
 }
 
-// 翻页(绝对偏移语义):s_read_offset = 距文字开头的像素。0=开头,
-// 最大=内容高-视口高。上一页→偏移减小(向开头),下一页→增大(向结尾),
-// 方向由定义保证无歧义。应用用 scroll_to_y 绝对定位(SCROLLABLE 已清,
-// 相对 scroll_by 在非滚动容器上会计账错乱——滚进空白回不来的实测根因)。
+// 翻页(基于视口高度与实际滚动位置):
+// 上一页(dir=-1)→向上滚动(向开头); 下一页(dir=1)→向下滚动(向结尾)。
+// 翻页步长保留 40px 重叠留白便于阅读连续性。
+// 执行走 ScreenLvAsyncUrgent(若超时回退 ScreenLvAsync), 并将 dir 经 user_data 独立传参,
+// 避免静态全局变量竞争覆盖, 且无需经 MainEventLoop 阻塞。
 static void ChatPageScrollAsyncCb(void* p) {
     if (!s_alive || s_ui.chat_box == nullptr) {
         return;
     }
-    const int dir = (p != nullptr) ? 1 : -1;
-    const int32_t page = (int32_t)lv_obj_get_height(s_ui.chat_box);
+    const int dir = (int)(intptr_t)p;
+    lv_obj_update_layout(s_ui.chat_box);
+
     const int32_t view_h = (int32_t)lv_obj_get_height(s_ui.chat_box);
-    const int32_t content_h =
-        view_h + (int32_t)lv_obj_get_scroll_top(s_ui.chat_box) +
-        (int32_t)lv_obj_get_scroll_bottom(s_ui.chat_box);
-    int32_t max_offset = content_h - view_h;
-    if (max_offset < 0) max_offset = 0;
-    int32_t target = s_read_offset + dir * page;
+    if (view_h <= 0) return;
+
+    // 当前在内容中的实际绝对滚动偏移
+    const int32_t cur = lv_obj_get_scroll_y(s_ui.chat_box);
+
+    // 最大可滚动偏移 = top + bottom
+    const int32_t max_offset = lv_obj_get_scroll_top(s_ui.chat_box) +
+                               lv_obj_get_scroll_bottom(s_ui.chat_box);
+    if (max_offset <= 0) {
+        ESP_LOGI("AiChatDiag", "ChatPageScroll: max_offset=%d, no scroll needed", (int)max_offset);
+        return;
+    }
+
+    // 翻页步长: 视口高度留 40px 重叠留白, 便于阅读衔接 (如视口 300px, 每次翻 260px)
+    int32_t step = view_h - 40;
+    if (step < 60) step = view_h;
+
+    int32_t target = cur + dir * step;
     if (target < 0) target = 0;
     if (target > max_offset) target = max_offset;
-    s_read_offset = target;
-    lv_obj_scroll_to_y(s_ui.chat_box, s_read_offset, LV_ANIM_OFF);
+
+    ESP_LOGI("AiChatDiag", "ChatPageScroll dir=%d cur=%d target=%d max=%d step=%d",
+             dir, (int)cur, (int)target, (int)max_offset, (int)step);
+
+    if (target != cur) {
+        lv_obj_scroll_to_y(s_ui.chat_box, target, LV_ANIM_OFF);
+        s_read_offset = target;
+    }
 }
 
 static void ChatPageScroll(int dir) {
-    lv_async_call(ChatPageScrollAsyncCb, dir > 0 ? (void*)1 : nullptr);
+    if (dir == 0) return;
+    void* arg = (void*)(intptr_t)dir;
+    if (!ScreenLvAsyncUrgent(ChatPageScrollAsyncCb, arg)) {
+        ScreenLvAsync(ChatPageScrollAsyncCb, arg);
+    }
+}
+
+static void ChatScrollToBoundaryAsyncCb(void* p) {
+    if (!s_alive || s_ui.chat_box == nullptr) {
+        return;
+    }
+    const int dir = (int)(intptr_t)p;
+    lv_obj_update_layout(s_ui.chat_box);
+    if (dir < 0) {
+        lv_obj_scroll_to_y(s_ui.chat_box, 0, LV_ANIM_OFF);
+        s_read_offset = 0;
+    } else {
+        const int32_t max_offset = lv_obj_get_scroll_top(s_ui.chat_box) +
+                                   lv_obj_get_scroll_bottom(s_ui.chat_box);
+        if (max_offset > 0) {
+            lv_obj_scroll_to_y(s_ui.chat_box, max_offset, LV_ANIM_OFF);
+            s_read_offset = max_offset;
+        }
+    }
+}
+
+static void ChatScrollToBoundary(int dir) {
+    void* arg = (void*)(intptr_t)dir;
+    if (!ScreenLvAsyncUrgent(ChatScrollToBoundaryAsyncCb, arg)) {
+        ScreenLvAsync(ChatScrollToBoundaryAsyncCb, arg);
+    }
 }
 
 // 盖板触摸键:prev=上一页,next=下一页(#47 翻页配套)
 static bool OnVkKey(const char* key_name) {
+    ESP_LOGI("AiChatDiag", "OnVkKey key=%s", key_name ? key_name : "null");
     if (key_name == nullptr) return false;
     if (std::strcmp(key_name, "vk_prev") == 0) {
         ChatPageScroll(-1);
@@ -578,19 +629,28 @@ static bool OnVkKey(const char* key_name) {
     return false;
 }
 
-// 触摸层竖向滑动(#47):touch_feed 任务上下文回调,投递回 LVGL 一次滚动。
-// 只认本屏的 chat;离屏后 s_alive=false 丢弃。dy 经文件级暂存传递
-// (lv_async 的 user_data 只有一个槽,touch_feed 单任务串行无竞争)。
-static int32_t s_pending_swipe_dy = 0;
-static void OnSwipeScrollFromFeed(int32_t dy, void* user_data) {
-    s_pending_swipe_dy = dy;
-    lv_async_call([](void* p) {
-        if (!s_alive || s_ui.chat_box == nullptr || s_ui.chat_box != p) {
-            return;
-        }
-        // 触摸 y 轴与屏幕旋转后逻辑方向相反:手指上滑(物理向下注意核对)触摸 y 增大 = 看后文
-        ChatPageScroll(s_pending_swipe_dy < 0 ? 1 : -1);  // 内容跟随手指
-    }, user_data);
+// 盖板触摸键长按:prev=快速回到开头,next=快速跳到结尾
+static bool OnVkKeyLongPress(const char* key_name) {
+    ESP_LOGI("AiChatDiag", "OnVkKeyLongPress key=%s", key_name ? key_name : "null");
+    if (key_name == nullptr) return false;
+    if (std::strcmp(key_name, "vk_prev") == 0) {
+        ChatScrollToBoundary(-1);
+        return true;
+    }
+    if (std::strcmp(key_name, "vk_next") == 0) {
+        ChatScrollToBoundary(1);
+        return true;
+    }
+    return false;
+}
+
+// 触摸层竖向滑动(#47):touch_feed 任务上下文回调, 经 ChatPageScroll 安全转 LVGL
+static void OnSwipeScrollFromFeed(int32_t dy, void* /*user_data*/) {
+    if (std::abs(dy) < 18) {
+        return;
+    }
+    // 触摸 y 轴与屏幕旋转后逻辑方向相反:手指上滑(dy < 0) = 看后文(下一页, 1); 手指向下滑(dy > 0) = 看前文(上一页, -1)
+    ChatPageScroll(dy < 0 ? 1 : -1);
 }
 
 void OnScreenUnloaded(lv_event_t*) {
@@ -827,6 +887,10 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     AiChat_ResetStaleState();   // 上次异常残留"播报中"等 → 进屏即归位
     RefreshState();
     s_timer = lv_timer_create(OnTimer, 200, nullptr);   // 200ms 轮询状态,录音指示跟手
-    VkKey_AttachScreen(screen, kScreenId, VkKeyScreenDesc{AiVoiceChatScreen::Create, OnVkKey});
+    VkKeyScreenDesc desc{};
+    desc.factory = AiVoiceChatScreen::Create;
+    desc.on_key = OnVkKey;
+    desc.on_key_long_press = OnVkKeyLongPress;
+    VkKey_AttachScreen(screen, kScreenId, desc);
     return screen;
 }
