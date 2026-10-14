@@ -1,6 +1,7 @@
 #include "audio_codec.h"
 #include "application.h"
 #include "board.h"
+#include "core/system_event_bus.h"
 #include "settings.h"
 
 #include <esp_log.h>
@@ -64,6 +65,7 @@ void AudioCodec::Start() {
 void AudioCodec::SetOutputVolume(int volume) {
     output_volume_ = volume;
     ESP_LOGI(TAG, "Set output volume to %d", output_volume_);
+    SystemEventBus::GetInstance().Publish(SystemEvent::AudioVolume(output_volume_, output_volume_ <= 0));
 
     // 音量立即生效;NVS 落盘去抖合并为一次,且只在 main 任务(内部 RAM 栈)执行。
     // 此前在这里同步写 NVS:flash 写会关全局 cache,而本函数会被 esp_timer 上的

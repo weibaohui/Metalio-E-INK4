@@ -22,6 +22,7 @@
 #include "assets/lang_config.h"
 #include "audio_codec.h"
 #include "board.h"
+#include "core/system_event_bus.h"
 #include "display/status_bar_manager.h"
 #include "power_policy.h"
 #include "esp_lv_adapter.h"
@@ -1947,6 +1948,7 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
                 if (battery_pct_label_ != nullptr) {
                     lv_label_set_text(battery_pct_label_, battery_pct_cache_);
                 }
+                SystemEventBus::GetInstance().Publish(SystemEvent::Battery(battery_level, charging, discharging));
             }
             if (low_battery_popup_ != nullptr) {
                 if (std::strcmp(new_battery_icon, FONT_AWESOME_BATTERY_EMPTY) == 0 && discharging) {
