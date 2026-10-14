@@ -1,6 +1,7 @@
 #include "settings_apps_tab.h"
 
 #include "app_manager.h"
+#include "display/status_bar_manager.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "epd_widget_kit.h"
@@ -48,8 +49,14 @@ void OnAppRowClicked(lv_event_t* e) {
     if (index < 0 || index >= s_ui.count) return;
     if (AppManager::GetInstance().IsAppMandatoryByIndex(index)) return;   // 设置永驻不可关
     HapticPulseIfEnabled();
-    AppManager::GetInstance().SetAppEnabled(index, !AppManager::GetInstance().IsAppEnabledByIndex(index));
+    const bool new_enabled = !AppManager::GetInstance().IsAppEnabledByIndex(index);
+    AppManager::GetInstance().SetAppEnabled(index, new_enabled);
     RefreshRow(index);
+    char toast_buf[64];
+    snprintf(toast_buf, sizeof(toast_buf), "%s: %s",
+             AppManager::GetInstance().GetAppNameByIndex(index),
+             new_enabled ? "已开启显示" : "已隐藏");
+    StatusBarManager::GetInstance().ShowToast(toast_buf, 1500);
 }
 
 lv_obj_t* MakeAppRow(lv_obj_t* parent, int index) {
