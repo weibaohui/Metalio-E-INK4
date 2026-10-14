@@ -29,6 +29,7 @@
 #include "audio_focus_manager.h"
 #include "boards/common/power_policy/power_policy.h"
 #include "board.h"
+#include "display/status_bar_manager.h"
 #include "radio_catalog.h"
 #include "settings.h"
 
@@ -134,12 +135,22 @@ void SetSnapState(radio_state_t st, const char* err) {
     if (err != nullptr) {
         snprintf(err_buf, sizeof(err_buf), "%s", err);
     }
-    std::lock_guard<std::mutex> lock(s_snap_mutex);
-    s_snap.state = st;
-    if (err != nullptr) {
-        memcpy(s_snap.err, err_buf, sizeof(s_snap.err));
-    } else if (st != RADIO_ERROR) {
-        s_snap.err[0] = '\0';
+    std::string station_name;
+    {
+        std::lock_guard<std::mutex> lock(s_snap_mutex);
+        s_snap.state = st;
+        if (err != nullptr) {
+            memcpy(s_snap.err, err_buf, sizeof(s_snap.err));
+        } else if (st != RADIO_ERROR) {
+            s_snap.err[0] = '\0';
+        }
+        station_name = s_snap.station;
+    }
+    if (st == RADIO_PLAYING) {
+        std::string msg = "电台: " + (station_name.empty() ? std::string("播放中") : station_name);
+        StatusBarManager::GetInstance().SetOngoing("radio", msg);
+    } else if (st == RADIO_STOPPED || st == RADIO_ERROR) {
+        StatusBarManager::GetInstance().ClearOngoing("radio");
     }
 }
 
@@ -148,8 +159,16 @@ void SetSnapState(radio_state_t st, const char* err) {
 void SetSnapStation(const char* text) {
     char buf[sizeof(s_snap.station)] = {};
     snprintf(buf, sizeof(buf), "%s", text != nullptr ? text : "");
-    std::lock_guard<std::mutex> lock(s_snap_mutex);
-    memcpy(s_snap.station, buf, sizeof(s_snap.station));
+    bool is_playing = false;
+    {
+        std::lock_guard<std::mutex> lock(s_snap_mutex);
+        memcpy(s_snap.station, buf, sizeof(s_snap.station));
+        is_playing = (s_snap.state == RADIO_PLAYING);
+    }
+    if (is_playing) {
+        std::string msg = std::string("电台: ") + buf;
+        StatusBarManager::GetInstance().SetOngoing("radio", msg);
+    }
 }
 
 void SetSnapTitle(const char* text) {

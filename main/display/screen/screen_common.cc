@@ -2,6 +2,7 @@
 
 #include "application.h"
 #include "assets/lang_config.h"
+#include "display/status_bar_manager.h"
 #include "haptic_feedback.h"
 #include "home_screen/home_screen.h"
 #include "lv_adapter_display.h"
@@ -158,12 +159,12 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     HapticAttachClick(net_hit);
     lv_obj_add_event_cb(net_hit, OnStatusNetworkIconClicked, LV_EVENT_CLICKED, nullptr);
 
-    out.network_label = lv_label_create(net_hit);
-    lv_label_set_text(out.network_label, "");
-    lv_obj_set_style_text_font(out.network_label, &font_awesome_30_1, 0);
-    lv_obj_set_style_text_color(out.network_label, lv_color_black(), 0);
-    lv_obj_center(out.network_label);
-    lv_obj_clear_flag(out.network_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* network_label = lv_label_create(net_hit);
+    lv_label_set_text(network_label, "");
+    lv_obj_set_style_text_font(network_label, &font_awesome_30_1, 0);
+    lv_obj_set_style_text_color(network_label, lv_color_black(), 0);
+    lv_obj_center(network_label);
+    lv_obj_clear_flag(network_label, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* right_icons = lv_obj_create(out.bar);
     lv_obj_set_size(right_icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -174,35 +175,35 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     lv_obj_set_flex_align(right_icons, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(right_icons, LV_OBJ_FLAG_CLICKABLE);
 
-    out.mute_label = lv_label_create(right_icons);
-    lv_label_set_text(out.mute_label, "");
-    lv_obj_set_style_text_font(out.mute_label, &font_awesome_30_1, 0);
-    lv_obj_set_style_text_color(out.mute_label, lv_color_black(), 0);
-    lv_obj_clear_flag(out.mute_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* mute_label = lv_label_create(right_icons);
+    lv_label_set_text(mute_label, "");
+    lv_obj_set_style_text_font(mute_label, &font_awesome_30_1, 0);
+    lv_obj_set_style_text_color(mute_label, lv_color_black(), 0);
+    lv_obj_clear_flag(mute_label, LV_OBJ_FLAG_CLICKABLE);
 
     // 喇叭图标后的音量数字(小字 UI 字体,与电池百分比同风格)
-    out.volume_label = lv_label_create(right_icons);
-    lv_label_set_text(out.volume_label, "");
-    lv_obj_set_style_text_font(out.volume_label, ui_font, 0);
-    lv_obj_set_style_text_color(out.volume_label, lv_color_black(), 0);
-    lv_obj_set_style_margin_left(out.volume_label, 2, 0);
-    lv_obj_set_style_translate_y(out.volume_label, 2, 0);
-    lv_obj_clear_flag(out.volume_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* volume_label = lv_label_create(right_icons);
+    lv_label_set_text(volume_label, "");
+    lv_obj_set_style_text_font(volume_label, ui_font, 0);
+    lv_obj_set_style_text_color(volume_label, lv_color_black(), 0);
+    lv_obj_set_style_margin_left(volume_label, 2, 0);
+    lv_obj_set_style_translate_y(volume_label, 2, 0);
+    lv_obj_clear_flag(volume_label, LV_OBJ_FLAG_CLICKABLE);
 
-    out.battery_pct_label = lv_label_create(right_icons);
-    lv_label_set_text(out.battery_pct_label, "");
-    lv_obj_set_style_text_font(out.battery_pct_label, ui_font, 0);
-    lv_obj_set_style_text_color(out.battery_pct_label, lv_color_black(), 0);
-    lv_obj_set_style_margin_left(out.battery_pct_label, 6, 0);
-    lv_obj_set_style_translate_y(out.battery_pct_label, 2, 0);
-    lv_obj_clear_flag(out.battery_pct_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* battery_pct_label = lv_label_create(right_icons);
+    lv_label_set_text(battery_pct_label, "");
+    lv_obj_set_style_text_font(battery_pct_label, ui_font, 0);
+    lv_obj_set_style_text_color(battery_pct_label, lv_color_black(), 0);
+    lv_obj_set_style_margin_left(battery_pct_label, 6, 0);
+    lv_obj_set_style_translate_y(battery_pct_label, 2, 0);
+    lv_obj_clear_flag(battery_pct_label, LV_OBJ_FLAG_CLICKABLE);
 
-    out.battery_label = lv_label_create(right_icons);
-    lv_label_set_text(out.battery_label, "");
-    lv_obj_set_style_text_font(out.battery_label, &font_awesome_30_1, 0);
-    lv_obj_set_style_text_color(out.battery_label, lv_color_black(), 0);
-    lv_obj_set_style_margin_left(out.battery_label, -2, 0);
-    lv_obj_clear_flag(out.battery_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* battery_label = lv_label_create(right_icons);
+    lv_label_set_text(battery_label, "");
+    lv_obj_set_style_text_font(battery_label, &font_awesome_30_1, 0);
+    lv_obj_set_style_text_color(battery_label, lv_color_black(), 0);
+    lv_obj_set_style_margin_left(battery_label, -2, 0);
+    lv_obj_clear_flag(battery_label, LV_OBJ_FLAG_CLICKABLE);
 
     out.overlay = lv_obj_create(scr);
     lv_obj_set_size(out.overlay, LV_HOR_RES, out.height);
@@ -220,43 +221,39 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     // 居中状态/通知：两侧留给网络图标与电量，避免英文长文盖住电量
     const lv_coord_t status_text_w = LV_HOR_RES - 200;
 
-    out.notification_label = lv_label_create(out.overlay);
-    lv_obj_set_width(out.notification_label, status_text_w);
-    lv_label_set_long_mode(out.notification_label, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(out.notification_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(out.notification_label, ui_font, 0);
-    lv_obj_set_style_text_color(out.notification_label, lv_color_black(), 0);
-    lv_label_set_text(out.notification_label, "");
-    lv_obj_align(out.notification_label, LV_ALIGN_CENTER, 0, kStatusTextNudgeY);
-    lv_obj_add_flag(out.notification_label, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(out.notification_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* status_label = lv_label_create(out.overlay);
+    lv_obj_set_width(status_label, status_text_w);
+    lv_label_set_long_mode(status_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(status_label, ui_font, 0);
+    lv_obj_set_style_text_color(status_label, lv_color_black(), 0);
+    lv_label_set_text(status_label, "");
+    lv_obj_align(status_label, LV_ALIGN_CENTER, 0, kStatusTextNudgeY);
+    lv_obj_clear_flag(status_label, LV_OBJ_FLAG_CLICKABLE);
 
-    out.status_label = lv_label_create(out.overlay);
-    lv_obj_set_width(out.status_label, status_text_w);
-    lv_label_set_long_mode(out.status_label, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(out.status_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(out.status_label, ui_font, 0);
-    lv_obj_set_style_text_color(out.status_label, lv_color_black(), 0);
-    lv_label_set_text(out.status_label, "");
-    lv_obj_align(out.status_label, LV_ALIGN_CENTER, 0, kStatusTextNudgeY);
-    lv_obj_clear_flag(out.status_label, LV_OBJ_FLAG_CLICKABLE);
+    // 绑定至 StatusBarManager 进行统一优先级仲裁调度
+    StatusBarManager::GetInstance().BindStatusWidget(status_label);
+    lv_obj_add_event_cb(scr, [](lv_event_t* e) {
+        lv_obj_t* target = static_cast<lv_obj_t*>(lv_event_get_user_data(e));
+        StatusBarManager::GetInstance().UnbindStatusWidget(target);
+    }, LV_EVENT_DELETE, status_label);
 
-    out.low_battery_popup = lv_obj_create(scr);
-    lv_obj_set_scrollbar_mode(out.low_battery_popup, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_size(out.low_battery_popup, LV_HOR_RES * 9 / 10, status_line_h * 2);
-    lv_obj_align(out.low_battery_popup, LV_ALIGN_BOTTOM_MID, 0, -8);
-    lv_obj_set_style_bg_color(out.low_battery_popup, lv_color_black(), 0);
-    lv_obj_set_style_radius(out.low_battery_popup, 4, 0);
-    lv_obj_t* low_battery_label = lv_label_create(out.low_battery_popup);
+    lv_obj_t* low_battery_popup = lv_obj_create(scr);
+    lv_obj_set_scrollbar_mode(low_battery_popup, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_size(low_battery_popup, LV_HOR_RES * 9 / 10, status_line_h * 2);
+    lv_obj_align(low_battery_popup, LV_ALIGN_BOTTOM_MID, 0, -8);
+    lv_obj_set_style_bg_color(low_battery_popup, lv_color_black(), 0);
+    lv_obj_set_style_radius(low_battery_popup, 4, 0);
+    lv_obj_t* low_battery_label = lv_label_create(low_battery_popup);
     lv_label_set_text(low_battery_label, Lang::Strings::BATTERY_NEED_CHARGE);
     lv_obj_set_style_text_font(low_battery_label, ui_font, 0);
     lv_obj_set_style_text_color(low_battery_label, lv_color_white(), 0);
     lv_obj_center(low_battery_label);
-    lv_obj_add_flag(out.low_battery_popup, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(low_battery_popup, LV_OBJ_FLAG_HIDDEN);
 
     if (auto* disp = GetAdapterDisplay()) {
-        disp->BindStatusWidgets(out.network_label, out.mute_label, out.volume_label, out.battery_label, out.status_label,
-                                out.notification_label, out.low_battery_popup, out.battery_pct_label);
+        disp->BindStatusWidgets(network_label, mute_label, volume_label, battery_label, status_label,
+                                nullptr, low_battery_popup, battery_pct_label);
     }
     return out;
 }
@@ -510,13 +507,6 @@ lv_obj_t* ScreenCreatePlaceholder(const char* screen_id, const char* title) {
     lv_obj_set_style_text_color(scr, lv_color_black(), 0);
 
     EpdStatusBar status = ScreenCreateStatusBar(scr);
-    if (status.status_label != nullptr) {
-        lv_label_set_text(status.status_label, "");
-        lv_obj_add_flag(status.status_label, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (status.notification_label != nullptr) {
-        lv_obj_add_flag(status.notification_label, LV_OBJ_FLAG_HIDDEN);
-    }
 
     lv_obj_t* body = lv_obj_create(scr);
     lv_obj_remove_style_all(body);
