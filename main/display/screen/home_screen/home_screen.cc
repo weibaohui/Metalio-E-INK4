@@ -119,7 +119,7 @@ namespace
     lv_obj_t *s_page_dots = nullptr;
     lv_obj_t *s_home_scr = nullptr;
     int s_home_page = 0; // 离开子页再回首页时保持页码
-    lv_obj_t *CreateAppCell(lv_obj_t *parent, const AppDesc &entry, int card_style);
+    lv_obj_t *CreateAppCell(lv_obj_t *parent, AppModule &entry, int card_style);
 
     int PageCount()
     {
@@ -337,22 +337,28 @@ namespace
 
     void LaunchAppAsync(void *user_data)
     {
-        const auto *entry = static_cast<const AppDesc *>(user_data);
-        if (entry == nullptr || entry->create == nullptr)
+        auto *entry = static_cast<AppModule *>(user_data);
+        if (entry == nullptr)
         {
             return;
         }
-        ESP_LOGI(TAG, "launch %s", entry->name != nullptr ? entry->name() : entry->id);
-        ScreenNavigateTo(entry->create);
+        ESP_LOGI(TAG, "launch %s", entry->GetName());
+        auto factory = entry->GetScreenFactory();
+        if (factory) {
+            ScreenNavigateTo(factory);
+        } else {
+            ScreenSetIsHome(false);
+            ScreenLoadReplace(entry->CreateUI(nullptr));
+        }
     }
 
     void OnAppClicked(lv_event_t *e)
     {
         lv_obj_t *obj = static_cast<lv_obj_t *>(lv_event_get_target(e));
-        const AppDesc *entry = nullptr;
+        AppModule *entry = nullptr;
         while (obj != nullptr)
         {
-            entry = static_cast<const AppDesc *>(lv_obj_get_user_data(obj));
+            entry = static_cast<AppModule *>(lv_obj_get_user_data(obj));
             if (entry != nullptr)
             {
                 break;
@@ -361,17 +367,17 @@ namespace
         }
         if (entry == nullptr)
         {
-            entry = static_cast<const AppDesc *>(lv_event_get_user_data(e));
+            entry = static_cast<AppModule *>(lv_event_get_user_data(e));
         }
-        if (entry == nullptr || entry->create == nullptr)
+        if (entry == nullptr)
         {
             return;
         }
         // 事件回调里删当前屏不安全，延后一拍再切（与返回键一致）
-        lv_async_call(LaunchAppAsync, const_cast<AppDesc *>(entry));
+        lv_async_call(LaunchAppAsync, entry);
     }
 
-    lv_obj_t *CreateAppCell(lv_obj_t *parent, const AppDesc &entry, int card_style)
+    lv_obj_t *CreateAppCell(lv_obj_t *parent, AppModule &entry, int card_style)
     {
         // 整卡为唯一点击热区；样式来自设置→主题（NVS）。
         lv_obj_t *cell = lv_obj_create(parent);
@@ -387,16 +393,16 @@ namespace
         // 手势冒泡:在卡片上起手的左右滑动要冒泡到宫格容器,由屏的手势处理器翻页
         lv_obj_add_flag(cell, LV_OBJ_FLAG_GESTURE_BUBBLE);
         HapticAttachClick(cell);
-        lv_obj_set_user_data(cell, const_cast<AppDesc *>(&entry));
-        lv_obj_add_event_cb(cell, OnAppClicked, LV_EVENT_CLICKED, const_cast<AppDesc *>(&entry));
+        lv_obj_set_user_data(cell, &entry);
+        lv_obj_add_event_cb(cell, OnAppClicked, LV_EVENT_CLICKED, &entry);
         lv_obj_t *icon = lv_image_create(cell);
-        lv_image_set_src(icon, entry.icon_path);
+        lv_image_set_src(icon, entry.GetIconPath());
         lv_obj_set_size(icon, kIconSize, kIconSize);
         lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, HOME_APP_CARD_ICON_PAD_TOP);
         lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_t *name = lv_label_create(cell);
-        lv_label_set_text(name, entry.name != nullptr ? entry.name() : entry.id);
+        lv_label_set_text(name, entry.GetName());
         lv_obj_set_width(name, HOME_APP_CARD_W);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_font(name, fontpack_lv_font_ui(), 0);
