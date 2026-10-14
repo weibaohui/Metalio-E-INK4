@@ -144,8 +144,10 @@ static void SwipeFinish() {
     if (!s_swipe_active) {
         return;   // 无活动手势(纯空闲采样):直接返回,别刷日志
     }
-    if (s_swipe_cb != nullptr) {
-        s_swipe_cb(s_swipe_last_y - s_swipe_origin_y, s_swipe_user);
+    const int32_t dy = s_swipe_last_y - s_swipe_origin_y;
+    // 只有位移达到有效滑动阈值才派发手势滑动, 避免静止点击/触键误触发滑动
+    if (s_swipe_cb != nullptr && std::abs(dy) >= kTouchSlopPx) {
+        s_swipe_cb(dy, s_swipe_user);
     }
     s_swipe_active = false;
 }
@@ -330,8 +332,12 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
         s_finger_was_down = true;
         s_touch_origin_x = static_cast<int16_t>(x);
         s_touch_origin_y = static_cast<int16_t>(y);
-        SwipeBegin(y);
         const TouchVirtualKey* early_hit = HitVirtualKey(x, y);
+        if (early_hit == nullptr) {
+            SwipeBegin(y);
+        } else {
+            s_swipe_active = false;
+        }
         ESP_LOGI(TAG, "touch down x=%d y=%d %s", x, y,
                  early_hit != nullptr ? early_hit->name : "ui");
         if (early_hit != nullptr) {
@@ -381,7 +387,8 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
         return;
     }
 
-    // 盖板键：不喂 LVGL；若刚才在点 UI，补一次抬起边沿
+    // 盖板键：不喂 LVGL，不认领 UI 滑动；若刚才在点 UI，补一次抬起边沿
+    s_swipe_active = false;
     bool kick = false;
     uint8_t pend_d = 0, pend_u = 0, live = 0;
     bool lvgl_d = false;
