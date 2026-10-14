@@ -3,6 +3,7 @@
 #include "app_manager.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
+#include "epd_widget_kit.h"
 #include "settings_common.h"
 
 namespace {
@@ -111,6 +112,7 @@ void SettingsAppsTab_Build(lv_obj_t* page) {
     lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     lv_obj_clear_flag(list, LV_OBJ_FLAG_CLICKABLE);
+    EpdWidgetKit::EpdScroll::AttachSwipeGesture(list, list);
 
     for (int i = 0; i < s_ui.count; ++i) {
         s_ui.rows[i] = MakeAppRow(list, i);

@@ -1,8 +1,9 @@
 #include "app_manager.h"
 
 #include "application.h"
+#include "async_settings_store.h"
 #include "assets/lang_config.h"
-#include "settings.h"
+#include "screen_common.h"
 
 #include "ai_voice_chat_screen/ai_voice_chat_screen.h"
 #include "backup_screen/backup_screen.h"
@@ -49,110 +50,98 @@ AppManager::AppManager() {
 }
 
 void AppManager::RegisterDefaultApps() {
-    apps_.clear();
-    // 注册内置默认应用（保持与既有首页显示顺序完全一致）
-    RegisterApp({"glm", "A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create, nullptr, false});
-    RegisterApp({"book", "A:ic_app_home_book.spng", AppNameBook, BookScreen::Create, nullptr, false});
-    RegisterApp({"radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create, RadioRegisterMcpTools, false});
-    RegisterApp({"time", "A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create, nullptr, false});
-    RegisterApp({"cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create, CalendarRegisterMcpTools, false});
-    RegisterApp({"power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create, nullptr, false});
-    RegisterApp({"info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create, nullptr, false});
-    RegisterApp({"aichat", "A:ic_app_home_buddy.spng", AppNameAiChat, AiVoiceChatScreen::Create, AiChat_BootRegister, false});
-    RegisterApp({"backup", "A:ic_app_home_cloud.spng", AppNameBackup, BackupScreen::Create, nullptr, false});
-    // “设置”为系统管理必备入口，永驻不可关闭
-    RegisterApp({"set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create, nullptr, true});
-}
-
-void AppManager::RegisterApp(const AppDesc& desc) {
-    if (desc.id == nullptr || desc.create == nullptr) {
-        ESP_LOGE(TAG, "invalid app descriptor");
-        return;
-    }
-    int existing = FindIndexById(desc.id);
-    if (existing >= 0) {
-        apps_[existing] = desc;
-        ESP_LOGI(TAG, "updated app: %s", desc.id);
-    } else {
-        apps_.push_back(desc);
-        ESP_LOGI(TAG, "registered app: %s", desc.id);
-    }
-}
-
-namespace {
-std::vector<std::shared_ptr<AppModule>> s_registered_modules;
+    modules_.clear();
+    // 注册内置默认应用 (全部采用新架构 AppModule)
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "glm", "A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create, nullptr, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "book", "A:ic_app_home_book.spng", AppNameBook, BookScreen::Create, nullptr, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create, RadioRegisterMcpTools, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "time", "A:ic_app_home_clock.spng", AppNameTimeSync, TimeSyncScreen::Create, nullptr, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create, CalendarRegisterMcpTools, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create, nullptr, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create, nullptr, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "aichat", "A:ic_app_home_buddy.spng", AppNameAiChat, AiVoiceChatScreen::Create, AiChat_BootRegister, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "backup", "A:ic_app_home_cloud.spng", AppNameBackup, BackupScreen::Create, nullptr, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create, nullptr, true));
 }
 
 void AppManager::RegisterApp(std::shared_ptr<AppModule> module) {
-    if (!module) return;
-    s_registered_modules.push_back(module);
-    AppModule* m = module.get();
-
-    AppDesc desc;
-    desc.id = m->GetId();
-    desc.icon_path = m->GetIconPath();
-    desc.is_mandatory = m->IsMandatory();
-    // 由于 AppDesc 使用纯函数指针, 通过静态查找派发
-    desc.name = []() -> const char* {
-        if (!s_registered_modules.empty()) {
-            return s_registered_modules.back()->GetName();
-        }
-        return "";
-    };
-    desc.create = []() -> lv_obj_t* {
-        if (!s_registered_modules.empty()) {
-            return s_registered_modules.back()->CreateUI(nullptr);
-        }
-        return nullptr;
-    };
-    desc.register_mcp = []() {
-        if (!s_registered_modules.empty()) {
-            s_registered_modules.back()->RegisterMcpTools();
-        }
-    };
-    RegisterApp(desc);
+    if (!module || module->GetId() == nullptr) {
+        ESP_LOGE(TAG, "invalid app module");
+        return;
+    }
+    int existing = FindIndexById(module->GetId());
+    if (existing >= 0) {
+        modules_[existing] = module;
+        ESP_LOGI(TAG, "updated app module: %s", module->GetId());
+    } else {
+        modules_.push_back(module);
+        ESP_LOGI(TAG, "registered app module: %s", module->GetId());
+    }
 }
 
 void AppManager::Init() {
-    LoadTogglesFromNvs();
+    LoadToggles();
 }
 
-void AppManager::LoadTogglesFromNvs() {
+void AppManager::LoadToggles() {
     uint32_t mask = 0;
-    Settings settings("apps", false);
-    for (size_t i = 0; i < apps_.size(); ++i) {
-        if (apps_[i].is_mandatory) {
+    auto& store = AsyncSettingsStore::GetInstance();
+    for (size_t i = 0; i < modules_.size(); ++i) {
+        if (modules_[i]->IsMandatory()) {
             mask |= (1u << i);
             continue;
         }
-        char key[16];
-        std::snprintf(key, sizeof(key), "en_%s", apps_[i].id);
-        if (settings.GetBool(key, true)) {
+        char key[24];
+        std::snprintf(key, sizeof(key), "en_%s", modules_[i]->GetId());
+        if (store.GetBool("apps", key, true)) {
             mask |= (1u << i);
         }
     }
     enabled_mask_ = mask;
     toggles_loaded_ = true;
-    ESP_LOGI(TAG, "app toggles loaded from NVS: mask=0x%02x, count=%u",
-             static_cast<unsigned>(mask), static_cast<unsigned>(apps_.size()));
+    ESP_LOGI(TAG, "app toggles loaded from store: mask=0x%02x, count=%u",
+             static_cast<unsigned>(mask), static_cast<unsigned>(modules_.size()));
 }
 
 int AppManager::FindIndexById(const char* id) const {
     if (id == nullptr) return -1;
-    for (size_t i = 0; i < apps_.size(); ++i) {
-        if (std::strcmp(apps_[i].id, id) == 0) {
+    for (size_t i = 0; i < modules_.size(); ++i) {
+        if (std::strcmp(modules_[i]->GetId(), id) == 0) {
             return static_cast<int>(i);
         }
     }
     return -1;
 }
 
-std::vector<const AppDesc*> AppManager::GetEnabledApps() const {
-    std::vector<const AppDesc*> result;
-    result.reserve(apps_.size());
-    for (size_t i = 0; i < apps_.size(); ++i) {
+std::shared_ptr<AppModule> AppManager::GetAppById(const char* id) const {
+    int idx = FindIndexById(id);
+    if (idx >= 0) return modules_[idx];
+    return nullptr;
+}
+
+std::shared_ptr<AppModule> AppManager::GetAppByIndex(int index) const {
+    if (index >= 0 && index < static_cast<int>(modules_.size())) {
+        return modules_[index];
+    }
+    return nullptr;
+}
+
+std::vector<std::shared_ptr<AppModule>> AppManager::GetEnabledApps() const {
+    std::vector<std::shared_ptr<AppModule>> result;
+    result.reserve(modules_.size());
+    for (size_t i = 0; i < modules_.size(); ++i) {
         if (IsAppEnabledByIndex(static_cast<int>(i))) {
-            result.push_back(&apps_[i]);
+            result.push_back(modules_[i]);
         }
     }
     return result;
@@ -160,7 +149,7 @@ std::vector<const AppDesc*> AppManager::GetEnabledApps() const {
 
 int AppManager::GetEnabledAppCount() const {
     int cnt = 0;
-    for (size_t i = 0; i < apps_.size(); ++i) {
+    for (size_t i = 0; i < modules_.size(); ++i) {
         if (IsAppEnabledByIndex(static_cast<int>(i))) {
             ++cnt;
         }
@@ -175,25 +164,25 @@ bool AppManager::IsAppEnabled(const char* id) const {
 }
 
 bool AppManager::IsAppEnabledByIndex(int index) const {
-    if (index < 0 || index >= static_cast<int>(apps_.size())) return false;
-    if (apps_[index].is_mandatory) return true;
-    if (!toggles_loaded_) return true; // 未加载异常保护：默认允许
+    if (index < 0 || index >= static_cast<int>(modules_.size())) return false;
+    if (modules_[index]->IsMandatory()) return true;
+    if (!toggles_loaded_) return true;
     return (enabled_mask_ & (1u << index)) != 0;
 }
 
 bool AppManager::IsAppMandatoryByIndex(int index) const {
-    if (index < 0 || index >= static_cast<int>(apps_.size())) return false;
-    return apps_[index].is_mandatory;
+    if (index < 0 || index >= static_cast<int>(modules_.size())) return false;
+    return modules_[index]->IsMandatory();
 }
 
 const char* AppManager::GetAppNameByIndex(int index) const {
-    if (index < 0 || index >= static_cast<int>(apps_.size())) return "";
-    return apps_[index].name != nullptr ? apps_[index].name() : apps_[index].id;
+    if (index < 0 || index >= static_cast<int>(modules_.size())) return "";
+    return modules_[index]->GetName();
 }
 
 void AppManager::SetAppEnabled(int index, bool enabled) {
-    if (index < 0 || index >= static_cast<int>(apps_.size())) return;
-    if (apps_[index].is_mandatory) return; // 永驻应用不可关
+    if (index < 0 || index >= static_cast<int>(modules_.size())) return;
+    if (modules_[index]->IsMandatory()) return; // 永驻应用不可关
 
     if (enabled) {
         enabled_mask_ |= (1u << index);
@@ -201,23 +190,38 @@ void AppManager::SetAppEnabled(int index, bool enabled) {
         enabled_mask_ &= ~(1u << index);
     }
 
-    // 调度至 main 任务落盘（因为调用方通常在 PSRAM 栈的 LVGL worker 中，禁直接写 flash）
-    const std::string key = std::string("en_") + apps_[index].id;
-    Application::GetInstance().Schedule([key, enabled]() {
-        Settings settings("apps", true);
-        settings.SetBool(key.c_str(), enabled);
-    });
-    ESP_LOGI(TAG, "app %s -> %s", apps_[index].id, enabled ? "on" : "off");
+    char key[24];
+    std::snprintf(key, sizeof(key), "en_%s", modules_[index]->GetId());
+    AsyncSettingsStore::GetInstance().SetBool("apps", key, enabled);
+    ESP_LOGI(TAG, "app %s -> %s", modules_[index]->GetId(), enabled ? "on" : "off");
 }
 
 void AppManager::RegisterEnabledMcpTools() {
-    for (const auto& app : apps_) {
-        if (app.register_mcp == nullptr) continue;
-        if (!IsAppEnabled(app.id)) {
-            ESP_LOGI(TAG, "app %s off: skip MCP tools", app.id);
+    for (const auto& module : modules_) {
+        if (!IsAppEnabled(module->GetId())) {
+            ESP_LOGI(TAG, "app %s off: skip MCP tools", module->GetId());
             continue;
         }
-        app.register_mcp();
-        ESP_LOGI(TAG, "app mcp tools registered: %s", app.id);
+        module->RegisterMcpTools();
+        ESP_LOGI(TAG, "app mcp tools registered: %s", module->GetId());
+    }
+}
+
+void AppManager::LaunchApp(std::shared_ptr<AppModule> app) {
+    if (!app) return;
+    ESP_LOGI(TAG, "launching app: %s (%s)", app->GetName(), app->GetId());
+    auto factory = app->GetScreenFactory();
+    if (factory) {
+        ScreenNavigateTo(factory);
+    } else {
+        ScreenSetIsHome(false);
+        ScreenLoadReplace(app->CreateUI(nullptr));
+    }
+}
+
+void AppManager::LaunchApp(const char* id) {
+    auto app = GetAppById(id);
+    if (app) {
+        LaunchApp(app);
     }
 }
