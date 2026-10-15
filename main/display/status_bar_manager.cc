@@ -1,6 +1,7 @@
 // main/display/status_bar_manager.cc
 #include "status_bar_manager.h"
 #include "screen_common.h"
+#include <cstring>
 #include <esp_log.h>
 #include <esp_timer.h>
 
@@ -74,7 +75,17 @@ void StatusBarManager::ShowToast(const std::string& message, uint32_t duration_m
 
 void StatusBarManager::SetOngoing(const std::string& owner_id, const std::string& message) {
     std::lock_guard<std::mutex> lock(mutex_);
-    ongoing_statuses_[owner_id] = message;
+    bool found = false;
+    for (auto& pair : ongoing_statuses_) {
+        if (pair.first == owner_id) {
+            pair.second = message;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        ongoing_statuses_.emplace_back(owner_id, message);
+    }
     ESP_LOGI(TAG, "业务 [%s] 登记持续状态: %s", owner_id.c_str(), message.c_str());
     std::string text;
     StatusPriority prio;
@@ -84,14 +95,16 @@ void StatusBarManager::SetOngoing(const std::string& owner_id, const std::string
 
 void StatusBarManager::ClearOngoing(const std::string& owner_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = ongoing_statuses_.find(owner_id);
-    if (it != ongoing_statuses_.end()) {
-        ongoing_statuses_.erase(it);
-        ESP_LOGI(TAG, "业务 [%s] 清除持续状态", owner_id.c_str());
-        std::string text;
-        StatusPriority prio;
-        ArbitrateLocked(text, prio);
-        ApplyToUiLocked(text);
+    for (auto it = ongoing_statuses_.begin(); it != ongoing_statuses_.end(); ++it) {
+        if (it->first == owner_id) {
+            ongoing_statuses_.erase(it);
+            ESP_LOGI(TAG, "业务 [%s] 清除持续状态", owner_id.c_str());
+            std::string text;
+            StatusPriority prio;
+            ArbitrateLocked(text, prio);
+            ApplyToUiLocked(text);
+            break;
+        }
     }
 }
 
@@ -192,15 +205,19 @@ void StatusBarManager::ApplyToUiLocked(const std::string& text) {
 
     struct UiUpdateArg {
         lv_obj_t* label;
-        std::string str;
+        char text[64];
     };
-    auto* arg = new UiUpdateArg{bound_label_, text};
+    auto* arg = new UiUpdateArg();
+    arg->label = bound_label_;
+    size_t copy_len = text.size() < sizeof(arg->text) - 1 ? text.size() : sizeof(arg->text) - 1;
+    std::memcpy(arg->text, text.data(), copy_len);
+    arg->text[copy_len] = '\0';
 
     ScreenLvAsync([](void* p) {
         auto* a = static_cast<UiUpdateArg*>(p);
         if (a && a->label && lv_obj_is_valid(a->label)) {
-            lv_label_set_text(a->label, a->str.c_str());
-            if (a->str.empty()) {
+            lv_label_set_text(a->label, a->text);
+            if (a->text[0] == '\0') {
                 lv_obj_add_flag(a->label, LV_OBJ_FLAG_HIDDEN);
             } else {
                 lv_obj_remove_flag(a->label, LV_OBJ_FLAG_HIDDEN);
