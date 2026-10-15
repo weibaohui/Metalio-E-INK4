@@ -66,7 +66,8 @@ void AppManager::RegisterDefaultApps() {
     RegisterApp(std::make_shared<StandardAppModule>(
         "glm", "A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
-        "book", "A:ic_app_home_book.spng", AppNameBook, BookScreen::Create, nullptr, false));
+        "book", "A:ic_app_home_book.spng", AppNameBook, BookScreen::Create, nullptr, false,
+        BookScreen::OnResumeFromStandby, BookScreen::OnEnterStandby, nullptr));
     RegisterApp(std::make_shared<StandardAppModule>(
         "radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create, RadioRegisterMcpTools, false));
     RegisterApp(std::make_shared<StandardAppModule>(
