@@ -5,6 +5,7 @@
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "screen_common.h"
+#include "display/screen/epd_widget_kit.h"
 #include "ssid_manager.h"
 #include "vk_key_handler.h"
 #include "wifi_station.h"
@@ -96,10 +97,7 @@ esp_event_handler_instance_t s_wifi_evt_inst = nullptr;
 esp_event_handler_instance_t s_ip_evt_inst = nullptr;
 EventGroupHandle_t s_evt_group = nullptr;
 uint8_t s_last_disconnect_reason = 0;
-lv_timer_t* s_restart_timer = nullptr;
 lv_timer_t* s_fail_close_timer = nullptr;
-int s_restart_remaining = 0;
-std::string s_restart_headline;
 
 void RebuildListPage();
 void ScheduleScan();
@@ -109,7 +107,6 @@ void ClosePasswordPage();
 bool IsPasswordPageOpen();
 void CloseStatusOverlay();
 void OpenStatusOverlay(const char* msg);
-void SetStatusOverlayText(const char* msg);
 void OpenRestartCountdown(const std::string& headline);
 void StyleTabBtn(lv_obj_t* btn, bool selected);
 void StyleScanBtn(bool enabled);
@@ -1357,55 +1354,14 @@ void OpenStatusOverlay(const char* msg) {
     lv_obj_center(lbl);
 }
 
-void SetStatusOverlayText(const char* msg) {
-    if (s_ui.status_msg != nullptr) {
-        lv_label_set_text(s_ui.status_msg, msg != nullptr ? msg : "");
-    }
-}
-
-void RebootTask(void* /*arg*/) {
-    vTaskDelay(pdMS_TO_TICKS(200));
-    Application::GetInstance().Reboot();
-    vTaskDelete(nullptr);
-}
-
-void RestartTimerCb(lv_timer_t* /*timer*/) {
-    s_restart_remaining--;
-    if (s_restart_remaining > 0) {
-        char buf[128];
-        snprintf(buf, sizeof(buf), Lang::Strings::SETTINGS_NET_REBOOT_COUNT_FMT, s_restart_headline.c_str(),
-                 s_restart_remaining);
-        SetStatusOverlayText(buf);
-        return;
-    }
-    if (s_restart_timer != nullptr) {
-        lv_timer_delete(s_restart_timer);
-        s_restart_timer = nullptr;
-    }
-    SetStatusOverlayText(Lang::Strings::SETTINGS_NET_REBOOTING);
-    xTaskCreate(RebootTask, "net_reboot", 2048, nullptr, 5, nullptr);
-}
-
 void OpenRestartCountdown(const std::string& headline) {
-    s_restart_headline = headline;
-    s_restart_remaining = kRestartCountdownSec;
-    char buf[128];
-    snprintf(buf, sizeof(buf), Lang::Strings::SETTINGS_NET_REBOOT_COUNT_FMT, s_restart_headline.c_str(),
-             s_restart_remaining);
-    OpenStatusOverlay(buf);
-    if (s_restart_timer != nullptr) {
-        lv_timer_delete(s_restart_timer);
-    }
-    s_restart_timer = lv_timer_create(RestartTimerCb, 1000, nullptr);
+    EpdWidgetKit::EpdRestartCountdown::Show(s_ui.screen, headline.c_str(), 3);
 }
 
 void OnScreenUnload(lv_event_t* /*e*/) {
     ESP_LOGI(TAG, "unload");
     s_screen_active = false;
-    if (s_restart_timer != nullptr) {
-        lv_timer_delete(s_restart_timer);
-        s_restart_timer = nullptr;
-    }
+    EpdWidgetKit::EpdRestartCountdown::Cancel();
     if (s_fail_close_timer != nullptr) {
         lv_timer_delete(s_fail_close_timer);
         s_fail_close_timer = nullptr;
@@ -1527,7 +1483,7 @@ bool NetworkScreen::OnVkKey(const char* key_name) {
     // 盖板键在 touch_feed 任务回调，禁止同步 lv_obj_clean / delete（会与 LVGL 线程抢 event 链崩溃）
     if (s_ui.status_overlay != nullptr) {
         if (std::strcmp(key_name, "vk_prev") == 0 || std::strcmp(key_name, "vk_home") == 0) {
-            if (s_restart_timer != nullptr) {
+            if (EpdWidgetKit::EpdRestartCountdown::IsActive()) {
                 return true;  // 倒计时重启中禁止退出
             }
             ScreenLvAsync([](void*) {

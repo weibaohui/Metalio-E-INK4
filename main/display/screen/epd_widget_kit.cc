@@ -4,7 +4,12 @@
 #include "display/modal_manager.h"
 #include "display/status_bar_manager.h"
 #include "haptic_feedback.h"
+#include "application.h"
+#include "assets/lang_config.h"
+#include "fontpack_lvgl.h"
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #define TAG "EpdWidgetKit"
 
@@ -131,6 +136,118 @@ void EpdDialog::Show(const char* title, const char* message, const char* confirm
             a->title.c_str(), a->message.c_str(), a->confirm_text.c_str(), "取消", a->callback);
         delete a;
     }, arg);
+}
+
+// ==================== EpdRestartCountdown 重启倒计时模态弹窗 ====================
+
+namespace {
+
+struct RestartCountdownState {
+    lv_obj_t* overlay = nullptr;
+    lv_obj_t* msg_lbl = nullptr;
+    lv_timer_t* timer = nullptr;
+    int remaining = 0;
+    std::string headline;
+};
+
+RestartCountdownState s_restart_state;
+
+void RestartRebootTask(void* /*arg*/) {
+    vTaskDelay(pdMS_TO_TICKS(200));
+    Application::GetInstance().Reboot();
+    vTaskDelete(nullptr);
+}
+
+void RestartTimerCallback(lv_timer_t* /*timer*/) {
+    s_restart_state.remaining--;
+    if (s_restart_state.remaining > 0) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), Lang::Strings::SETTINGS_NET_REBOOT_COUNT_FMT,
+                 s_restart_state.headline.c_str(), s_restart_state.remaining);
+        if (s_restart_state.msg_lbl && lv_obj_is_valid(s_restart_state.msg_lbl)) {
+            lv_label_set_text(s_restart_state.msg_lbl, buf);
+        }
+        return;
+    }
+    if (s_restart_state.timer != nullptr) {
+        lv_timer_delete(s_restart_state.timer);
+        s_restart_state.timer = nullptr;
+    }
+    if (s_restart_state.msg_lbl && lv_obj_is_valid(s_restart_state.msg_lbl)) {
+        lv_label_set_text(s_restart_state.msg_lbl, Lang::Strings::SETTINGS_NET_REBOOTING);
+    }
+    xTaskCreate(RestartRebootTask, "net_reboot", 2048, nullptr, 5, nullptr);
+}
+
+} // namespace
+
+void EpdRestartCountdown::Cancel() {
+    if (s_restart_state.timer != nullptr) {
+        lv_timer_delete(s_restart_state.timer);
+        s_restart_state.timer = nullptr;
+    }
+    if (s_restart_state.overlay != nullptr && lv_obj_is_valid(s_restart_state.overlay)) {
+        lv_obj_delete(s_restart_state.overlay);
+    }
+    s_restart_state.overlay = nullptr;
+    s_restart_state.msg_lbl = nullptr;
+    s_restart_state.headline.clear();
+    s_restart_state.remaining = 0;
+}
+
+bool EpdRestartCountdown::IsActive() {
+    return s_restart_state.timer != nullptr || (s_restart_state.overlay != nullptr && lv_obj_is_valid(s_restart_state.overlay));
+}
+
+void EpdRestartCountdown::Show(lv_obj_t* parent, const char* headline, int countdown_sec) {
+    if (parent == nullptr) return;
+    Cancel();
+
+    s_restart_state.headline = headline ? headline : "";
+    s_restart_state.remaining = countdown_sec > 0 ? countdown_sec : 3;
+
+    lv_obj_t* mask = lv_obj_create(parent);
+    lv_obj_remove_style_all(mask);
+    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(mask, 0, 0);
+    ScreenApplyDotBackdrop(mask);
+    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
+    s_restart_state.overlay = mask;
+    lv_obj_add_event_cb(mask, [](lv_event_t* /*e*/) {
+        if (s_restart_state.timer != nullptr) {
+            lv_timer_delete(s_restart_state.timer);
+            s_restart_state.timer = nullptr;
+        }
+        s_restart_state.overlay = nullptr;
+        s_restart_state.msg_lbl = nullptr;
+        s_restart_state.headline.clear();
+        s_restart_state.remaining = 0;
+    }, LV_EVENT_DELETE, nullptr);
+
+    lv_obj_t* card = lv_obj_create(mask);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, LV_HOR_RES - 48, 160);
+    lv_obj_center(card);
+    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(card, lv_color_black(), 0);
+    lv_obj_set_style_border_width(card, 2, 0);
+    lv_obj_set_style_radius(card, 12, 0);
+    lv_obj_set_style_pad_all(card, 16, 0);
+
+    lv_obj_t* lbl = lv_label_create(card);
+    s_restart_state.msg_lbl = lbl;
+    char buf[128];
+    snprintf(buf, sizeof(buf), Lang::Strings::SETTINGS_NET_REBOOT_COUNT_FMT,
+             s_restart_state.headline.c_str(), s_restart_state.remaining);
+    lv_label_set_text(lbl, buf);
+    lv_obj_set_width(lbl, LV_PCT(100));
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(lbl, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(lbl);
+
+    s_restart_state.timer = lv_timer_create(RestartTimerCallback, 1000, nullptr);
 }
 
 // ==================== EpdText 自动折行文本实现 ====================

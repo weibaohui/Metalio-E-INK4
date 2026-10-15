@@ -49,6 +49,16 @@ public:
 };
 
 /**
+ * @brief 墨水屏标准重启倒计时模态弹窗 (用于网络切换、SIM卡切换、配置生效等)
+ */
+class EpdRestartCountdown {
+public:
+    static void Show(lv_obj_t* parent, const char* headline, int countdown_sec = 3);
+    static bool IsActive();
+    static void Cancel();
+};
+
+/**
  * @brief 墨水屏标准自适应折行文本控件
  */
 class EpdText {

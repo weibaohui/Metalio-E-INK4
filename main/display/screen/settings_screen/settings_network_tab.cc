@@ -8,6 +8,7 @@
 #include "settings.h"
 #include "settings_common.h"
 #include "screen_common.h"
+#include "display/screen/epd_widget_kit.h"
 #include "utils/psr_worker.h"
 
 #include <cctype>
@@ -44,10 +45,7 @@ struct NetworkUi {
     lv_obj_t* ip_lbl = nullptr;
     lv_obj_t* overlay = nullptr;
     lv_obj_t* overlay_msg = nullptr;
-    lv_timer_t* reboot_timer = nullptr;
     lv_timer_t* netinfo_timer = nullptr;
-    int reboot_remaining = 0;
-    std::string reboot_headline;
 };
 
 NetworkUi s_ui;
@@ -102,17 +100,11 @@ const char* SimSlotName(int slot) {
 }
 
 void CloseOverlay() {
-    if (s_ui.reboot_timer != nullptr) {
-        lv_timer_delete(s_ui.reboot_timer);
-        s_ui.reboot_timer = nullptr;
-    }
     if (s_ui.overlay != nullptr) {
         lv_obj_delete(s_ui.overlay);
     }
     s_ui.overlay = nullptr;
     s_ui.overlay_msg = nullptr;
-    s_ui.reboot_remaining = 0;
-    s_ui.reboot_headline.clear();
 }
 
 void OpenOverlay(const char* msg) {
@@ -160,42 +152,8 @@ void SetOverlayText(const char* msg) {
     }
 }
 
-void RebootTask(void* /*arg*/) {
-    vTaskDelay(pdMS_TO_TICKS(200));
-    Application::GetInstance().Reboot();
-    vTaskDelete(nullptr);
-}
-
-void RebootTimerCb(lv_timer_t* /*timer*/) {
-    s_ui.reboot_remaining--;
-    if (s_ui.reboot_remaining > 0) {
-        if (s_ui.overlay_msg != nullptr) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), Lang::Strings::SETTINGS_NET_REBOOT_COUNT_FMT, s_ui.reboot_headline.c_str(),
-                     s_ui.reboot_remaining);
-            lv_label_set_text(s_ui.overlay_msg, buf);
-        }
-        return;
-    }
-    if (s_ui.reboot_timer != nullptr) {
-        lv_timer_delete(s_ui.reboot_timer);
-        s_ui.reboot_timer = nullptr;
-    }
-    SetOverlayText(Lang::Strings::SETTINGS_NET_REBOOTING);
-    xTaskCreate(RebootTask, "sim_reboot", 2048, nullptr, 5, nullptr);
-}
-
 void OpenRestartCountdown(const char* headline) {
-    s_ui.reboot_headline = headline != nullptr ? headline : "";
-    s_ui.reboot_remaining = 3;
-    char buf[128];
-    snprintf(buf, sizeof(buf), Lang::Strings::SETTINGS_NET_REBOOT_COUNT_FMT, s_ui.reboot_headline.c_str(),
-             s_ui.reboot_remaining);
-    OpenOverlay(buf);
-    if (s_ui.reboot_timer != nullptr) {
-        lv_timer_delete(s_ui.reboot_timer);
-    }
-    s_ui.reboot_timer = lv_timer_create(RebootTimerCb, 1000, nullptr);
+    EpdWidgetKit::EpdRestartCountdown::Show(s_ui.root_scr, headline, 3);
 }
 
 void RefreshSimUi() {
@@ -692,6 +650,7 @@ void BuildSimSection(lv_obj_t* page) {
 
 void SettingsNetworkTab_Reset() {
     CloseOverlay();
+    EpdWidgetKit::EpdRestartCountdown::Cancel();
     s_tab_alive = false;
     if (s_ui.netinfo_timer != nullptr) {
         lv_timer_delete(s_ui.netinfo_timer);
