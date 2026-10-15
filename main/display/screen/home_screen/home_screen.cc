@@ -342,10 +342,10 @@ namespace
 
     void LaunchAppAsync(void *user_data)
     {
-        s_launching = false;
         auto *entry = static_cast<AppModule *>(user_data);
         if (entry == nullptr)
         {
+            s_launching = false;
             return;
         }
         ESP_LOGI(TAG, "launch %s", entry->GetName());

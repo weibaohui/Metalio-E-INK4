@@ -923,6 +923,32 @@ static void CommitCoalescedFrame(EpdFlushCtx* ctx) {
         return;
     }
 
+    const bool allow_periodic_full = !TouchUiFingerIsDown();
+    if (ctx->force_next_full || (allow_periodic_full && ctx->partial_refresh_count >= kPartialsPerFull)) {
+        const bool from_force = ctx->force_next_full;
+        const bool use_c7 = from_force && ctx->force_full_c7;
+        ctx->force_next_full = false;
+        ctx->force_full_c7 = false;
+        ctx->coalesce_pending = false;
+        ctx->coalesce_kick_armed = false;
+        ctx->suppress_lvgl_notify = true;
+        xSemaphoreTake(ctx->done_sem, 0);
+        const auto mode = use_c7 ? SSD1677_EPAPER_REFRESH_STANDBY : SSD1677_EPAPER_REFRESH_FULL;
+        ESP_LOGI(TAG, "coalesce %s FULL 0x22=%02X", from_force ? "forced" : "periodic",
+                 use_c7 ? SSD1677_PARAM_DISP_UPDATE_FULL_STANDBY : SSD1677_PARAM_DISP_UPDATE_FULL);
+        esp_err_t err = FullRefreshBothSame(ctx, ctx->work_fb,
+                                            from_force ? "coalesce_forced_full" : "coalesce_periodic_full", mode);
+        ctx->suppress_lvgl_notify = false;
+        ctx->refresh_inflight = false;
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "coalesce full: %s", esp_err_to_name(err));
+            return;
+        }
+        memcpy(ctx->last_fb, ctx->work_fb, ctx->fb_size);
+        ctx->partial_refresh_count = 0;
+        return;
+    }
+
     ctx->suppress_lvgl_notify = true;
     xSemaphoreTake(ctx->done_sem, 0);
     const esp_err_t err =
