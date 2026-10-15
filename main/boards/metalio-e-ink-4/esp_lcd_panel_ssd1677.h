@@ -65,6 +65,12 @@ esp_err_t epaper_panel_prepare_for_partial(esp_lcd_panel_t *panel);
  */
 esp_err_t epaper_panel_deep_sleep(esp_lcd_panel_t *panel);
 
+/**
+ * @brief 局刷子窗口位图写入 SSD1677 VRAM（按行从带步长的 full_fb 中抽取，显著降低 SPI 传输量）
+ */
+esp_err_t epaper_panel_draw_sub_bitmap(esp_lcd_panel_t *panel, int x_start, int y_start,
+                                       int w, int h, const void *full_fb, int fb_stride);
+
 #ifdef __cplusplus
 }
 #endif
