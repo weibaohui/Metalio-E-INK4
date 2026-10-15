@@ -4,6 +4,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <mutex>
 
 namespace wifi_transfer {
 
@@ -52,17 +53,26 @@ public:
      */
     std::string GetServerUrl() const;
 
-    /**
-     * @brief 注册文件上传完成回调
-     */
-    void SetUploadCallback(UploadCallback cb) { upload_cb_ = cb; }
 
     /**
-     * @brief 触发上传完成通知
+     * @brief 注册文件上传完成回调 (线程安全)
+     */
+    void SetUploadCallback(UploadCallback cb) {
+        std::lock_guard<std::mutex> lock(cb_mutex_);
+        upload_cb_ = std::move(cb);
+    }
+
+    /**
+     * @brief 触发上传完成通知 (线程安全)
      */
     void NotifyUpload(const UploadEvent& ev) {
-        if (upload_cb_) {
-            upload_cb_(ev);
+        UploadCallback cb_copy;
+        {
+            std::lock_guard<std::mutex> lock(cb_mutex_);
+            cb_copy = upload_cb_;
+        }
+        if (cb_copy) {
+            cb_copy(ev);
         }
     }
 
@@ -76,7 +86,8 @@ private:
     ~WifiTransferService() { Stop(); }
 
     void* server_ = nullptr;
-    uint16_t port_ = 8080;
+    uint16_t port_ = 80;
+    mutable std::mutex cb_mutex_;
     UploadCallback upload_cb_;
 };
 

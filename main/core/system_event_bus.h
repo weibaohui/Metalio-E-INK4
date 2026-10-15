@@ -82,6 +82,10 @@ struct SystemEvent {
         return ev;
     }
 
+    static SystemEvent Wifi(SystemWifiState state, const std::string& ssid, int rssi = 0) {
+        return Wifi(state, rssi, ssid);
+    }
+
     static SystemEvent AudioVolume(int volume, bool muted) {
         SystemEvent ev{};
         ev.type = SystemEventType::kAudioVolume;

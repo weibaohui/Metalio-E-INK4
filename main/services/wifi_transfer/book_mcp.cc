@@ -16,23 +16,13 @@
 #include "reader/file_size.h"
 #include "SdCardManager.hpp"
 #include "sd_paths.h"
+#include "transfer_utils.h"
 
 namespace {
 
 constexpr const char* TAG = "BookMcp";
 
-std::string SanitizeFilename(const std::string& name) {
-    std::string s;
-    for (char c : name) {
-        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
-            continue;
-        }
-        s.push_back(c);
-    }
-    while (!s.empty() && (s.front() == '.' || s.front() == ' ')) s.erase(0, 1);
-    while (!s.empty() && (s.back() == '.' || s.back() == ' ')) s.pop_back();
-    return s;
-}
+using wifi_transfer::SanitizeFilename;
 
 }  // namespace
 
