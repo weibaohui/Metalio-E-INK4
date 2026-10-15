@@ -61,6 +61,9 @@ void ScreenApplyDotBackdrop(lv_obj_t* obj);
 // NULL 字体会让 lv_text 测量死循环,必须空守卫)。wrap=true:宽 100% + 长文折行。
 lv_obj_t* ScreenMakeLabel(lv_obj_t* parent, const char* text, int font_size = 25, bool wrap = false);
 
+// 文本显示自动换行工具：为指定 label 开启自动折行并自适应容器宽度 (默认 100%)
+void ScreenLabelEnableWrap(lv_obj_t* label, lv_coord_t width_pct = 100);
+
 // 白底黑框圆角按钮(带触觉反馈),cb 挂 LV_EVENT_CLICKED;返回内部 label 指针
 // (可用于改字),不需要时传 nullptr。
 lv_obj_t* ScreenMakeBtn(lv_obj_t* parent, const char* text, lv_coord_t w, lv_coord_t h,

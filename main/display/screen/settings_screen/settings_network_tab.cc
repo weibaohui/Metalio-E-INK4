@@ -755,6 +755,8 @@ void SettingsNetworkTab_Build(lv_obj_t* page) {
 
     s_ui.current_lbl = lv_label_create(page);
     lv_label_set_text(s_ui.current_lbl, "");
+    lv_obj_set_width(s_ui.current_lbl, lv_pct(100));
+    lv_label_set_long_mode(s_ui.current_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.current_lbl, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(s_ui.current_lbl, lv_color_black(), 0);
     lv_obj_clear_flag(s_ui.current_lbl, LV_OBJ_FLAG_CLICKABLE);
@@ -770,6 +772,8 @@ void SettingsNetworkTab_Build(lv_obj_t* page) {
     // Keep the live IPv4 address visible at the bottom of the network page.
     s_ui.ip_lbl = lv_label_create(page);
     lv_label_set_text(s_ui.ip_lbl, "WiFi: --\nIP: --");
+    lv_obj_set_width(s_ui.ip_lbl, lv_pct(100));
+    lv_label_set_long_mode(s_ui.ip_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.ip_lbl, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(s_ui.ip_lbl, lv_color_black(), 0);
     lv_obj_clear_flag(s_ui.ip_lbl, LV_OBJ_FLAG_CLICKABLE);

@@ -177,7 +177,7 @@ void BuildUi(const char* current_ver, const char* new_ver) {
     std::snprintf(line, sizeof(line), Lang::Strings::OTA_CUR_VER_FMT, current_ver);
     lv_label_set_text(cur_lbl, line);
     lv_obj_set_width(cur_lbl, LV_HOR_RES - 64);
-    lv_label_set_long_mode(cur_lbl, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(cur_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(cur_lbl, font, 0);
     lv_obj_set_style_text_color(cur_lbl, lv_color_black(), 0);
     lv_obj_set_style_text_align(cur_lbl, LV_TEXT_ALIGN_CENTER, 0);
@@ -187,7 +187,7 @@ void BuildUi(const char* current_ver, const char* new_ver) {
     std::snprintf(line, sizeof(line), Lang::Strings::OTA_NEW_VER_FMT, new_ver);
     lv_label_set_text(new_lbl, line);
     lv_obj_set_width(new_lbl, LV_HOR_RES - 64);
-    lv_label_set_long_mode(new_lbl, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(new_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(new_lbl, font, 0);
     lv_obj_set_style_text_color(new_lbl, lv_color_black(), 0);
     lv_obj_set_style_text_align(new_lbl, LV_TEXT_ALIGN_CENTER, 0);
@@ -223,7 +223,7 @@ void BuildUi(const char* current_ver, const char* new_ver) {
     lv_obj_t* hint = lv_label_create(panel);
     lv_label_set_text(hint, Lang::Strings::OTA_HINT);
     lv_obj_set_width(hint, LV_HOR_RES - 64);
-    lv_label_set_long_mode(hint, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(hint, font, 0);
     lv_obj_set_style_text_color(hint, lv_color_black(), 0);
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);

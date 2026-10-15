@@ -49,6 +49,18 @@ public:
 };
 
 /**
+ * @brief 墨水屏标准自适应折行文本控件
+ */
+class EpdText {
+public:
+    /** @brief 为已有 Label 启用宽度自适应自动折行，防止横向超出屏幕 */
+    static void EnableAutoWrap(lv_obj_t* label, lv_coord_t width_pct = 100);
+
+    /** @brief 创建墨水屏文本 Label，默认自动换行 (wrap=true) 且宽度撑满容器 (width=100%) */
+    static lv_obj_t* Create(lv_obj_t* parent, const char* text = nullptr, int font_size = 25, bool wrap = true);
+};
+
+/**
  * @brief 墨水屏滚动与上下翻页底层函数族 (EpdScroll)
  * 
  * 专为墨水屏设计的整页视口翻动与手势算法:

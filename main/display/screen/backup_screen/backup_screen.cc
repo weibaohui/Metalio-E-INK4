@@ -71,6 +71,8 @@ void MakeSection(lv_obj_t* parent, const char* title) {
 
     lv_obj_t* lbl = lv_label_create(bar);
     lv_label_set_text(lbl, title);
+    lv_obj_set_width(lbl, lv_pct(100));
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(lbl, UiFont(), 0);
     lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
@@ -271,7 +273,8 @@ void OpenActionDialog(const ActionDialogData& data) {
     if (!s_alive) return;
 
     ModalManager::GetInstance().PushCustomModal([data](lv_obj_t* card) {
-        lv_obj_set_size(card, LV_HOR_RES - 40, 360);
+        lv_obj_set_width(card, LV_HOR_RES - 40);
+        lv_obj_set_height(card, LV_SIZE_CONTENT);
         lv_obj_set_style_pad_all(card, 16, 0);
         lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_style_pad_row(card, 10, 0);
@@ -281,11 +284,13 @@ void OpenActionDialog(const ActionDialogData& data) {
         const lv_font_t* tf = fontpack_lv_font_get(28, 2);
         lv_obj_set_style_text_font(title, tf ? tf : UiFont(), 0);
         lv_obj_set_style_text_color(title, lv_color_black(), 0);
+        lv_obj_set_width(title, lv_pct(100));
+        lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
 
         lv_obj_t* fn_lbl = lv_label_create(card);
         lv_label_set_text(fn_lbl, data.filename.c_str());
         lv_obj_set_width(fn_lbl, lv_pct(100));
-        lv_label_set_long_mode(fn_lbl, LV_LABEL_LONG_DOT);
+        lv_label_set_long_mode(fn_lbl, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_font(fn_lbl, UiFont(), 0);
         lv_obj_set_style_text_color(fn_lbl, lv_color_black(), 0);
 
@@ -299,6 +304,8 @@ void OpenActionDialog(const ActionDialogData& data) {
         }
         lv_obj_t* sub_lbl = lv_label_create(card);
         lv_label_set_text(sub_lbl, info_buf);
+        lv_obj_set_width(sub_lbl, lv_pct(100));
+        lv_label_set_long_mode(sub_lbl, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_font(sub_lbl, UiFont(), 0);
         lv_obj_set_style_text_color(sub_lbl, lv_color_black(), 0);
 
@@ -362,6 +369,7 @@ void RefreshBackupList() {
         lv_obj_t* tip = lv_label_create(s_ui.list_container);
         lv_label_set_text(tip, "请插入 SD 卡以进行备份与恢复");
         lv_obj_set_width(tip, lv_pct(100));
+        lv_label_set_long_mode(tip, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_align(tip, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_pad_top(tip, 20, 0);
         lv_obj_set_style_text_font(tip, UiFont(), 0);
@@ -377,6 +385,7 @@ void RefreshBackupList() {
         lv_obj_t* tip = lv_label_create(s_ui.list_container);
         lv_label_set_text(tip, "未在 SD 卡找到备份文件\n点击上方「导出本机配置」进行备份");
         lv_obj_set_width(tip, lv_pct(100));
+        lv_label_set_long_mode(tip, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_align(tip, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_pad_top(tip, 20, 0);
         lv_obj_set_style_text_font(tip, UiFont(), 0);
@@ -390,7 +399,9 @@ void RefreshBackupList() {
     for (const auto& item : backups) {
         lv_obj_t* card = lv_obj_create(s_ui.list_container);
         lv_obj_remove_style_all(card);
-        lv_obj_set_size(card, lv_pct(100), 68);
+        lv_obj_set_width(card, lv_pct(100));
+        lv_obj_set_height(card, LV_SIZE_CONTENT);
+        lv_obj_set_style_min_height(card, 68, 0);
         lv_obj_set_style_bg_color(card, lv_color_white(), 0);
         lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(card, lv_color_black(), 0);
@@ -415,7 +426,7 @@ void RefreshBackupList() {
         lv_obj_t* name_lbl = lv_label_create(card);
         lv_label_set_text(name_lbl, item.filename.c_str());
         lv_obj_set_width(name_lbl, lv_pct(100));
-        lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_DOT);
+        lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_font(name_lbl, UiFont(), 0);
         lv_obj_set_style_text_color(name_lbl, lv_color_black(), 0);
         lv_obj_clear_flag(name_lbl, LV_OBJ_FLAG_CLICKABLE);
@@ -446,6 +457,8 @@ void RefreshBackupList() {
 
         lv_obj_t* meta_lbl = lv_label_create(card);
         lv_label_set_text(meta_lbl, desc_buf);
+        lv_obj_set_width(meta_lbl, lv_pct(100));
+        lv_label_set_long_mode(meta_lbl, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_font(meta_lbl, UiFont(), 0);
         lv_obj_set_style_text_color(meta_lbl, lv_color_black(), 0);
         lv_obj_clear_flag(meta_lbl, LV_OBJ_FLAG_CLICKABLE);
@@ -565,15 +578,21 @@ lv_obj_t* BackupScreen::Create() {
     lv_obj_clear_flag(status_card, LV_OBJ_FLAG_CLICKABLE);
 
     s_ui.sd_status_lbl = lv_label_create(status_card);
+    lv_obj_set_width(s_ui.sd_status_lbl, lv_pct(100));
+    lv_label_set_long_mode(s_ui.sd_status_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.sd_status_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.sd_status_lbl, lv_color_black(), 0);
 
     s_ui.path_lbl = lv_label_create(status_card);
     lv_label_set_text(s_ui.path_lbl, "备份目录: metalio/e-ink/backup/");
+    lv_obj_set_width(s_ui.path_lbl, lv_pct(100));
+    lv_label_set_long_mode(s_ui.path_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.path_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.path_lbl, lv_color_black(), 0);
 
     s_ui.nvs_info_lbl = lv_label_create(status_card);
+    lv_obj_set_width(s_ui.nvs_info_lbl, lv_pct(100));
+    lv_label_set_long_mode(s_ui.nvs_info_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.nvs_info_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.nvs_info_lbl, lv_color_black(), 0);
 
