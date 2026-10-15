@@ -1,4 +1,7 @@
 #include "book_library.h"
+#include "core/system_event_bus.h"
+#include "reader/book_progress_cache.h"
+#include "reader/book_library_warmup.h"
 
 #include <algorithm>
 #include <cctype>
@@ -23,6 +26,21 @@ constexpr int kMaxScanDepth = 8; // 相对根目录的最大嵌套层数
 std::mutex s_cache_mu;
 std::vector<BookInfo> s_cache;
 bool s_cache_valid = false;
+
+struct BookLibSdSubscriber {
+    BookLibSdSubscriber() {
+        SystemEventBus::GetInstance().Subscribe(SystemEventType::kSdCardState, [](const SystemEvent& ev) {
+            ESP_LOGI(TAG, "SD card state changed (mounted=%d), updating book caches", ev.sd_card.mounted);
+            InvalidateBookLibraryCache();
+            book_progress_cache::Invalidate();
+            if (ev.sd_card.mounted) {
+                book_library_warmup::RequestBootWarmup();
+            }
+        });
+    }
+};
+
+static BookLibSdSubscriber s_sd_subscriber;
 
 bool IsDefaultBooksDir(const char* dir) {
     if (dir == nullptr || dir[0] == '\0') {
