@@ -283,6 +283,10 @@ bool Ota::Upgrade(const std::string& firmware_url) {
     ESP_LOGI(TAG, "Writing to partition %s at offset 0x%lx", update_partition->label, update_partition->address);
     bool image_header_checked = false;
     std::string image_header;
+    if (!api::CheckUrlTlsPreflight(firmware_url, 14 * 1024)) {
+        ESP_LOGE(TAG, "Not enough internal RAM for TLS firmware download");
+        return false;
+    }
 
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(0);
@@ -309,6 +313,9 @@ bool Ota::Upgrade(const std::string& firmware_url) {
         int ret = http->Read(buffer, sizeof(buffer));
         if (ret < 0) {
             ESP_LOGE(TAG, "Failed to read HTTP data: %s", esp_err_to_name(ret));
+            if (update_handle != 0) {
+                esp_ota_abort(update_handle);
+            }
             return false;
         }
 

@@ -170,12 +170,6 @@ bool PostProgressReport(const std::string& body, std::string& err_out) {
         err_out = Lang::Strings::BOOK_NO_NETWORK;
         return false;
     }
-    auto http = network->CreateHttp(0);
-    if (http == nullptr) {
-        err_out = Lang::Strings::BOOK_CONN_FAIL;
-        return false;
-    }
-
     const std::string url = api::LibrarySyncUrl();
     if (url.empty()) {
         ESP_LOGI(TAG, "skip library sync: cloud endpoints blank");
