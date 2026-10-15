@@ -2,6 +2,7 @@
 #define SIMPLE_UART_HPP
 
 #include <driver/uart.h>
+#include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <functional>
@@ -60,10 +61,13 @@ public:
             return false;
         }
 
+        // RX 引脚配置上拉，防止外设掉电悬空时产生持续杂散字节
+        gpio_set_pull_mode(static_cast<gpio_num_t>(m_rxPin), GPIO_PULLUP_ONLY);
+
         m_initialized = true;
         
-        // 创建接收任务
-        xTaskCreate(uartReceiveTask, "uart_rx_task", 4096, this, 10, &m_rxTaskHandle);
+        // 创建接收任务：优先级设为 4，低于 LVGL(5) 与 touch_feed(6)，绝不抢占界面与触控
+        xTaskCreate(uartReceiveTask, "uart_rx_task", 4096, this, 4, &m_rxTaskHandle);
         
         return true;
     }
