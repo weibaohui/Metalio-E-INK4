@@ -205,6 +205,7 @@ bool DownloadHttpToFile(const char* url, const char* tmp_path, const char* expec
         mbedtls_sha256_update(&ctx, buf, got);
         total += got;
         ReportProgress(on_progress, progress_user, total, total_expected, last_percent);
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     if (gate != nullptr) {

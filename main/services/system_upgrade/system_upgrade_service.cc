@@ -184,6 +184,9 @@ esp_err_t HandlePostOtaUpload(httpd_req_t* req) {
             OtaUpgradeScreen::SetProgress(pct);
             last_ui_time = now;
         }
+
+        // 让步调度，保障 IDLE 任务与看门狗正常运行
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     if (total_recv != static_cast<size_t>(req->content_len) || !ota_started) {
@@ -458,6 +461,9 @@ UpgradeResult SystemUpgradeService::FlashFromSd(const std::string& path,
             last_time = now;
             recent_read = 0;
         }
+
+        // 让步调度，保障 IDLE 任务与看门狗正常运行
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
     fclose(fp);
 
