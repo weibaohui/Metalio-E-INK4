@@ -202,8 +202,10 @@ void RefreshUi() {
     }
 }
 
-void OnScreenUnloaded(lv_event_t* /*e*/) {
+void CleanupWifiTransfer() {
+    if (!s_alive) return;
     s_alive = false;
+    ESP_LOGI(TAG, "WiFi 传书应用关闭，立即停用服务并释放所有内存资源");
     if (s_wifi_sub_token != 0) {
         SystemEventBus::GetInstance().Unsubscribe(s_wifi_sub_token);
         s_wifi_sub_token = 0;
@@ -212,6 +214,10 @@ void OnScreenUnloaded(lv_event_t* /*e*/) {
     wifi_transfer::WifiTransferService::GetInstance().Stop();
     wifi_transfer::WifiTransferService::GetInstance().SetUploadCallback(nullptr);
     s_ui = {};
+}
+
+void OnScreenLifecycleCb(lv_event_t* /*e*/) {
+    CleanupWifiTransfer();
 }
 
 }  // namespace
@@ -233,7 +239,11 @@ lv_obj_t* WifiTransferScreen::Create() {
     s_ui.scaffold = scaffold;
     s_ui.screen = scaffold->GetScreen();
     lv_obj_t* body = scaffold->GetContentContainer();
-    lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
+
+    // 监听所有卸载与删除事件，确保无论是点返回、手势退出、切屏还是对象销毁，都 100% 停用服务
+    lv_obj_add_event_cb(s_ui.screen, OnScreenLifecycleCb, LV_EVENT_SCREEN_UNLOADED, nullptr);
+    lv_obj_add_event_cb(s_ui.screen, OnScreenLifecycleCb, LV_EVENT_SCREEN_UNLOAD_START, nullptr);
+    lv_obj_add_event_cb(s_ui.screen, OnScreenLifecycleCb, LV_EVENT_DELETE, nullptr);
 
     const lv_font_t* title_font = fontpack_lv_font_get(24, 2);
 

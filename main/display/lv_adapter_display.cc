@@ -1842,10 +1842,15 @@ void LVAdapterDisplay::ApplyStatusTextLocked(const char* status) {
 }
 
 void LVAdapterDisplay::SetStatus(const char* status) {
-    if (status != nullptr && status[0] != '\0') {
-        StatusBarManager::GetInstance().SetOngoing("xiaozhi", status);
-    } else {
+    if (status == nullptr || status[0] == '\0' ||
+        std::strcmp(status, Lang::Strings::STANDBY) == 0 ||
+        (std::strlen(status) == 5 && status[2] == ':')) {
         StatusBarManager::GetInstance().ClearOngoing("xiaozhi");
+        if (status != nullptr && std::strlen(status) == 5 && status[2] == ':') {
+            StatusBarManager::GetInstance().UpdateClock(status);
+        }
+    } else {
+        StatusBarManager::GetInstance().SetOngoing("xiaozhi", status);
     }
 }
 
@@ -1871,20 +1876,10 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
 
     // I2C / 业务读取放锁外；所有 label 改动合并进一次 DisplayLock，减少无效局刷。
     char time_str[16] = {};
-    bool set_time = false;
-    const auto device_state = app.GetDeviceState();
-    const bool want_clock = AllowsIdleStatusClock() &&
-                            (!app.HasPendingActivationCode() && !app.IsXiaozhiVoiceActive() &&
-                             device_state == kDeviceStateIdle);
-    if (want_clock &&
-        (update_all || last_status_update_time_ + std::chrono::seconds(10) <
-                            std::chrono::system_clock::now())) {
-        time_t now = time(nullptr);
-        struct tm* tm = localtime(&now);
-        if (tm && tm->tm_year >= 2025 - 1900) {
-            strftime(time_str, sizeof(time_str), "%H:%M", tm);
-            set_time = true;
-        }
+    time_t now = time(nullptr);
+    struct tm tm_info = {};
+    if (localtime_r(&now, &tm_info) != nullptr && tm_info.tm_year >= (2025 - 1900)) {
+        strftime(time_str, sizeof(time_str), "%H:%M", &tm_info);
     }
 
     int battery_level = 0;
@@ -1907,6 +1902,7 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
     const char* new_network_icon = nullptr;
     static int seconds_counter = 0;
     const bool wifi_busy = WifiStation::GetInstance().IsLinkInProgress();
+    const auto device_state = app.GetDeviceState();
     // 常态约 10s；WiFi 扫描/连接中每秒刷，配合弱→中→强梯度
     if (update_all || wifi_busy || (++seconds_counter % 10 == 0)) {
         static const std::vector<DeviceState> allowed_states = {
@@ -1930,9 +1926,8 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
 
         SyncVolumeWidgetsLocked();   // 喇叭图标+音量数字(音量键/播报后更新)
 
-        if (set_time) {
+        if (time_str[0] != '\0') {
             StatusBarManager::GetInstance().UpdateClock(time_str);
-            last_status_update_time_ = std::chrono::system_clock::now();
         }
 
         if (battery_ok && new_battery_icon != nullptr) {

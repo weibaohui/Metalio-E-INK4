@@ -112,6 +112,17 @@ void StatusBarManager::BindStatusWidget(lv_obj_t* status_label) {
     std::lock_guard<std::mutex> lock(mutex_);
     bound_label_ = status_label;
     current_rendered_text_.clear(); // 强制刷进新绑定的页面
+
+    if (clock_str_.empty()) {
+        time_t now = time(nullptr);
+        struct tm tm_info = {};
+        if (localtime_r(&now, &tm_info) != nullptr && tm_info.tm_year >= (2025 - 1900)) {
+            char buf[16];
+            strftime(buf, sizeof(buf), "%H:%M", &tm_info);
+            clock_str_ = buf;
+        }
+    }
+
     std::string text;
     StatusPriority prio;
     ArbitrateLocked(text, prio);

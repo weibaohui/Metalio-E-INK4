@@ -15,6 +15,7 @@
 
 #include "application.h"
 #include "board.h"
+#include "display/display.h"
 #include "settings.h"
 
 namespace {
@@ -95,6 +96,11 @@ void TimeTask(void*) {
         if (bits & kBitSynced) {
             // 把刚对好的系统时间写回 RTC 芯片(I2C;板级钩子=系统→RTC→读回)
             Board::GetInstance().OnNetworkTimeSynced();
+            Application::GetInstance().Schedule([]() {
+                if (auto* display = Board::GetInstance().GetDisplay()) {
+                    display->UpdateStatusBar(true);
+                }
+            });
         }
     }
 }
@@ -165,6 +171,9 @@ bool TimeService_SetManual(int year, int month, int day, int hour, int minute) {
     // 写回 RTC(走 main 任务,避免在调用方线程做 I2C/flash)。
     Application::GetInstance().Schedule([]() {
         Board::GetInstance().OnNetworkTimeSynced();
+        if (auto* display = Board::GetInstance().GetDisplay()) {
+            display->UpdateStatusBar(true);
+        }
     });
     ESP_LOGI(TAG, "手动校准时间=%04d-%02d-%02d %02d:%02d", year, month, day, hour, minute);
     return true;
