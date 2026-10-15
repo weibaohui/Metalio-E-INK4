@@ -529,6 +529,11 @@ static esp_err_t http_download(const char *url, uint8_t **out_buf, int *out_len,
     http->SetKeepAlive(false);
     api::ApplyCommonHeaders(http.get());
 
+    if (!api::CheckUrlTlsPreflight(url, 12 * 1024)) {
+        ESP_LOGE(TAG, "internal RAM too low for TLS image download");
+        return ESP_ERR_NO_MEM;
+    }
+
     if (!http->Open("GET", url)) {
         ESP_LOGE(TAG, "http open failed err=0x%x", http->GetLastError());
         return ESP_FAIL;

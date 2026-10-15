@@ -24,10 +24,17 @@ namespace api {
 // 余量;不足时硬开 TLS 会把网络栈饿崩(整机软死,实测)。建议在 Open("...", https)
 // 之前调用;false = 内存不足,调用方降级(http 明文)或干净报错,别硬连。
 // ESP32-S3 内部 RAM 全部 8-bit 可用,INTERNAL|8BIT 与 INTERNAL 等价。
-inline bool TlsPreflightOk(size_t min_largest_block, size_t min_free_total = 0) {
+inline bool TlsPreflightOk(size_t min_largest_block = 12 * 1024, size_t min_free_total = 0) {
     const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     const size_t free_b = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     return largest >= min_largest_block && free_b >= min_free_total;
+}
+
+inline bool CheckUrlTlsPreflight(const std::string& url, size_t min_largest_block = 12 * 1024, size_t min_free_total = 0) {
+    if (url.rfind("https://", 0) == 0 && !TlsPreflightOk(min_largest_block, min_free_total)) {
+        return false;
+    }
+    return true;
 }
 
 inline const std::string& DeviceId() {

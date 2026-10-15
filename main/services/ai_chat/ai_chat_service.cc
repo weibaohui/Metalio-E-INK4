@@ -32,6 +32,7 @@
 #include "minimax_speech.h"
 #include "minimax_bidi_tts.h"
 #include "audio_focus_manager.h"
+#include "protocols/api_http.h"
 
 namespace {
 
@@ -88,6 +89,10 @@ void SetReplyText(const std::string& t) { std::lock_guard<std::mutex> l(s_state_
 int HttpPost(const std::string& url, const std::string& bearer,
              const std::string& content_type, const std::string& body, std::string& resp) {
     if (url.empty()) return -1;
+    if (!api::CheckUrlTlsPreflight(url, 14 * 1024)) {
+        ESP_LOGE(TAG, "http: internal RAM too low for TLS handshake");
+        return -3;
+    }
     ESP_LOGI(TAG, "http: create (%u bytes body)", (unsigned)body.size());
     auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
     if (!http) { ESP_LOGE(TAG, "http: create failed"); return -1; }
@@ -126,6 +131,10 @@ int HttpPostStream(const std::string& url, const std::string& bearer,
                    const std::atomic<bool>* interrupt_flag,
                    const std::atomic<bool>* cancel_flag) {
     if (url.empty()) return -1;
+    if (!api::CheckUrlTlsPreflight(url, 14 * 1024)) {
+        err = "内部内存不足，无法建立安全连接";
+        return -3;
+    }
     ESP_LOGI(TAG, "http stream: create (%u bytes body)", (unsigned)body.size());
     auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
     if (!http) { err = "创建 HTTP 客户端失败"; return -1; }

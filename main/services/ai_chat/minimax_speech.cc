@@ -14,6 +14,7 @@
 #include "board.h"
 #include "settings.h"
 #include "tts_decoder.h"
+#include "protocols/api_http.h"
 
 namespace minimax_speech {
 
@@ -79,6 +80,10 @@ int HttpPostRaw(const std::string& url, const std::string& bearer,
                 const std::string& content_type, const std::string& body, std::string& resp,
                 const std::atomic<bool>* interrupt_flag, const std::atomic<bool>* cancel_flag) {
     if (url.empty()) return -1;
+    if (!api::CheckUrlTlsPreflight(url, 14 * 1024)) {
+        ESP_LOGE(TAG, "http: internal RAM too low for TLS handshake");
+        return -3;
+    }
     auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
     if (!http) { ESP_LOGE(TAG, "http: create failed"); return -1; }
     http->SetTimeout(20000);
@@ -258,6 +263,11 @@ bool TranscribeStream(const std::string& url,
     body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n";
     body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"stream\"\r\n\r\ntrue\r\n";
     body += "--" + boundary + "--\r\n";
+
+    if (!api::CheckUrlTlsPreflight(url, 14 * 1024)) {
+        err = "内部内存不足，无法建立安全连接";
+        return false;
+    }
 
     auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
     if (!http) { err = "创建 HTTP 客户端失败"; return false; }

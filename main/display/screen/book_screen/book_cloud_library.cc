@@ -67,6 +67,13 @@ bool DownloadUrlToBuffer(const char* url, std::vector<uint8_t>& out, size_t max_
     http_raw->SetTimeout(kHttpTimeoutMs);
     api::ApplyCommonHeaders(http_raw);
     api::LogHttpRequest(TAG, "GET", url);
+    if (!api::CheckUrlTlsPreflight(url, 12 * 1024)) {
+        if (gate != nullptr) {
+            gate->CloseHttp();
+        }
+        err_out = Lang::Strings::BOOK_CONN_FAIL;
+        return false;
+    }
     if (!http_raw->Open("GET", url)) {
         if (gate != nullptr) {
             gate->CloseHttp();

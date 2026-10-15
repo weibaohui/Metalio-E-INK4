@@ -96,6 +96,14 @@ bool DownloadHttpToFile(const char* url, const char* tmp_path, const char* expec
     http_raw->SetTimeout(kHttpTimeoutMs);
     api::ApplyCommonHeaders(http_raw);
     api::LogHttpRequest(TAG, "GET", url);
+    if (!api::CheckUrlTlsPreflight(url, 12 * 1024)) {
+        if (gate != nullptr) {
+            gate->CloseHttp();
+        }
+        err_out = Lang::Strings::BOOK_CONN_FAIL;
+        api::LogHttpResponse(TAG, -1, err_out);
+        return false;
+    }
     if (!http_raw->Open("GET", url)) {
         if (gate != nullptr) {
             gate->CloseHttp();
