@@ -113,37 +113,9 @@ void OpenOverlay(const char* msg) {
     }
     CloseOverlay();
 
-    lv_obj_t* mask = lv_obj_create(s_ui.root_scr);
-    lv_obj_remove_style_all(mask);
-    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_pos(mask, 0, 0);
-    ScreenApplyDotBackdrop(mask);
-    lv_obj_set_style_border_width(mask, 0, 0);
-    lv_obj_clear_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    s_ui.overlay = mask;
-
-    lv_obj_t* card = lv_obj_create(mask);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_HOR_RES - 40, 180);
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 12, 0);
-    lv_obj_set_style_pad_all(card, 16, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t* lbl = lv_label_create(card);
-    s_ui.overlay_msg = lbl;
-    lv_label_set_text(lbl, msg != nullptr ? msg : "");
-    lv_obj_set_width(lbl, LV_PCT(100));
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(lbl, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(lbl);
+    auto h = EpdWidgetKit::EpdModalOverlay::Show(s_ui.root_scr, msg, 180);
+    s_ui.overlay = h.mask;
+    s_ui.overlay_msg = h.label;
 }
 
 void SetOverlayText(const char* msg) {
