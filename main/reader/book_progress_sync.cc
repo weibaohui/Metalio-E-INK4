@@ -10,6 +10,7 @@
 #include "book_session.h"
 #include "power_policy.h"
 #include "reader_types.h"
+#include "utils/psr_worker.h"
 
 #include <atomic>
 #include <cstdio>
@@ -318,7 +319,6 @@ void WorkerTask(void* /*arg*/) {
 
     SetPhase(Phase::kIdle);
     s_running.store(false, std::memory_order_release);
-    vTaskDelete(nullptr);
 }
 
 }  // namespace
@@ -331,13 +331,10 @@ void RequestBootReport() {
     }
     SetPhase(Phase::kWaitCache);
 
-    const BaseType_t ok =
-        xTaskCreatePinnedToCore(WorkerTask, "book_prog_sync", kWorkerStack, nullptr,
-                                kWorkerPriority, nullptr, 0);
-    if (ok != pdPASS) {
+    if (!SpawnPsrWorker("book_prog_sync", 24 * 1024, kWorkerPriority, WorkerTask, nullptr, nullptr, 0)) {
         SetPhase(Phase::kIdle);
         s_running.store(false, std::memory_order_release);
-        ESP_LOGW(TAG, "xTaskCreate(book_prog_sync) failed");
+        ESP_LOGW(TAG, "SpawnPsrWorker(book_prog_sync) failed");
     }
 }
 

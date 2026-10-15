@@ -7,6 +7,7 @@
 #include "haptic_feedback.h"
 #include "screen_common.h"
 #include "settings_common.h"
+#include "utils/psr_worker.h"
 
 #include <wifi_scan_lease.h>
 
@@ -583,21 +584,18 @@ void WifiScanTask(void* /*arg*/) {
     if (my_gen != s_scan_generation || !SettingsTest_IsLive()) {
         local_records.clear();
         SettingsTest_Ui().wifi_scan_busy = false;
-        vTaskDelete(nullptr);
         return;
     }
 
     if (!ok) {
         local_records.clear();
         PostWifiScanDone(false, 0);
-        vTaskDelete(nullptr);
         return;
     }
 
     FillUiApsFromRecords(local_records);
     local_records.clear();
     PostWifiScanDone(true, static_cast<int>(SettingsTest_Ui().wifi_aps.size()));
-    vTaskDelete(nullptr);
 }
 
 void ScheduleWifiScan() {
@@ -608,7 +606,7 @@ void ScheduleWifiScan() {
     SettingsTest_SetRowValue(SettingsTest_Ui().wifi, Lang::Strings::SETTINGS_TEST_SCANNING, false);
     SetWifiRescanEnabled(false);
     RebuildWifiListPage();
-    if (xTaskCreate(WifiScanTask, "set_wifi_scan", 6144, nullptr, 5, nullptr) != pdPASS) {
+    if (!SpawnPsrWorker("set_wifi_scan", 8192, 5, WifiScanTask, nullptr)) {
         SettingsTest_Ui().wifi_scan_busy = false;
         SettingsTest_SetRowValue(SettingsTest_Ui().wifi, Lang::Strings::CLOUD_TASK_FAIL, true);
         SettingsTest_SetRowStatus(SettingsTest_Ui().wifi, false);

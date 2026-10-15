@@ -8,6 +8,7 @@
 #include "settings.h"
 #include "settings_common.h"
 #include "screen_common.h"
+#include "utils/psr_worker.h"
 
 #include <cctype>
 #include <cstdio>
@@ -306,7 +307,6 @@ void SwitchNetworkTask(void* arg) {
         dual->SwitchToNetworkType(job->target);
     }
     delete job;
-    vTaskDelete(nullptr);
 }
 
 void OnNetworkOptionClicked(lv_event_t* e) {
@@ -340,8 +340,8 @@ void OnNetworkOptionClicked(lv_event_t* e) {
         }
     }
     auto* job = new SwitchNetworkJob{target};
-    if (xTaskCreate(SwitchNetworkTask, "net_switch", 4096, job, 5, nullptr) != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate(net_switch) failed");
+    if (!SpawnPsrWorker("net_switch", 8192, 5, SwitchNetworkTask, job)) {
+        ESP_LOGE(TAG, "SpawnPsrWorker(net_switch) failed");
         delete job;
         RefreshNetworkOptions();
     }
@@ -409,15 +409,14 @@ void SimSlotQueryTask(void* /*arg*/) {
     if (!ScreenLvAsync(AsyncSimSlotQueried, msg)) {
         delete msg;
     }
-    vTaskDelete(nullptr);
 }
 
 void ScheduleSimSlotQuery() {
     if (GetNt26Board() == nullptr) {
         return;
     }
-    if (xTaskCreate(SimSlotQueryTask, "sim_query", 4096, nullptr, 5, nullptr) != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate(sim_query) failed");
+    if (!SpawnPsrWorker("sim_query", 8192, 5, SimSlotQueryTask, nullptr)) {
+        ESP_LOGE(TAG, "SpawnPsrWorker(sim_query) failed");
     }
 }
 
@@ -512,7 +511,6 @@ void SimSwitchTask(void* arg) {
         result->detail = Lang::Strings::SETTINGS_NET_CFUN0_FAIL;
         PostSimSwitchDone(result);
         delete ctx;
-        vTaskDelete(nullptr);
         return;
     }
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -528,7 +526,6 @@ void SimSwitchTask(void* arg) {
         result->detail = Lang::Strings::SETTINGS_NET_ECSIMCFG_FAIL;
         PostSimSwitchDone(result);
         delete ctx;
-        vTaskDelete(nullptr);
         return;
     }
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -541,7 +538,6 @@ void SimSwitchTask(void* arg) {
     result->success = true;
     PostSimSwitchDone(result);
     delete ctx;
-    vTaskDelete(nullptr);
 }
 
 void ScheduleSimSwitch(int target_slot) {
@@ -566,7 +562,7 @@ void ScheduleSimSwitch(int target_slot) {
     snprintf(buf, sizeof(buf), Lang::Strings::SETTINGS_NET_SWITCH_SIM_CFUN0_FMT, SimSlotName(target_slot));
     OpenOverlay(buf);
     auto* ctx = new SimSwitchCtx{target_slot};
-    if (xTaskCreate(SimSwitchTask, "sim_switch", 4096, ctx, 5, nullptr) != pdPASS) {
+    if (!SpawnPsrWorker("sim_switch", 8192, 5, SimSwitchTask, ctx)) {
         delete ctx;
         s_sim_switch_pending = false;
         CloseOverlay();
