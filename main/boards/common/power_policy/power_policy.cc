@@ -563,8 +563,9 @@ void ApplyLocked(Mode next)
     }
 
     const Mode prev = mode;
+    // 仅进入正式待机界面后才切断外设总电源 MAIN_PWR；
+    // 浅度空闲 AppIdle 下保持外设供电，确保 BT 音频芯片/I2S 时钟不中断，避免音频无声或超时
     const bool want_main_rail_off =
-        (next == Mode::AppIdle) ||
         (next == Mode::StandbyUi && StandbyScreen::IsActive());
 
     if (next == prev) {
