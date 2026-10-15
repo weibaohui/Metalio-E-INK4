@@ -51,6 +51,10 @@ public:
     void LaunchApp(std::shared_ptr<AppModule> app);
     void LaunchApp(const char* id);
 
+    // 页面生命周期分发调度 (由 VkKeyHandler 在屏幕加载/卸载时驱动 AppModule 生命周期)
+    void DispatchScreenLifecycle(const char* screen_id, bool loaded);
+    std::shared_ptr<AppModule> GetActiveApp() const { return active_app_; }
+
 private:
     AppManager();
     ~AppManager() = default;
@@ -62,6 +66,7 @@ private:
     int FindIndexById(const char* id) const;
 
     std::vector<std::shared_ptr<AppModule>> modules_;
+    std::shared_ptr<AppModule> active_app_ = nullptr;
     uint32_t enabled_mask_ = 0xFFFFFFFF;
     bool toggles_loaded_ = false;
 };

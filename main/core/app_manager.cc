@@ -21,6 +21,7 @@
 #include "services/radio/radio_mcp.h"
 #include "services/wifi_transfer/book_mcp.h"
 #include "wifi_transfer_screen/wifi_transfer_screen.h"
+#include "services/wifi_transfer/wifi_transfer_service.h"
 #include "system_upgrade_screen/system_upgrade_screen.h"
 
 #include <esp_log.h>
@@ -29,6 +30,11 @@
 namespace {
 
 constexpr const char *TAG = "AppManager";
+
+void OnTransferPause() {
+    ESP_LOGI(TAG, "OnTransferPause: stopping wifi transfer service");
+    wifi_transfer::WifiTransferService::GetInstance().Stop();
+}
 
 const char *AppNameGlm() { return "GLM 用量"; }
 const char *AppNameRadio() { return "收音机"; }
@@ -76,7 +82,7 @@ void AppManager::RegisterDefaultApps() {
     RegisterApp(std::make_shared<StandardAppModule>(
         "backup", "A:ic_app_home_cloud.spng", AppNameBackup, BackupScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
-        "transfer", "A:ic_app_home_cloud.spng", AppNameTransfer, WifiTransferScreen::Create, BookRegisterMcpTools, false));
+        "transfer", "A:ic_app_home_cloud.spng", AppNameTransfer, WifiTransferScreen::Create, BookRegisterMcpTools, false, nullptr, OnTransferPause, OnTransferPause));
     RegisterApp(std::make_shared<StandardAppModule>(
         "upgrade", "A:ic_app_home_setting.spng", AppNameUpgrade, SystemUpgradeScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
@@ -232,5 +238,39 @@ void AppManager::LaunchApp(const char* id) {
     auto app = GetAppById(id);
     if (app) {
         LaunchApp(app);
+    }
+}
+
+void AppManager::DispatchScreenLifecycle(const char* screen_id, bool loaded) {
+    if (screen_id == nullptr) return;
+
+    // 规范化 screen_id 到 app_id（处理子页面或历史别名）
+    const char* app_id = screen_id;
+    if (std::strcmp(screen_id, "bookshelf") == 0 ||
+        std::strcmp(screen_id, "read") == 0 ||
+        std::strcmp(screen_id, "detail") == 0) {
+        app_id = "book";
+    } else if (std::strcmp(screen_id, "wifi_transfer") == 0) {
+        app_id = "transfer";
+    }
+
+    auto app = GetAppById(app_id);
+    if (loaded) {
+        if (active_app_ && active_app_ != app) {
+            ESP_LOGI(TAG, "lifecycle: pause old app %s", active_app_->GetId());
+            active_app_->OnPause();
+        }
+        active_app_ = app;
+        if (active_app_) {
+            ESP_LOGI(TAG, "lifecycle: resume app %s", active_app_->GetId());
+            active_app_->OnResume();
+        }
+    } else {
+        if (active_app_ && active_app_ == app) {
+            ESP_LOGI(TAG, "lifecycle: pause & destroy app %s", active_app_->GetId());
+            active_app_->OnPause();
+            active_app_->OnDestroy();
+            active_app_ = nullptr;
+        }
     }
 }

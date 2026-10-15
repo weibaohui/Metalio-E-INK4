@@ -12,6 +12,7 @@
 #include "ota_confirm_dialog/ota_confirm_dialog.h"
 #include "screen_common.h"
 #include "standby_screen/standby_screen.h"
+#include "core/app_manager.h"
 
 namespace {
 
@@ -165,12 +166,14 @@ void VkKey_OnScreenLifecycle(const char* name, vk_screen_lifecycle_t event) {
     if (event == VK_SCREEN_LIFECYCLE_LOAD) {
         StackPush(name);
         ESP_LOGD(TAG, "active_screen -> %s (load %s, depth=%d)", StackTop(), name, s_depth);
+        AppManager::GetInstance().DispatchScreenLifecycle(name, true);
         return;
     }
 
     StackRemoveTopmost(name);
     ESP_LOGD(TAG, "active_screen -> %s (unload %s, depth=%d)", StackTop(), name, s_depth);
     VkPageRepeatStop();
+    AppManager::GetInstance().DispatchScreenLifecycle(name, false);
 }
 
 const char* VkKey_ActiveScreen() {
