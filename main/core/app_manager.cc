@@ -21,6 +21,7 @@
 #include "services/radio/radio_mcp.h"
 #include "services/wifi_transfer/book_mcp.h"
 #include "wifi_transfer_screen/wifi_transfer_screen.h"
+#include "system_upgrade_screen/system_upgrade_screen.h"
 
 #include <esp_log.h>
 #include <cstring>
@@ -40,6 +41,7 @@ const char *AppNameSysInfo() { return "系统信息"; }
 const char *AppNameAiChat() { return "AI 对话"; }
 const char *AppNameBackup() { return "备份恢复"; }
 const char *AppNameTransfer() { return "WiFi 传书"; }
+const char *AppNameUpgrade() { return "系统升级"; }
 
 } // namespace
 
@@ -75,6 +77,8 @@ void AppManager::RegisterDefaultApps() {
         "backup", "A:ic_app_home_cloud.spng", AppNameBackup, BackupScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
         "transfer", "A:ic_app_home_cloud.spng", AppNameTransfer, WifiTransferScreen::Create, BookRegisterMcpTools, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "upgrade", "A:ic_app_home_setting.spng", AppNameUpgrade, SystemUpgradeScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
         "set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create, nullptr, true));
 }

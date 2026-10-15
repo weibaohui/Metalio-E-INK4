@@ -9,6 +9,7 @@
 #include "screen_common.h"
 #include "settings.h"
 #include "services/wifi_transfer/wifi_transfer_service.h"
+#include "services/system_upgrade/system_upgrade_service.h"
 #include "vk_key_handler.h"
 #include "vk_page_repeat.h"
 
@@ -515,8 +516,9 @@ void HomeScreen::SetAppEnabled(int index, bool enabled)
 
 lv_obj_t *HomeScreen::Create()
 {
-    // 确保回到首页时，传书服务彻底停止，释放所有端口与传输缓存
+    // 确保回到首页时，传书与升级服务彻底停止，释放所有端口与传输缓存
     wifi_transfer::WifiTransferService::GetInstance().Stop();
+    system_upgrade::SystemUpgradeService::GetInstance().StopWebServer();
 
     lv_obj_t *scr = lv_obj_create(nullptr);
     s_home_scr = scr;
