@@ -20,6 +20,7 @@
 
 #include "config.h"  // SDMMC_*_PIN（板级提供）
 #include "sd_paths.h"
+#include "core/system_event_bus.h"
 
 // SdCardManager：板级 SDMMC 单例，适用于 ESP32-S3 1-bit 模式。
 // 初始化配置与参考工程保持一致：SDMMC_HOST_DEFAULT + SLOT_CONFIG_DEFAULT，CLK/CMD/D0，width=1。
@@ -74,6 +75,7 @@ public:
         mounted_.store(true, std::memory_order_release);
         sdmmc_card_print_info(stdout, card_);
         ESP_LOGI(kTag, "SD卡挂载成功!");
+        SystemEventBus::GetInstance().Publish(SystemEvent::SdCard(true));
         if (!SdEnsureAppLayout()) {
             ESP_LOGW(kTag, "app layout under %s incomplete", SD_APP_ROOT);
         }
@@ -95,6 +97,7 @@ public:
         card_ = nullptr;
         mounted_.store(false, std::memory_order_release);
         raw_owned_ = false;
+        SystemEventBus::GetInstance().Publish(SystemEvent::SdCard(false));
         ESP_LOGI(kTag, "SD card unmounted");
     }
 
