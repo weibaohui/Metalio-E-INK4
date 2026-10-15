@@ -58,9 +58,15 @@ public:
     using NameFunc = const char* (*)();
     using CreateFunc = lv_obj_t* (*)();
     using McpFunc = void (*)();
+    using LifecycleFunc = void (*)();
 
-    StandardAppModule(const char* id, const char* icon_path, NameFunc name_fn, CreateFunc create_fn, McpFunc mcp_fn = nullptr, bool mandatory = false)
-        : id_(id), icon_path_(icon_path), name_fn_(name_fn), create_fn_(create_fn), mcp_fn_(mcp_fn), mandatory_(mandatory) {}
+    StandardAppModule(const char* id, const char* icon_path, NameFunc name_fn, CreateFunc create_fn,
+                      McpFunc mcp_fn = nullptr, bool mandatory = false,
+                      LifecycleFunc resume_fn = nullptr, LifecycleFunc pause_fn = nullptr,
+                      LifecycleFunc destroy_fn = nullptr)
+        : id_(id), icon_path_(icon_path), name_fn_(name_fn), create_fn_(create_fn),
+          mcp_fn_(mcp_fn), mandatory_(mandatory),
+          resume_fn_(resume_fn), pause_fn_(pause_fn), destroy_fn_(destroy_fn) {}
 
     const char* GetId() const override { return id_; }
     const char* GetName() const override { return name_fn_ ? name_fn_() : id_; }
@@ -69,6 +75,9 @@ public:
     lv_obj_t* CreateUI(lv_obj_t* /*parent*/ = nullptr) override { return create_fn_ ? create_fn_() : nullptr; }
     ScreenFactory GetScreenFactory() const override { return create_fn_; }
     void RegisterMcpTools() override { if (mcp_fn_) mcp_fn_(); }
+    void OnResume() override { if (resume_fn_) resume_fn_(); }
+    void OnPause() override { if (pause_fn_) pause_fn_(); }
+    void OnDestroy() override { if (destroy_fn_) destroy_fn_(); }
 
 private:
     const char* id_;
@@ -77,4 +86,7 @@ private:
     CreateFunc create_fn_;
     McpFunc mcp_fn_;
     bool mandatory_;
+    LifecycleFunc resume_fn_ = nullptr;
+    LifecycleFunc pause_fn_ = nullptr;
+    LifecycleFunc destroy_fn_ = nullptr;
 };
