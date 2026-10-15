@@ -8,6 +8,7 @@
 #include "lv_adapter_display.h"
 #include "screen_common.h"
 #include "settings.h"
+#include "services/wifi_transfer/wifi_transfer_service.h"
 #include "vk_key_handler.h"
 #include "vk_page_repeat.h"
 
@@ -514,6 +515,9 @@ void HomeScreen::SetAppEnabled(int index, bool enabled)
 
 lv_obj_t *HomeScreen::Create()
 {
+    // 确保回到首页时，传书服务彻底停止，释放所有端口与传输缓存
+    wifi_transfer::WifiTransferService::GetInstance().Stop();
+
     lv_obj_t *scr = lv_obj_create(nullptr);
     s_home_scr = scr;
     lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
