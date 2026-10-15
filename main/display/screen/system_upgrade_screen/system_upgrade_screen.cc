@@ -14,6 +14,7 @@
 #include "display/modal_manager.h"
 #include "display/status_bar_manager.h"
 #include "display/screen/epd_widget_kit.h"
+#include "core/system_event_bus.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
@@ -54,6 +55,7 @@ struct UpgradeUi {
 UpgradeUi s_ui;
 bool s_alive = false;
 bool s_flashing_busy = false;
+uint32_t s_wifi_sub_token = 0;
 
 const lv_font_t* UiFont() { return fontpack_lv_font_ui(); }
 void DisableScroll(lv_obj_t* o) { if (o) lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE); }
@@ -122,6 +124,10 @@ lv_obj_t* CreateCustomBtn(lv_obj_t* parent, const char* text, lv_coord_t w, lv_c
 
 // 停止 Web 服务并清理
 void CleanupUpgradeService() {
+    if (s_wifi_sub_token != 0) {
+        SystemEventBus::GetInstance().Unsubscribe(s_wifi_sub_token);
+        s_wifi_sub_token = 0;
+    }
     system_upgrade::SystemUpgradeService::GetInstance().StopWebServer();
 }
 
@@ -587,10 +593,16 @@ lv_obj_t* SystemUpgradeScreen::Create() {
     lv_obj_set_style_text_font(s_ui.qr_tip_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.qr_tip_lbl, lv_color_black(), 0);
 
-    // 默认若网络就绪则自动开启 Web 升级服务
-    if (Board::GetInstance().IsNetworkReady()) {
-        svc.StartWebServer(80);
-    }
+    // 订阅 WiFi 状态变化事件，网络连接变化时刷新界面状态
+    s_wifi_sub_token = SystemEventBus::GetInstance().Subscribe(SystemEventType::kWifiState, [](const SystemEvent& /*ev*/) {
+        ScreenLvAsync([](void*) {
+            if (s_alive) {
+                RefreshWebStatus();
+            }
+        }, nullptr);
+    });
+
+    // 进入页面默认不开启 Web 升级服务，等待用户手动点击启动
     RefreshWebStatus();
 
     // 3. 分隔标题与 SD 卡固件列表
