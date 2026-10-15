@@ -107,6 +107,9 @@ esp_err_t HandlePostUpload(httpd_req_t* req) {
         }
         total_recv += ret;
         remaining -= ret;
+
+        // 让步调度，保障 IDLE 任务与看门狗正常运行
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
     fclose(fp);
 

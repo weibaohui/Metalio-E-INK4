@@ -361,6 +361,8 @@ bool Ota::Upgrade(const std::string& firmware_url) {
             esp_ota_abort(update_handle);
             return false;
         }
+
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
     http->Close();
 
