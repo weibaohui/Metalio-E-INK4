@@ -560,6 +560,45 @@ esp_err_t epaper_panel_deep_sleep(esp_lcd_panel_t *panel)
     return ESP_OK;
 }
 
+esp_err_t epaper_panel_draw_sub_bitmap(esp_lcd_panel_t *panel, int x_start, int y_start,
+                                       int w, int h, const void *full_fb, int fb_stride)
+{
+    ESP_RETURN_ON_FALSE(panel, ESP_ERR_INVALID_ARG, TAG, "panel is NULL");
+    epaper_panel_t *epaper_panel = __containerof(panel, epaper_panel_t, base);
+    if (gpio_get_level(epaper_panel->busy_gpio_num)) {
+        return ESP_ERR_NOT_FINISHED;
+    }
+    ESP_RETURN_ON_FALSE(full_fb, ESP_ERR_INVALID_ARG, TAG, "bitmap is null");
+    ESP_RETURN_ON_FALSE(w > 0 && h > 0, ESP_ERR_INVALID_ARG, TAG, "invalid area");
+
+    int x_draw = (x_start / 8) * 8;
+    int y_draw = y_start;
+    int w_draw = ((w + 7) / 8) * 8;
+    int h_draw = h;
+    int row_bytes = w_draw / 8;
+    int buffer_size = row_bytes * h_draw;
+
+    ESP_RETURN_ON_ERROR(epaper_set_ram_area(epaper_panel->io, x_draw, y_draw, w_draw, h_draw), TAG, "RAM area err");
+
+    if (!epaper_panel->_framebuffer) {
+        epaper_panel->_framebuffer =
+            heap_caps_malloc(SSD1677_PANEL_BUFFER_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        ESP_RETURN_ON_FALSE(epaper_panel->_framebuffer, ESP_ERR_NO_MEM, TAG, "dma bounce alloc failed");
+    }
+
+    const uint8_t *src = (const uint8_t *)full_fb + y_draw * fb_stride + (x_draw / 8);
+    uint8_t *dst = epaper_panel->_framebuffer;
+    for (int r = 0; r < h_draw; ++r) {
+        memcpy(dst + r * row_bytes, src + r * fb_stride, row_bytes);
+    }
+
+    uint8_t vram_cmd = (epaper_panel->bitmap_color == SSD1677_EPAPER_BITMAP_PREVIOUS)
+                           ? SSD1677_CMD_WRITE_RED_VRAM
+                           : SSD1677_CMD_WRITE_BW_VRAM;
+    ESP_RETURN_ON_ERROR(panel_epaper_set_vram(epaper_panel->io, vram_cmd, dst, buffer_size), TAG, "set_vram err");
+    return ESP_OK;
+}
+
 static esp_err_t process_bitmap(esp_lcd_panel_t *panel, int len_x, int len_y, int src_stride, int dst_stride,
                                 const void *color_data)
 {
