@@ -20,6 +20,7 @@
 #include "screen_common.h"
 #include "services/glm_usage/glm_usage_service.h"
 #include "vk_key_handler.h"
+#include "utils/psr_worker.h"
 
 namespace {
 
@@ -312,12 +313,10 @@ void GlmNetworkWaitTask(void* /*arg*/) {
                 display->UpdateStatusBar(true);
             }
             GlmUsageService::GetInstance().RequestRefresh();
-            vTaskDelete(nullptr);
             return;
         }
         (void)board.EnsureNetworkReady(kSliceMs);
     }
-    vTaskDelete(nullptr);
 }
 
 void StartNetworkWaitIfNeeded() {
@@ -325,8 +324,8 @@ void StartNetworkWaitIfNeeded() {
     if (board.IsNetworkReady() || board.IsWifiConfigMode()) {
         return;
     }
-    if (xTaskCreate(GlmNetworkWaitTask, "glm_netwait", 4096, nullptr, 4, nullptr) != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate(glm_netwait) failed");
+    if (!SpawnPsrWorker("glm_netwait", 8192, 4, GlmNetworkWaitTask, nullptr)) {
+        ESP_LOGE(TAG, "SpawnPsrWorker(glm_netwait) failed");
     }
 }
 

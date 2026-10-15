@@ -8,6 +8,7 @@
 
 #include "SimpleUart.hpp"
 #include "IOExpander.hpp"
+#include "utils/psr_worker.h"
 
 #include <atomic>
 #include <cstdio>
@@ -444,7 +445,6 @@ static void mode_cmd_task(void* param) {
 
     delete args;
     s_mode_cmd_busy.store(false, std::memory_order_release);
-    vTaskDelete(nullptr);
 }
 
 static void send_mode_command(BtMode mode) {
@@ -464,7 +464,7 @@ static void send_mode_command(BtMode mode) {
         ESP_LOGE(TAG, "mode cmd alloc failed");
         return;
     }
-    if (xTaskCreate(mode_cmd_task, "bt_mode_cmd", 4096, args, 5, nullptr) != pdPASS) {
+    if (!SpawnPsrWorker("bt_mode_cmd", 8192, 5, mode_cmd_task, args)) {
         delete args;
         s_mode_cmd_busy.store(false, std::memory_order_release);
         ESP_LOGE(TAG, "mode cmd task create failed");
@@ -482,7 +482,6 @@ static void call_mode_task(void* /*param*/) {
     vTaskDelay(pdMS_TO_TICKS(200));
     uart.sendString("AT+BTSCO=1\r\n");
     ESP_LOGI(TAG, "TX: AT+BTSCO=1");
-    vTaskDelete(nullptr);
 }
 
 static void music_mode_task(void* /*param*/) {
@@ -494,7 +493,6 @@ static void music_mode_task(void* /*param*/) {
     vTaskDelay(pdMS_TO_TICKS(200));
     uart.sendString("AT+PP=1\r\n");
     ESP_LOGI(TAG, "TX: AT+PP=1");
-    vTaskDelete(nullptr);
 }
 
 void on_mode_btn_clicked(lv_event_t* e) {
@@ -513,7 +511,6 @@ static void bt_reset_task(void* /*param*/) {
     auto& io = IOExpander::getInstance();
     if (!io.isInitialized()) {
         post_status(Lang::Strings::BT_PWR_RESET_UNSUP);
-        vTaskDelete(nullptr);
         return;
     }
     post_status("正在硬件掉电复位...");
@@ -526,11 +523,10 @@ static void bt_reset_task(void* /*param*/) {
     s_conn_state = ConnState::kIdle;
     lv_async_call(async_after_bt_reset, nullptr);
     post_status(Lang::Strings::BT_PWR_RESET_OK);
-    vTaskDelete(nullptr);
 }
 
 void on_reset_bt_clicked(lv_event_t* /*e*/) {
-    xTaskCreate(bt_reset_task, "bt_reset", 4096, nullptr, 5, nullptr);
+    SpawnPsrWorker("bt_reset", 8192, 5, bt_reset_task, nullptr);
 }
 
 void on_scan_clicked(lv_event_t* /*e*/) {
@@ -554,7 +550,7 @@ void on_call_mode_clicked(lv_event_t* /*e*/) {
         post_status(Lang::Strings::BT_NEED_CONNECT);
         return;
     }
-    xTaskCreate(call_mode_task, "bt_call_mode", 4096, nullptr, 5, nullptr);
+    SpawnPsrWorker("bt_call_mode", 8192, 5, call_mode_task, nullptr);
 }
 
 void on_music_mode_clicked(lv_event_t* /*e*/) {
@@ -562,7 +558,7 @@ void on_music_mode_clicked(lv_event_t* /*e*/) {
         post_status(Lang::Strings::BT_NEED_CONNECT);
         return;
     }
-    xTaskCreate(music_mode_task, "bt_music_mode", 4096, nullptr, 5, nullptr);
+    SpawnPsrWorker("bt_music_mode", 8192, 5, music_mode_task, nullptr);
 }
 
 void restore_mode_ui() {
