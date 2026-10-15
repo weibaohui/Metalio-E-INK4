@@ -3,7 +3,7 @@
 #include "standby_screen/standby_classic.h"
 
 #include "application.h"
-#include "book_screen/book_screen.h"
+#include "core/app_manager.h"
 #include "lv_adapter_display.h"
 #include "power_policy.h"
 #include "vk_key_handler.h"
@@ -120,7 +120,9 @@ void StandbyScreen::Show() {
         disp->BeginStandbyEnterPaint();
     }
 
-    BookScreen::OnEnterStandby();
+    if (auto app = AppManager::GetInstance().GetActiveApp()) {
+        app->OnPause();
+    }
     PowerPolicy::GetInstance().RequestReevaluate();
 }
 
@@ -149,7 +151,9 @@ void StandbyScreen::Dismiss() {
     s_underlying_scr = nullptr;
 
     PowerPolicy::GetInstance().OnStandbyOverlayDismissed();
-    BookScreen::OnResumeFromStandby();
+    if (auto app = AppManager::GetInstance().GetActiveApp()) {
+        app->OnResume();
+    }
 }
 
 bool StandbyScreen::IsActive() {
