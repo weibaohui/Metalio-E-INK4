@@ -59,6 +59,8 @@ set(SOURCES "audio/audio_codec.cc"
             "services/wifi_transfer/wifi_transfer_service.cc"
             "services/wifi_transfer/book_mcp.cc"
             "display/screen/wifi_transfer_screen/wifi_transfer_screen.cc"
+            "services/system_upgrade/system_upgrade_service.cc"
+            "display/screen/system_upgrade_screen/system_upgrade_screen.cc"
             "display/screen/radio_screen/radio_screen.cc"
             "display/screen/standby_screen/standby_screen.cc"
             "display/screen/standby_screen/standby_classic.cc"
@@ -136,7 +138,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/backup_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services")
+set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/backup_screen" "display/screen/system_upgrade_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services" "services/system_upgrade")
 
 # Add board common files explicitly (replaces GLOB to avoid cache issues and unwanted sources)
 list(APPEND SOURCES
