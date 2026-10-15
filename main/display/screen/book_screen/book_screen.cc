@@ -32,6 +32,7 @@
 #include "reader/book_cover_sidecar.h"
 #include "reader/book_home_snapshot.h"
 #include "reader/book_progress_cache.h"
+#include "reader/book_stats_service.h"
 #include "display/font/epdfont.h"
 #include "display/font/ttf_convert.h"
 #include "display/status_bar_manager.h"
@@ -599,104 +600,8 @@ void ResumeReadingTimeAfterStandby() {
     ESP_LOGI(TAG, "read-time resumed after standby");
 }
 
-/** 首页统计：总时长短文案（如 50.8h / 32m） */
-void FormatHomeDurationShort(char* out, size_t out_sz, uint32_t seconds) {
-    if (out == nullptr || out_sz == 0) {
-        return;
-    }
-    if (seconds < 60u) {
-        std::snprintf(out, out_sz, "0m");
-        return;
-    }
-    const uint32_t total_min = seconds / 60u;
-    if (total_min < 60u) {
-        std::snprintf(out, out_sz, "%um", static_cast<unsigned>(total_min));
-        return;
-    }
-    const double hours = static_cast<double>(seconds) / 3600.0;
-    std::snprintf(out, out_sz, "%.1fh", hours);
-}
-
-struct HomeStats {
-    int continue_index = -1;     // 继续阅读书目下标；-1 无
-    int continue_progress_x10 = -1;
-    uint32_t total_seconds = 0;
-    int finished_count = 0;
-    int recent_indices[2] = {-1, -1};
-    bool has_recent = false;  // NVS MRU 非空且能对上当前书库
-};
-
-/**
- * 首页统计：不再全库 Peek .pos。
- * - 最近/继续：book_home_snapshot MRU（写进度时维护）；空则不展示
- * - 总时长/读完：开机 sync Peek 累加快照；未同步过则显示 0
- * - 仅对「继续阅读」那一本 Peek 进度百分比（实时）
- */
-HomeStats CollectHomeStats(const std::vector<reader::BookInfo>& books) {
-    HomeStats out;
-    const auto agg = reader::book_home_snapshot::LoadAggregateStats();
-    if (agg.valid) {
-        out.total_seconds = agg.total_seconds;
-        out.finished_count = agg.finished_count;
-    }
-
-    if (books.empty()) {
-        return out;
-    }
-
-    std::vector<std::string> recent_abs;
-    reader::book_home_snapshot::LoadRecentAbsPaths(recent_abs);
-    if (recent_abs.empty()) {
-        return out;
-    }
-
-    int recent_n = 0;
-    auto push_recent = [&](int idx) {
-        if (idx < 0 || recent_n >= 2) {
-            return;
-        }
-        for (int k = 0; k < recent_n; ++k) {
-            if (out.recent_indices[k] == idx) {
-                return;
-            }
-        }
-        out.recent_indices[recent_n++] = idx;
-    };
-
-    for (const std::string& path : recent_abs) {
-        int found = -1;
-        for (int i = 0; i < static_cast<int>(books.size()); ++i) {
-            if (books[static_cast<size_t>(i)].path == path) {
-                found = i;
-                break;
-            }
-        }
-        if (found < 0) {
-            continue;
-        }
-        push_recent(found);
-        if (recent_n >= 2) {
-            break;
-        }
-    }
-
-    if (recent_n <= 0) {
-        return out;
-    }
-
-    out.has_recent = true;
-    out.continue_index = out.recent_indices[0];
-    {
-        reader::BookSession::ProgressPeek peek;
-        const char* path = books[static_cast<size_t>(out.continue_index)].path.c_str();
-        if (reader::book_progress_cache::TryGet(path, peek) && peek.progress_x10 >= 0) {
-            out.continue_progress_x10 = peek.progress_x10;
-        } else {
-            out.continue_progress_x10 = reader::BookSession::PeekReadingProgressX10(path);
-        }
-    }
-    return out;
-}
+using reader::HomeStats;
+using reader::BookStatsService;
 
 lv_coord_t ContentWidth() {
     return LV_HOR_RES - kListPad * 2;
@@ -5669,7 +5574,7 @@ lv_obj_t* CreateDetailScreen(int book_index) {
             lv_obj_set_style_text_color(k, lv_color_hex(0x666666), 0);
             lv_obj_clear_flag(k, LV_OBJ_FLAG_CLICKABLE);
             char val[24];
-            FormatHomeDurationShort(val, sizeof(val), seconds);
+            BookStatsService::FormatDurationShort(val, sizeof(val), seconds);
             lv_obj_t* v = lv_label_create(col);
             lv_label_set_text(v, val);
             lv_obj_set_style_text_font(v, num_font, 0);
@@ -5984,7 +5889,7 @@ void RenderReadingHome() {
         return;
     }
 
-    const HomeStats stats = CollectHomeStats(st.books);
+    const HomeStats stats = BookStatsService::CollectHomeStats(st.books);
     const lv_coord_t content_w = ContentWidth();
 
     const lv_font_t* item_f = ItemFont();
@@ -6211,7 +6116,7 @@ void RenderReadingHome() {
     };
 
     char dur_val[24];
-    FormatHomeDurationShort(dur_val, sizeof(dur_val), stats.total_seconds);
+    BookStatsService::FormatDurationShort(dur_val, sizeof(dur_val), stats.total_seconds);
     char fin_val[24];
     std::snprintf(fin_val, sizeof(fin_val), Lang::Strings::BOOK_COUNT_FMT, stats.finished_count);
     make_stat_col(dur_val, Lang::Strings::BOOK_READ_DURATION);
