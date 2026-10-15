@@ -1,6 +1,7 @@
 // main/display/status_bar_manager.cc
 #include "status_bar_manager.h"
 #include "screen_common.h"
+#include "core/system_event_bus.h"
 #include <cstring>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -23,6 +24,10 @@ StatusBarManager::StatusBarManager() {
     timer_args.arg = this;
     timer_args.name = "sb_transient";
     esp_timer_create(&timer_args, reinterpret_cast<esp_timer_handle_t*>(&transient_timer_));
+
+    SystemEventBus::GetInstance().Subscribe(SystemEventType::kTimeTick, [this](const SystemEvent& ev) {
+        UpdateClock(ev.extra_str);
+    });
 }
 
 StatusBarManager::~StatusBarManager() {
