@@ -18,6 +18,7 @@ enum class SystemEventType : uint16_t {
     kAudioPlayback,      ///< 音频播放状态 (电台/TTS/AI 对话)
     kPowerState,         ///< 供电与待机休眠策略状态
     kTimeTick,           ///< 系统时钟心跳更新
+    kSdCardState,        ///< SD 卡挂载/卸载状态变化
 };
 
 enum class SystemAudioPlaybackState : uint8_t {
@@ -58,9 +59,21 @@ struct SystemEvent {
             SystemWifiState state;
             int rssi;
         } wifi;
+
+        struct {
+            bool mounted;
+        } sd_card;
     };
 
     std::string extra_str;       ///< 附加字符串(如 SSID、业务 owner_id、时间 "HH:MM")
+
+    // 便捷工厂构造函数
+    static SystemEvent SdCard(bool mounted) {
+        SystemEvent ev{};
+        ev.type = SystemEventType::kSdCardState;
+        ev.sd_card.mounted = mounted;
+        return ev;
+    }
 
     // 便捷工厂构造函数
     static SystemEvent Battery(int level, bool charging, bool discharging, bool critical = false) {
