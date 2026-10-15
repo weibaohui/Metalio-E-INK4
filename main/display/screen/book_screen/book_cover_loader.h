@@ -21,4 +21,19 @@ bool TryLoadBookSidecarPreview(const reader::BookInfo& info, int max_w, int max_
 /** 旁路优先，失败再读文件内封面并回写旁路（可能 Open EPUB/EBOOK；须在 worker）。 */
 bool LoadBookDetailCover(reader::BookInfo& info, int max_w, int max_h, reader::RasterImage& out);
 
+constexpr lv_coord_t kCoverFrameBorder = 1;
+constexpr lv_coord_t kCoverSpineInset = 6;
+
+/** 扣除双边描边后的可绘区，避免封面 L8 盖住外框 */
+inline int CoverFrameInner(lv_coord_t outer) {
+    const lv_coord_t inset = 2 * kCoverFrameBorder;
+    return static_cast<int>(outer > inset ? outer - inset : 1);
+}
+
+/** 封面外框：左直脊、右圆角（子控件绘完后再切角描边） */
+void StyleBookCoverFrame(lv_obj_t* obj);
+
+/** 绘制书册边框与书脊 */
+void DrawBookCoverBorder(lv_layer_t* layer, const lv_area_t& box, lv_coord_t r);
+
 }  // namespace book_ui
