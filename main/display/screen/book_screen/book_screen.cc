@@ -27,6 +27,7 @@
 #include "SdCardManager.hpp"
 #include "assets/lang_config.h"
 #include "book_screen/book_cover_loader.h"
+#include "book_screen/book_font_manager.h"
 #include "book_screen/book_reader_prefs.h"
 #include "reader/book_cover_sidecar.h"
 #include "reader/book_home_snapshot.h"
@@ -54,10 +55,6 @@ constexpr const char* kScreenLibrary = "book";         // 阅读首页
 constexpr const char* kScreenBookshelf = "book_shelf"; // 我的书架网格
 constexpr const char* kScreenDetail = "book_detail";
 constexpr const char* kScreenRead = "book_read";
-// 轻量 epdfont：索引常驻 + 按页预热位图（替代整库 lv_binfont）
-// 命名：misans_{px}_{bpp}.ef ，默认 25px / 2bpp；实际路径由 NVS 偏好决定
-constexpr const char* kBookFontPath = SD_PATH_BOOK_FONT;
-constexpr const char* kBookFontPathAlt = SD_PATH_BOOK_FONT_ALT;
 constexpr lv_coord_t kListPad = 16;   // 首页/书架外边距
 constexpr lv_coord_t kFooterH = 36;
 // 分页高度相对正文区再收一点：末行字形/下划线(+4)可能略超 line_height，避免钻进底栏
@@ -116,11 +113,6 @@ constexpr int kBuiltinReadingSizePx = 25; // 无 SD .ef 时正文回退 fontpack
 constexpr int kTtfConvertSizeMin = 20;
 constexpr int kTtfConvertSizeMax = 40;
 constexpr int kTtfConvertSizeDefault = 25;
-
-struct ReadFontEntry {
-    std::string file;
-    int size_px = 0;
-};
 constexpr lv_coord_t kDetailCoverMaxW = 152;
 constexpr lv_coord_t kDetailCoverMaxH = 214;
 constexpr lv_coord_t kDetailCtaBottom = 24; // 继续阅读距屏幕底（+8）
@@ -140,72 +132,16 @@ using book_ui::CoverFrameInner;
 using book_ui::StyleBookCoverFrame;
 using book_ui::DrawBookCoverBorder;
 
-epdfont_t* s_epdfont = nullptr;
-
-/** 书库/详情等界面标题：固件 fontpack 30@2 */
-const lv_font_t* ListFont() {
-    const lv_font_t* f = fontpack_lv_font_get(30, 2);
-    return f != nullptr ? f : fontpack_lv_font_ui();
-}
-
-/** 书库列表 item：固件 fontpack 25@2 */
-const lv_font_t* ItemFont() {
-    return fontpack_lv_font_ui();
-}
-
-/** 仅正文内容：SD epdfont（NVS 所选），失败回退 fontpack UI */
-const lv_font_t* BookFont() {
-    const lv_font_t* f = epdfont_get_lv_font(s_epdfont);
-    return f != nullptr ? f : fontpack_lv_font_ui();
-}
-
-void EnsureBookFont() {
-    if (s_epdfont != nullptr) {
-        return;
-    }
-    char path[192];
-    if (BookReaderPrefsFontFullPath(path, sizeof(path)) != nullptr) {
-        s_epdfont = epdfont_open(path);
-    }
-    if (s_epdfont == nullptr) {
-        s_epdfont = epdfont_open(kBookFontPath);
-    }
-    if (s_epdfont == nullptr) {
-        s_epdfont = epdfont_open(kBookFontPathAlt);
-    }
-    if (s_epdfont == nullptr) {
-        ESP_LOGW(TAG, "epdfont load failed (%s), fallback MiSans flash",
-                 BookReaderPrefsFontFile());
-    } else {
-        ESP_LOGI(TAG, "epdfont loaded file=%s glyphs=%u bpp=%u", BookReaderPrefsFontFile(),
-                 static_cast<unsigned>(epdfont_glyph_count(s_epdfont)), epdfont_get_bpp(s_epdfont));
-    }
-}
-
-void ReleaseBookFont() {
-    if (s_epdfont == nullptr) {
-        return;
-    }
-    epdfont_close(s_epdfont);
-    s_epdfont = nullptr;
-}
-
-void PrewarmPageFont(const reader::Page* page) {
-    if (s_epdfont == nullptr || page == nullptr) {
-        return;
-    }
-    std::string blob;
-    blob.reserve(2048);
-    for (const auto& item : page->items) {
-        if (item.kind == reader::ContentKind::kText) {
-            blob.append(item.text);
-            blob.push_back('\n');
-        }
-    }
-    if (!blob.empty()) {
-        epdfont_prewarm_utf8(s_epdfont, blob.c_str(), blob.size());
-    }
-}
+using book_font::ReadFontEntry;
+using book_font::ParseEfSizePx;
+using book_font::ReadFontEntryLess;
+using book_font::DeleteReadFontFile;
+using book_font::ListFont;
+using book_font::ItemFont;
+using book_font::BookFont;
+using book_font::EnsureBookFont;
+using book_font::ReleaseBookFont;
+using book_font::PrewarmPageFont;
 
 struct BookUiState {
     std::vector<reader::BookInfo> books;
@@ -908,7 +844,6 @@ void OnSheetFontLongPressed(lv_event_t* e);
 void OnFontMultiCancel(lv_event_t* e);
 void OnFontMultiSelectAll(lv_event_t* e);
 void OnFontMultiRemove(lv_event_t* e);
-bool DeleteReadFontFile(const std::string& file, std::string& err_out);
 void TtfScanFiles();
 void TtfEnsurePanel();
 void TtfRebuildContent();
@@ -1214,14 +1149,6 @@ lv_obj_t* ResumeDetailScreen() {
         return BookScreen::Create();
     }
     return CreateDetailScreen(st.selected);
-}
-
-void OpenAssistantFromReaderAsync(void* /*user_data*/) {
-    // 助手模块已移除
-}
-
-void RequestOpenAssistantFromReader() {
-    // 助手模块已移除
 }
 
 /** 盖板键在 touch_feed：须 ScreenLvAsync，禁止同步 lv_obj_clean/create（否则 tlsf 双释放）。 */
@@ -2764,75 +2691,8 @@ void OpenReadToc() {
     RenderTocList();
 }
 
-bool ParseEfSizePx(const std::string& name, int* size_px) {
-    if (size_px == nullptr || name.size() < 8) {
-        return false;
-    }
-    const size_t dot = name.rfind(".ef");
-    if (dot == std::string::npos || dot + 3 != name.size()) {
-        return false;
-    }
-    const size_t u2 = name.rfind('_', dot);
-    if (u2 == std::string::npos || u2 == 0) {
-        return false;
-    }
-    const size_t u1 = name.rfind('_', u2 - 1);
-    if (u1 == std::string::npos) {
-        return false;
-    }
-    int sz = 0;
-    for (size_t i = u1 + 1; i < u2; ++i) {
-        if (name[i] < '0' || name[i] > '9') {
-            return false;
-        }
-        sz = sz * 10 + (name[i] - '0');
-    }
-    if (sz <= 0) {
-        return false;
-    }
-    *size_px = sz;
-    return true;
-}
-
-bool ReadFontEntryLess(const ReadFontEntry& a, const ReadFontEntry& b) {
-    if (a.size_px != b.size_px) {
-        return a.size_px < b.size_px;
-    }
-    return a.file < b.file;
-}
-
 void ScanReadFonts() {
-    auto& st = State();
-    st.font_entries.clear();
-    DIR* dir = opendir(SD_PATH_FONTS);
-    if (dir == nullptr) {
-        return;
-    }
-    while (dirent* ent = readdir(dir)) {
-        if (ent->d_name[0] == '.') {
-            continue;
-        }
-        const size_t n = std::strlen(ent->d_name);
-        if (n < 4 || n > 63 || std::strcmp(ent->d_name + (n - 3), ".ef") != 0) {
-            continue;
-        }
-        char name[64];
-        std::memcpy(name, ent->d_name, n + 1);
-        char full[96];
-        std::snprintf(full, sizeof(full), "%s/%s", SD_PATH_FONTS, name);
-        struct stat st_info {};
-        if (stat(full, &st_info) != 0 || !S_ISREG(st_info.st_mode)) {
-            continue;
-        }
-        ReadFontEntry fe;
-        fe.file = name;
-        if (!ParseEfSizePx(fe.file, &fe.size_px)) {
-            fe.size_px = 0;
-        }
-        st.font_entries.push_back(std::move(fe));
-    }
-    closedir(dir);
-    std::sort(st.font_entries.begin(), st.font_entries.end(), ReadFontEntryLess);
+    book_font::ScanReadFonts(State().font_entries);
 }
 
 int CurrentFontIndex() {
@@ -4011,25 +3871,6 @@ void EnterFontMultiModeSelect(int idx) {
         st.font_selected[static_cast<size_t>(idx)] = 1;
     }
     RequestSettingsSheetPaint();
-}
-
-bool DeleteReadFontFile(const std::string& file, std::string& err_out) {
-    err_out.clear();
-    if (file.empty() || file.size() > 63 || file.find('/') != std::string::npos ||
-        file == "." || file == ".." || file.size() < 4 ||
-        file.compare(file.size() - 3, 3, ".ef") != 0) {
-        err_out = Lang::Strings::BOOK_FONT_NAME_INVALID;
-        return false;
-    }
-    char path[96];
-    std::snprintf(path, sizeof(path), "%s/%s", SD_PATH_FONTS, file.c_str());
-    if (unlink(path) != 0 && errno != ENOENT) {
-        err_out = Lang::Strings::BOOK_DELETE_FAILED;
-        return false;
-    }
-    unlink((std::string(path) + ".tmp").c_str());
-    ESP_LOGI(TAG, "deleted font %s", path);
-    return true;
 }
 
 void OnFontMultiCancel(lv_event_t* e) {
