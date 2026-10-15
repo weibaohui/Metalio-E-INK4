@@ -49,6 +49,32 @@ public:
 };
 
 /**
+ * @brief 墨水屏全屏点阵遮罩居中提示卡片 (Modal Status Overlay)
+ */
+class EpdModalOverlay {
+public:
+    struct Handle {
+        lv_obj_t* mask = nullptr;
+        lv_obj_t* card = nullptr;
+        lv_obj_t* label = nullptr;
+    };
+
+    /**
+     * @brief 在 parent 上创建全屏遮罩及居中文本卡片
+     * @param parent 父容器/屏幕
+     * @param msg 初始显示的文本消息
+     * @param card_h 卡片高度 (默认 160)
+     * @return 包含 mask, card, label 的 Handle
+     */
+    static Handle Show(lv_obj_t* parent, const char* msg = nullptr, lv_coord_t card_h = 160);
+
+    /**
+     * @brief 关闭并销毁遮罩
+     */
+    static void Close(Handle& handle);
+};
+
+/**
  * @brief 墨水屏标准重启倒计时模态弹窗 (用于网络切换、SIM卡切换、配置生效等)
  */
 class EpdRestartCountdown {

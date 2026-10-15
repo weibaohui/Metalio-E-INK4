@@ -181,6 +181,59 @@ void RestartTimerCallback(lv_timer_t* /*timer*/) {
 
 } // namespace
 
+// ==================== EpdModalOverlay 全屏点阵遮罩卡片实现 ====================
+
+EpdModalOverlay::Handle EpdModalOverlay::Show(lv_obj_t* parent, const char* msg, lv_coord_t card_h) {
+    Handle h;
+    if (parent == nullptr) return h;
+
+    lv_obj_t* mask = lv_obj_create(parent);
+    lv_obj_remove_style_all(mask);
+    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(mask, 0, 0);
+    ScreenApplyDotBackdrop(mask);
+    lv_obj_set_style_border_width(mask, 0, 0);
+    lv_obj_clear_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t* card = lv_obj_create(mask);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, LV_HOR_RES - 48, card_h > 0 ? card_h : 160);
+    lv_obj_center(card);
+    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(card, lv_color_black(), 0);
+    lv_obj_set_style_border_width(card, 2, 0);
+    lv_obj_set_style_radius(card, 12, 0);
+    lv_obj_set_style_pad_all(card, 16, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* lbl = lv_label_create(card);
+    lv_label_set_text(lbl, msg != nullptr ? msg : "");
+    lv_obj_set_width(lbl, LV_PCT(100));
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(lbl, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(lbl);
+
+    h.mask = mask;
+    h.card = card;
+    h.label = lbl;
+    return h;
+}
+
+void EpdModalOverlay::Close(Handle& handle) {
+    if (handle.mask != nullptr && lv_obj_is_valid(handle.mask)) {
+        lv_obj_delete(handle.mask);
+    }
+    handle.mask = nullptr;
+    handle.card = nullptr;
+    handle.label = nullptr;
+}
+
+// ==================== EpdRestartCountdown 重启倒计时实现 ====================
+
 void EpdRestartCountdown::Cancel() {
     if (s_restart_state.timer != nullptr) {
         lv_timer_delete(s_restart_state.timer);
@@ -206,14 +259,15 @@ void EpdRestartCountdown::Show(lv_obj_t* parent, const char* headline, int count
     s_restart_state.headline = headline ? headline : "";
     s_restart_state.remaining = countdown_sec > 0 ? countdown_sec : 3;
 
-    lv_obj_t* mask = lv_obj_create(parent);
-    lv_obj_remove_style_all(mask);
-    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_pos(mask, 0, 0);
-    ScreenApplyDotBackdrop(mask);
-    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
-    s_restart_state.overlay = mask;
-    lv_obj_add_event_cb(mask, [](lv_event_t* /*e*/) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), Lang::Strings::SETTINGS_NET_REBOOT_COUNT_FMT,
+             s_restart_state.headline.c_str(), s_restart_state.remaining);
+
+    EpdModalOverlay::Handle h = EpdModalOverlay::Show(parent, buf, 160);
+    s_restart_state.overlay = h.mask;
+    s_restart_state.msg_lbl = h.label;
+
+    lv_obj_add_event_cb(h.mask, [](lv_event_t* /*e*/) {
         if (s_restart_state.timer != nullptr) {
             lv_timer_delete(s_restart_state.timer);
             s_restart_state.timer = nullptr;
@@ -223,29 +277,6 @@ void EpdRestartCountdown::Show(lv_obj_t* parent, const char* headline, int count
         s_restart_state.headline.clear();
         s_restart_state.remaining = 0;
     }, LV_EVENT_DELETE, nullptr);
-
-    lv_obj_t* card = lv_obj_create(mask);
-    lv_obj_remove_style_all(card);
-    lv_obj_set_size(card, LV_HOR_RES - 48, 160);
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 12, 0);
-    lv_obj_set_style_pad_all(card, 16, 0);
-
-    lv_obj_t* lbl = lv_label_create(card);
-    s_restart_state.msg_lbl = lbl;
-    char buf[128];
-    snprintf(buf, sizeof(buf), Lang::Strings::SETTINGS_NET_REBOOT_COUNT_FMT,
-             s_restart_state.headline.c_str(), s_restart_state.remaining);
-    lv_label_set_text(lbl, buf);
-    lv_obj_set_width(lbl, LV_PCT(100));
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(lbl, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_center(lbl);
 
     s_restart_state.timer = lv_timer_create(RestartTimerCallback, 1000, nullptr);
 }
