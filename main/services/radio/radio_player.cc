@@ -28,6 +28,7 @@
 #include "audio_codec.h"
 #include "audio_focus_manager.h"
 #include "boards/common/power_policy/power_policy.h"
+#include "boards/common/power_policy/power_hw.h"
 #include "board.h"
 #include "core/system_event_bus.h"
 #include "display/status_bar_manager.h"
@@ -689,8 +690,18 @@ void RadioTask(void*) {
                 // 若语音管线在跑(用户刚用过语音页),先停掉释放内存。
                 // StopAudioServiceIfRunning 内部 Deinitialize AFE 也在 main 栈执行,flash 安全。
                 Application::GetInstance().StopAudioServiceIfRunning();
+                // 确保外设总电源 MAIN_PWR 处于通电状态（为 BT 音频芯片供电以输出 I2S 时钟）
+                if (!power_hw_main_rail_is_on()) {
+                    power_hw_main_rail_set(true);
+                }
                 // 幂等使能 i2s(AudioCodec::Start 已加 started_ 守卫,二次调不 abort)。
-                Board::GetInstance().GetAudioCodec()->Start();
+                auto* codec = Board::GetInstance().GetAudioCodec();
+                if (codec != nullptr) {
+                    codec->Start();
+                    if (codec->output_volume() <= 0) {
+                        codec->SetOutputVolume(70);
+                    }
+                }
                 // WiFi 退出省电:PS 模式突发收包被压到几 KB/s,直播流必断。
                 // esp_wifi_* 会读 flash 的 PHY 数据,必须在 main 任务(内部栈)执行;
                 // 设置一次全局生效,无需每次开流重复。
