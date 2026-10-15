@@ -854,11 +854,6 @@ static esp_err_t DrawPartialDirty(EpdFlushCtx* ctx, esp_lcd_panel_handle_t panel
     return epaper_panel_refresh_screen(panel);
 }
 
-static esp_err_t DrawFullScreenPartial(EpdFlushCtx* ctx, esp_lcd_panel_handle_t panel,
-                                       const uint8_t* prev_fb, const uint8_t* curr_fb) {
-    return DrawPartialDirty(ctx, panel, prev_fb, curr_fb, 0, 0, ctx->panel_w, ctx->panel_h);
-}
-
 /** 全刷：0x26/0x24 同写新图；mode 选 FULL(0xC4) / STANDBY(0xC7，进/出待机与关机)。 */
 static esp_err_t FullRefreshBothSame(EpdFlushCtx* ctx, const uint8_t* curr_fb, const char* wait_tag,
                                      esp_lcd_ssd1677_refresh_mode_t mode = SSD1677_EPAPER_REFRESH_FULL) {
@@ -887,17 +882,6 @@ static esp_err_t FullRefreshBothSame(EpdFlushCtx* ctx, const uint8_t* curr_fb, c
         return err;
     }
     return ESP_OK;
-}
-
-static esp_err_t FullScreenPartialTo(EpdFlushCtx* ctx, const uint8_t* prev_fb, const uint8_t* curr_fb,
-                                     const char* wait_tag)
-{
-    esp_err_t err = DrawFullScreenPartial(ctx, ctx->panel, prev_fb, curr_fb);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "%s: %s", wait_tag, esp_err_to_name(err));
-        return err;
-    }
-    return WaitRefreshDone(ctx, wait_tag);
 }
 
 /** 排空上一次异步局刷（等 BUSY，不做 Sync）。 */
@@ -1853,7 +1837,7 @@ void LVAdapterDisplay::SetStatus(const char* status) {
         (std::strlen(status) == 5 && status[2] == ':')) {
         StatusBarManager::GetInstance().ClearOngoing("xiaozhi");
         if (status != nullptr && std::strlen(status) == 5 && status[2] == ':') {
-            StatusBarManager::GetInstance().UpdateClock(status);
+            SystemEventBus::GetInstance().Publish(SystemEvent::TimeTick(status));
         }
     } else {
         StatusBarManager::GetInstance().SetOngoing("xiaozhi", status);
@@ -1933,7 +1917,7 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
         SyncVolumeWidgetsLocked();   // 喇叭图标+音量数字(音量键/播报后更新)
 
         if (time_str[0] != '\0') {
-            StatusBarManager::GetInstance().UpdateClock(time_str);
+            SystemEventBus::GetInstance().Publish(SystemEvent::TimeTick(time_str));
         }
 
         if (battery_ok && new_battery_icon != nullptr) {
