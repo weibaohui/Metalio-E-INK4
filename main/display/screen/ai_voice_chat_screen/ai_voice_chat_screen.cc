@@ -468,6 +468,10 @@ void RefreshState() {
                 if (s_ui.chat_box != nullptr) {
                     lv_obj_scroll_to_y(s_ui.chat_box, 0, LV_ANIM_OFF);
                 }
+                // 清空大块长回复文字时请求全刷，彻底消除墨水屏文字重影残影
+                if (auto* disp = LVAdapterDisplay::Instance()) {
+                    disp->RequestNextFullRefresh();
+                }
             }
         }
     }
@@ -739,43 +743,14 @@ lv_obj_t* AiVoiceChatScreen::Create() {
 
     // 启用触摸点击与垂直手势滑动 (禁用墨水屏不适用的弹性与惯性动量，避免画面滞后与连刷)
     lv_obj_add_flag(chat, LV_OBJ_FLAG_CLICKABLE);
-    // 墨水屏拖动滚动 = 每步一次 300-800ms 刷新,快速轻扫全被刷新窗口吞掉
-    // (#47 实测)。改为"抬手一次滚动":关掉 indev 拖动滚动(SCROLLABLE),
-    // 用 PRESSING 采集滑动距离,RELEASE 时 lv_obj_scroll_by 一次到位。
-    // 程序化 scroll_by 不受 SCROLLABLE 限制,滚动条/边界钳制照常工作。
     lv_obj_clear_flag(chat, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(chat, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(chat, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_scrollbar_mode(chat, LV_SCROLLBAR_MODE_OFF);
-    // 手动滑动采集:PRESSING 记录手指 y,RELEASE 时按位移一次滚动到位
-    static int16_t swipe_press_y = -1;
-    static int16_t swipe_last_y = -1;
-    lv_obj_add_event_cb(chat, [](lv_event_t* e) {
-        lv_indev_t* indev = lv_indev_active();
-        if (indev == nullptr) return;
-        lv_point_t p;
-        lv_indev_get_point(indev, &p);
-        const lv_event_code_t code = lv_event_get_code(e);
-        if (code == LV_EVENT_PRESSED) {
-            swipe_press_y = p.y;
-            swipe_last_y = p.y;
-        } else if (code == LV_EVENT_PRESSING) {
-            swipe_last_y = p.y;
-        } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-            const int32_t dy = swipe_last_y - swipe_press_y;
-            if (swipe_press_y >= 0 && dy != 0) {
-                lv_obj_scroll_by(static_cast<lv_obj_t*>(lv_event_get_target(e)),
-                                 0, -dy, LV_ANIM_OFF);
-            }
-            swipe_press_y = -1;
-            swipe_last_y = -1;
-        }
-    }, LV_EVENT_ALL, nullptr);
     lv_obj_set_style_width(chat, 4, LV_PART_SCROLLBAR);
     lv_obj_set_style_bg_color(chat, lv_color_black(), LV_PART_SCROLLBAR);
     lv_obj_set_style_bg_opa(chat, LV_OPA_COVER, LV_PART_SCROLLBAR);
     s_ui.chat_box = chat;
-    // 触摸层竖向滑动回调(#47):按住-拖动-抬起 → 抬手一次滚动
+    // 触摸层竖向滑动回调(#47):按住-拖动-抬起 → 抬手一次滚动到位并保留 40px 阅读重叠留白
     SetSwipeScrollCb(OnSwipeScrollFromFeed, chat);
 
     // wrap=true: 宽 100% + 长文自动折行, 回复再长也不超屏宽;
