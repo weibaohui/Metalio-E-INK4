@@ -85,9 +85,11 @@ Ret GuardedNvs(const char* ns, const char* what, Ret default_on_timeout,
         return default_on_timeout;
     }
     Application::GetInstance().Schedule([st] {
-        st->out = st->body();
-        xSemaphoreGive(st->done);
-        if (st->timed_out.load() || st->finished.fetch_add(1) == 1) {
+        if (!st->timed_out.load(std::memory_order_acquire)) {
+            st->out = st->body();
+            xSemaphoreGive(st->done);
+        }
+        if (st->timed_out.load(std::memory_order_acquire) || st->finished.fetch_add(1) == 1) {
             vSemaphoreDelete(st->done);
             delete st;
         }
@@ -98,7 +100,7 @@ Ret GuardedNvs(const char* ns, const char* what, Ret default_on_timeout,
         ESP_LOGD(TAG, "PSRAM 栈 NVS %s(%s) 已转发 main 执行", ns, what);
         return out;
     }
-    st->timed_out.store(true);
+    st->timed_out.store(true, std::memory_order_release);
     ESP_LOGE(TAG, "main 任务 3s 未执行 NVS %s(%s),按默认值返回;状态交 main 侧回收", ns,
              what);
     return default_on_timeout;
@@ -122,9 +124,11 @@ void GuardedNvs(const char* ns, const char* what, std::function<void()> body) {
         return;
     }
     Application::GetInstance().Schedule([st] {
-        st->body();
-        xSemaphoreGive(st->done);
-        if (st->timed_out.load() || st->finished.fetch_add(1) == 1) {
+        if (!st->timed_out.load(std::memory_order_acquire)) {
+            st->body();
+            xSemaphoreGive(st->done);
+        }
+        if (st->timed_out.load(std::memory_order_acquire) || st->finished.fetch_add(1) == 1) {
             vSemaphoreDelete(st->done);
             delete st;
         }
@@ -134,7 +138,7 @@ void GuardedNvs(const char* ns, const char* what, std::function<void()> body) {
         ESP_LOGD(TAG, "PSRAM 栈 NVS %s(%s) 已转发 main 执行", ns, what);
         return;
     }
-    st->timed_out.store(true);
+    st->timed_out.store(true, std::memory_order_release);
     ESP_LOGE(TAG, "main 任务 3s 未执行 NVS %s(%s),操作丢弃;状态交 main 侧回收", ns, what);
 }
 

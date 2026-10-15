@@ -1,4 +1,5 @@
 #include "book_library.h"
+#include "application.h"
 #include "core/system_event_bus.h"
 #include "reader/book_progress_cache.h"
 #include "reader/book_library_warmup.h"
@@ -33,7 +34,7 @@ struct BookLibSdSubscriber {
             ESP_LOGI(TAG, "SD card state changed (mounted=%d), updating book caches", ev.sd_card.mounted);
             InvalidateBookLibraryCache();
             book_progress_cache::Invalidate();
-            if (ev.sd_card.mounted) {
+            if (ev.sd_card.mounted && Application::GetInstance().IsBootReady()) {
                 book_library_warmup::RequestBootWarmup();
             }
         });
