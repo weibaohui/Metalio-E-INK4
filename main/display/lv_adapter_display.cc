@@ -825,30 +825,26 @@ static esp_err_t WaitRefreshDone(EpdFlushCtx* ctx, const char* tag) {
     return ESP_OK;
 }
 
-/** 局刷：prepare → 写入脏区 0x24（小窗口按需传输，显著降低 SPI 负载）→ 0xCF。 */
+/** 局刷：prepare → 整帧只写 0x24=新图（不写 0x26）→ 0xCC 局刷。
+ *  注意：SSD1677 依靠硬件全屏比对 0x24(新帧)与 0x26(旧帧)驱动微胶囊翻转。
+ *  整帧 48KB SPI 仅需 9.6ms，全屏同步消除了 sub-window 坐标/步长/RAM 窗错位及脏区漏刷问题。 */
 static esp_err_t DrawPartialDirty(EpdFlushCtx* ctx, esp_lcd_panel_handle_t panel, const uint8_t* prev_fb,
                                   const uint8_t* curr_fb, int x_draw, int y_draw, int w_draw,
                                   int h_draw) {
     (void)prev_fb;
+    (void)x_draw;
+    (void)y_draw;
+    (void)w_draw;
+    (void)h_draw;
     if (ctx == nullptr || panel == nullptr || curr_fb == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
 
     ESP_RETURN_ON_ERROR(epaper_panel_prepare_for_partial(panel), TAG, "partial prepare");
     epaper_panel_set_bitmap_color(panel, SSD1677_EPAPER_BITMAP_CURRENT);
-
-    const bool is_full_screen = (x_draw == 0 && y_draw == 0 &&
-                                 w_draw == ctx->panel_w && h_draw == ctx->panel_h);
-    if (is_full_screen || w_draw <= 0 || h_draw <= 0) {
-        ESP_RETURN_ON_ERROR(
-            esp_lcd_panel_draw_bitmap(panel, 0, 0, ctx->panel_w, ctx->panel_h, curr_fb), TAG,
-            "partial curr full 0x24");
-    } else {
-        const int fb_stride = ctx->panel_w / 8;
-        ESP_RETURN_ON_ERROR(
-            epaper_panel_draw_sub_bitmap(panel, x_draw, y_draw, w_draw, h_draw, curr_fb, fb_stride), TAG,
-            "partial curr sub 0x24");
-    }
+    ESP_RETURN_ON_ERROR(
+        esp_lcd_panel_draw_bitmap(panel, 0, 0, ctx->panel_w, ctx->panel_h, curr_fb), TAG,
+        "partial curr 0x24");
 
     epaper_panel_set_refresh_mode(panel, SSD1677_EPAPER_REFRESH_PARTIAL);
     return epaper_panel_refresh_screen(panel);
