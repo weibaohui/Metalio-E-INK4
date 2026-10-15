@@ -20,6 +20,7 @@
 #include "services/wifi_transfer/wifi_transfer_service.h"
 #include "reader/file_size.h"
 #include "vk_key_handler.h"
+#include "core/system_event_bus.h"
 #include "ff.h"
 
 namespace {
@@ -43,6 +44,7 @@ struct UiState {
 
 UiState s_ui;
 bool s_alive = false;
+SubscriptionToken s_wifi_sub_token = 0;
 std::string s_recent_log = "服务就绪，等待文件传输...";
 
 const lv_font_t* UiFont() { return fontpack_lv_font_ui(); }
@@ -202,6 +204,10 @@ void RefreshUi() {
 
 void OnScreenUnloaded(lv_event_t* /*e*/) {
     s_alive = false;
+    if (s_wifi_sub_token != 0) {
+        SystemEventBus::GetInstance().Unsubscribe(s_wifi_sub_token);
+        s_wifi_sub_token = 0;
+    }
     // 离屏停止服务，释放所有内存和端口资源，做到 0 常驻内存
     wifi_transfer::WifiTransferService::GetInstance().Stop();
     wifi_transfer::WifiTransferService::GetInstance().SetUploadCallback(nullptr);
@@ -375,6 +381,27 @@ lv_obj_t* WifiTransferScreen::Create() {
             }
             delete m;
         }, msg);
+    });
+
+    // 订阅 WiFi 状态变化事件，实现网络连接后全自动拉起服务并生成二维码
+    s_wifi_sub_token = SystemEventBus::GetInstance().Subscribe(SystemEventType::kWifiState, [](const SystemEvent& ev) {
+        if (ev.wifi.state == SystemWifiState::kConnected) {
+            ScreenLvAsync([](void*) {
+                if (s_alive) {
+                    auto& svc = wifi_transfer::WifiTransferService::GetInstance();
+                    if (!svc.IsRunning()) {
+                        svc.Start();
+                    }
+                    RefreshUi();
+                }
+            }, nullptr);
+        } else if (ev.wifi.state == SystemWifiState::kDisconnected) {
+            ScreenLvAsync([](void*) {
+                if (s_alive) {
+                    RefreshUi();
+                }
+            }, nullptr);
+        }
     });
 
     // 默认进入页面自动启动服务

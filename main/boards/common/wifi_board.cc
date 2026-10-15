@@ -7,6 +7,7 @@
 #include "assets/lang_config.h"
 #include "power_hw.h"
 #include "power_policy.h"
+#include "core/system_event_bus.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -119,7 +120,20 @@ void WifiBoard::StartNetwork() {
         notification += ssid;
         display->ShowNotification(notification.c_str(), 30000);
         display->UpdateStatusBar(true);
+
+        SystemEventBus::GetInstance().Publish(
+            SystemEvent::Wifi(SystemWifiState::kConnected, ssid, WifiStation::GetInstance().GetRssi()));
     });
+
+    static bool s_handler_registered = false;
+    if (!s_handler_registered) {
+        s_handler_registered = true;
+        esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
+            [](void*, esp_event_base_t, int32_t, void*) {
+                SystemEventBus::GetInstance().Publish(
+                    SystemEvent::Wifi(SystemWifiState::kDisconnected, "", 0));
+            }, nullptr, nullptr);
+    }
     wifi_station.Start();
 
     // 有已存 WiFi：等保网时长拿 IP；失败不自动 SoftAP，Pause STA（停扫），下次 EnsureNetworkReady 再拉
