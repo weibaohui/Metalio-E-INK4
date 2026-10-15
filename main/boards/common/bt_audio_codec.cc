@@ -2,8 +2,10 @@
 
 #include <esp_err.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <cmath>
 #include <cstring>
+#include "display/screen/bluetooth_screen/bluetooth_screen.h"
 
 #define TAG "BTAudioCodec"
 
@@ -119,6 +121,13 @@ int BTAudioCodec::Write(const int16_t *data, int samples)
     esp_err_t err = i2s_channel_write(tx_handle_, buffer.data(), samples * 2 * sizeof(int32_t),
                                       &bytes_written, pdMS_TO_TICKS(1000));
     if (err != ESP_OK) {
+        static int64_t s_last_recover_us = 0;
+        const int64_t now_us = esp_timer_get_time();
+        if (err == ESP_ERR_TIMEOUT && (now_us - s_last_recover_us > 3000000LL)) {
+            s_last_recover_us = now_us;
+            ESP_LOGW(TAG, "I2S write timeout (missing BCLK/WS clock from BT master), re-applying BT Mode 1...");
+            BluetoothScreen::ApplyDefaultMode();
+        }
         ESP_LOGE(TAG, "i2s_channel_write failed: %s (samples=%d)", esp_err_to_name(err), samples);
         return 0;
     }
