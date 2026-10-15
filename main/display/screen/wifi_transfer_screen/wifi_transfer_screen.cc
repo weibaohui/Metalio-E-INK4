@@ -394,32 +394,16 @@ lv_obj_t* WifiTransferScreen::Create() {
         }, msg);
     });
 
-    // 订阅 WiFi 状态变化事件，实现网络连接后全自动拉起服务并生成二维码
-    s_wifi_sub_token = SystemEventBus::GetInstance().Subscribe(SystemEventType::kWifiState, [](const SystemEvent& ev) {
-        if (ev.wifi.state == SystemWifiState::kConnected) {
-            ScreenLvAsync([](void*) {
-                if (s_alive) {
-                    auto& svc = wifi_transfer::WifiTransferService::GetInstance();
-                    if (!svc.IsRunning()) {
-                        svc.Start();
-                    }
-                    RefreshUi();
-                }
-            }, nullptr);
-        } else if (ev.wifi.state == SystemWifiState::kDisconnected) {
-            ScreenLvAsync([](void*) {
-                if (s_alive) {
-                    RefreshUi();
-                }
-            }, nullptr);
-        }
+    // 订阅 WiFi 状态变化事件，网络连接变化时刷新界面状态
+    s_wifi_sub_token = SystemEventBus::GetInstance().Subscribe(SystemEventType::kWifiState, [](const SystemEvent& /*ev*/) {
+        ScreenLvAsync([](void*) {
+            if (s_alive) {
+                RefreshUi();
+            }
+        }, nullptr);
     });
 
-    // 默认进入页面自动启动服务
-    if (Board::GetInstance().IsNetworkReady()) {
-        wifi_transfer::WifiTransferService::GetInstance().Start();
-    }
-
+    // 进入页面默认不启动服务，等待用户手动点击启动
     RefreshUi();
 
     VkKey_AttachScreen(s_ui.screen, kScreenId, VkKeyScreenDesc{WifiTransferScreen::Create, nullptr});
