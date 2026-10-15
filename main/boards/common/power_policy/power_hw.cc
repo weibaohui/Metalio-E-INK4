@@ -197,6 +197,7 @@ static esp_err_t MainRailSetImpl(bool on, bool reinit_peripherals_on_rise)
     // 掉电前先停 4G（供电仍在），再拉低 MAIN_PWR；WiFi 模式 no-op
     if (falling) {
         CellularPrepareRailOff();
+        uart_flush_input(UART_NUM_2);
     }
 
     esp_err_t err = io.setLevel(IOExpander::Pin::MAIN_PWR, on);
@@ -217,6 +218,7 @@ static esp_err_t MainRailSetImpl(bool on, bool reinit_peripherals_on_rise)
     // 掉电后模组状态丢失；上升沿异步恢复 BT 模式1 + 4G Start（不阻塞 Flush/定时器）
     // reinit_peripherals_on_rise=false：关机 hold 上电，勿重拉模组
     if (rising && reinit_peripherals_on_rise) {
+        uart_flush_input(UART_NUM_2);
         ScheduleBtMode1AfterRailOn();
         ScheduleCellularRecoverAfterRailOn();
     }

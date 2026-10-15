@@ -324,6 +324,8 @@ namespace
         return false;
     }
 
+    bool s_launching = false;
+
     void OnHomeDeleted(lv_event_t *e)
     {
         // ScreenLoadReplace 会 async 删旧屏；勿清掉新首页的指针
@@ -335,10 +337,12 @@ namespace
         s_home_scr = nullptr;
         s_apps = nullptr;
         s_page_dots = nullptr;
+        s_launching = false;
     }
 
     void LaunchAppAsync(void *user_data)
     {
+        s_launching = false;
         auto *entry = static_cast<AppModule *>(user_data);
         if (entry == nullptr)
         {
@@ -356,6 +360,10 @@ namespace
 
     void OnAppClicked(lv_event_t *e)
     {
+        if (s_launching)
+        {
+            return;
+        }
         lv_obj_t *obj = static_cast<lv_obj_t *>(lv_event_get_target(e));
         AppModule *entry = nullptr;
         while (obj != nullptr)
@@ -375,6 +383,7 @@ namespace
         {
             return;
         }
+        s_launching = true;
         // 事件回调里删当前屏不安全，延后一拍再切（与返回键一致）
         lv_async_call(LaunchAppAsync, entry);
     }

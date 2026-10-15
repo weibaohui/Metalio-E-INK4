@@ -26,6 +26,7 @@
 #include "esp_lcd_ssd1677_commands.h"
 #include "metalio_touch.h"
 #include "power_policy.h"
+#include "power_hw.h"
 #include "utils/psr_worker.h"
 
 #include <wifi_station.h>
@@ -345,6 +346,10 @@ private:
         ESP_LOGI(TAG, "BT audio UART ready (TX=%d RX=%d)", BT_AUDIO_TX_PIN, BT_AUDIO_RX_PIN);
 
         uart.registerCallback([](const std::vector<uint8_t>& data) {
+            // 如果主电轨 MAIN_PWR 已掉电，BT 模组断电期间忽略一切 UART 噪点
+            if (!power_hw_main_rail_is_on() || data.empty()) {
+                return;
+            }
             // 按可打印字符输出，CR/LF 换成空格，便于串口日志阅读
             std::string line;
             line.reserve(data.size());
