@@ -16,6 +16,7 @@
 #include "standby_screen/standby_screen.h"
 #include "vk_key_handler.h"
 
+#include <array>
 #include <cstring>
 
 #include <esp_log.h>
@@ -38,9 +39,49 @@ constexpr lv_coord_t kStatusTextNudgeY = 4;
 /** 屏内边沿未交完时的兜底上屏（防极端卡住） */
 constexpr uint64_t kPaintCoalescePendingFallbackUs = 120000;
 
+// 固定容量环形返回栈：严格 O(1) 压栈、弹栈与最老记录覆盖，无内存分配与元素搬移
+template <typename T, size_t Capacity>
+class BoundedRingStack {
+public:
+    void Clear() {
+        head_ = 0;
+        count_ = 0;
+        buffer_.fill(T{});
+    }
+
+    void Push(T item) {
+        if (item == T{}) return;
+        if (count_ < Capacity) {
+            buffer_[(head_ + count_) % Capacity] = item;
+            ++count_;
+        } else {
+            // 环形覆盖最老记录：严格 O(1) 淘汰，消除原有 O(N) 线性平移数组的搬移开销
+            buffer_[head_] = item;
+            head_ = (head_ + 1) % Capacity;
+            ESP_LOGW(TAG, "back stack full, drop oldest via circular ring");
+        }
+    }
+
+    T Pop() {
+        if (count_ <= 0) return T{};
+        --count_;
+        size_t top_idx = (head_ + count_) % Capacity;
+        T item = buffer_[top_idx];
+        buffer_[top_idx] = T{};
+        return item;
+    }
+
+    int Depth() const { return static_cast<int>(count_); }
+    bool IsEmpty() const { return count_ == 0; }
+
+private:
+    std::array<T, Capacity> buffer_{};
+    size_t head_ = 0;
+    size_t count_ = 0;
+};
+
 bool s_on_home = true;
-ScreenFactory s_back_stack[kMaxBack] = {};
-int s_back_depth = 0;
+BoundedRingStack<ScreenFactory, kMaxBack> s_back_stack;
 
 LVAdapterDisplay* GetAdapterDisplay() {
     if (auto* self = LVAdapterDisplay::Instance()) {
@@ -65,35 +106,15 @@ void OnStatusNetworkIconClicked(lv_event_t* /*e*/) {
 }
 
 void ClearBackStack() {
-    s_back_depth = 0;
-    for (int i = 0; i < kMaxBack; ++i) {
-        s_back_stack[i] = nullptr;
-    }
+    s_back_stack.Clear();
 }
 
 void PushBackFactory(ScreenFactory factory) {
-    if (factory == nullptr) {
-        return;
-    }
-    if (s_back_depth < kMaxBack) {
-        s_back_stack[s_back_depth++] = factory;
-    } else {
-        for (int i = 1; i < kMaxBack; ++i) {
-            s_back_stack[i - 1] = s_back_stack[i];
-        }
-        s_back_stack[kMaxBack - 1] = factory;
-        ESP_LOGW(TAG, "back stack full, drop oldest");
-    }
+    s_back_stack.Push(factory);
 }
 
 ScreenFactory PopBackFactory() {
-    if (s_back_depth <= 0) {
-        return nullptr;
-    }
-    --s_back_depth;
-    ScreenFactory f = s_back_stack[s_back_depth];
-    s_back_stack[s_back_depth] = nullptr;
-    return f;
+    return s_back_stack.Pop();
 }
 
 void GoHomeAsync(void* /*user_data*/) {
@@ -101,7 +122,7 @@ void GoHomeAsync(void* /*user_data*/) {
         ESP_LOGI(TAG, "home ignored (already home)");
         return;
     }
-    ESP_LOGI(TAG, "-> home (clear back stack depth was %d)", s_back_depth);
+    ESP_LOGI(TAG, "-> home (clear back stack depth was %d)", s_back_stack.Depth());
     ScreenGoHome();
 }
 
@@ -112,7 +133,7 @@ void NavigateBackAsync(void* /*user_data*/) {
     }
     ScreenFactory prev = PopBackFactory();
     if (prev != nullptr) {
-        ESP_LOGI(TAG, "navigate back -> recreate (stack left=%d)", s_back_depth);
+        ESP_LOGI(TAG, "navigate back -> recreate (stack left=%d)", s_back_stack.Depth());
         s_on_home = false;
         ScreenLoadReplace(prev());
         return;
@@ -296,7 +317,7 @@ void ScreenNavigateTo(lv_obj_t* (*create)()) {
         std::strcmp(cur, "none") != 0) {
         if (ScreenFactory factory = VkKey_GetScreenFactory(cur)) {
             PushBackFactory(factory);
-            ESP_LOGI(TAG, "navigate to: push back factory for %s (depth=%d)", cur, s_back_depth);
+            ESP_LOGI(TAG, "navigate to: push back factory for %s (depth=%d)", cur, s_back_stack.Depth());
         }
     }
     s_on_home = false;
