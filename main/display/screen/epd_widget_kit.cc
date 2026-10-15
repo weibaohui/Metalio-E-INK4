@@ -133,6 +133,18 @@ void EpdDialog::Show(const char* title, const char* message, const char* confirm
     }, arg);
 }
 
+// ==================== EpdText 自动折行文本实现 ====================
+
+void EpdText::EnableAutoWrap(lv_obj_t* label, lv_coord_t width_pct) {
+    if (label == nullptr) return;
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(label, lv_pct(width_pct));
+}
+
+lv_obj_t* EpdText::Create(lv_obj_t* parent, const char* text, int font_size, bool wrap) {
+    return ScreenMakeLabel(parent, text, font_size, wrap);
+}
+
 // ==================== EpdScroll 底层翻页滚动实现 ====================
 
 namespace EpdScroll {

@@ -254,15 +254,21 @@ lv_obj_t* WifiTransferScreen::Create() {
 
     lv_obj_t* title_left = lv_label_create(browser_card);
     lv_label_set_text(title_left, "电脑 / 手机浏览器访问");
+    lv_obj_set_width(title_left, lv_pct(100));
+    lv_label_set_long_mode(title_left, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(title_left, title_font ? title_font : UiFont(), 0);
     lv_obj_set_style_text_color(title_left, lv_color_black(), 0);
 
     s_ui.wifi_status_lbl = lv_label_create(browser_card);
+    lv_obj_set_width(s_ui.wifi_status_lbl, lv_pct(100));
+    lv_label_set_long_mode(s_ui.wifi_status_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.wifi_status_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.wifi_status_lbl, lv_color_black(), 0);
 
     lv_obj_t* tip_h = lv_label_create(browser_card);
     lv_label_set_text(tip_h, "同局域网浏览器输入下方网址即可传书:");
+    lv_obj_set_width(tip_h, lv_pct(100));
+    lv_label_set_long_mode(tip_h, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(tip_h, UiFont(), 0);
     lv_obj_set_style_text_color(tip_h, lv_color_black(), 0);
 
@@ -279,11 +285,14 @@ lv_obj_t* WifiTransferScreen::Create() {
 
     s_ui.storage_lbl = lv_label_create(browser_card);
     lv_obj_set_width(s_ui.storage_lbl, lv_pct(100));
+    lv_label_set_long_mode(s_ui.storage_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.storage_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.storage_lbl, lv_color_black(), 0);
 
     lv_obj_t* fmt_lbl = lv_label_create(browser_card);
     lv_label_set_text(fmt_lbl, "支持格式: .txt / .epub / .ebook / .pdf (直存图书库)");
+    lv_obj_set_width(fmt_lbl, lv_pct(100));
+    lv_label_set_long_mode(fmt_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(fmt_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(fmt_lbl, lv_color_black(), 0);
 
@@ -295,11 +304,17 @@ lv_obj_t* WifiTransferScreen::Create() {
 
     lv_obj_t* qr_title = lv_label_create(s_ui.qr_card);
     lv_label_set_text(qr_title, "手机扫码直达");
+    lv_obj_set_width(qr_title, lv_pct(100));
+    lv_label_set_long_mode(qr_title, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(qr_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(qr_title, title_font ? title_font : UiFont(), 0);
     lv_obj_set_style_text_color(qr_title, lv_color_black(), 0);
 
     s_ui.qr_tip_lbl = lv_label_create(s_ui.qr_card);
     lv_label_set_text(s_ui.qr_tip_lbl, "手机微信 / 相机扫码打开");
+    lv_obj_set_width(s_ui.qr_tip_lbl, lv_pct(100));
+    lv_label_set_long_mode(s_ui.qr_tip_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(s_ui.qr_tip_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(s_ui.qr_tip_lbl, UiFont(), 0);
     lv_obj_set_style_text_color(s_ui.qr_tip_lbl, lv_color_black(), 0);
 
@@ -322,6 +337,9 @@ lv_obj_t* WifiTransferScreen::Create() {
 
     lv_obj_t* qr_subtip = lv_label_create(s_ui.qr_card);
     lv_label_set_text(qr_subtip, "免输网址 · 手机直接选书上传");
+    lv_obj_set_width(qr_subtip, lv_pct(100));
+    lv_label_set_long_mode(qr_subtip, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(qr_subtip, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(qr_subtip, UiFont(), 0);
     lv_obj_set_style_text_color(qr_subtip, lv_color_black(), 0);
 
@@ -332,6 +350,8 @@ lv_obj_t* WifiTransferScreen::Create() {
 
     lv_obj_t* ltitle = lv_label_create(bottom_card);
     lv_label_set_text(ltitle, "实时传输动态");
+    lv_obj_set_width(ltitle, lv_pct(100));
+    lv_label_set_long_mode(ltitle, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(ltitle, title_font ? title_font : UiFont(), 0);
     lv_obj_set_style_text_color(ltitle, lv_color_black(), 0);
 

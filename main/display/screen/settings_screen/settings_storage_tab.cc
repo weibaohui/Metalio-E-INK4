@@ -167,7 +167,7 @@ void SettingsStorageTab_Build(lv_obj_t* page) {
     s_ui.status_lbl = lv_label_create(page);
     lv_label_set_text(s_ui.status_lbl, "");
     lv_obj_set_width(s_ui.status_lbl, lv_pct(100));
-    lv_label_set_long_mode(s_ui.status_lbl, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(s_ui.status_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.status_lbl, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(s_ui.status_lbl, lv_color_black(), 0);
     lv_obj_clear_flag(s_ui.status_lbl, LV_OBJ_FLAG_CLICKABLE);
@@ -175,7 +175,7 @@ void SettingsStorageTab_Build(lv_obj_t* page) {
     s_ui.capacity_lbl = lv_label_create(page);
     lv_label_set_text(s_ui.capacity_lbl, "");
     lv_obj_set_width(s_ui.capacity_lbl, lv_pct(100));
-    lv_label_set_long_mode(s_ui.capacity_lbl, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(s_ui.capacity_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.capacity_lbl, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(s_ui.capacity_lbl, lv_color_black(), 0);
     lv_obj_clear_flag(s_ui.capacity_lbl, LV_OBJ_FLAG_CLICKABLE);
