@@ -212,9 +212,10 @@ private:
  * @brief 墨水屏标准页面脚手架配置
  */
 struct EpdPageScaffoldConfig {
-    const char* title = nullptr;          ///< 页面标题 (若为 nullptr 则不创建 Header)
-    bool show_status_bar = true;          ///< 是否挂载统一系统状态栏
-    bool show_back_btn = true;            ///< Header 是否带返回键 (默认调 ScreenRequestBack)
+    const char* title = nullptr;          ///< 页面标题/元数据
+    bool show_header = false;             ///< 是否生成统一顶栏横条 (默认 false，不占 56px 屏幕空间)
+    bool show_status_bar = true;          ///< 是否挂载统一系统状态栏 (36px)
+    bool show_back_btn = false;           ///< Header 是否带返回键 (当 show_header=true 时生效)
     lv_event_cb_t on_back = nullptr;      ///< 自定义返回回调 (若为空则默认 ScreenRequestBack)
     bool scrollable = false;              ///< 内容区是否自动启用 EpdPageScrollView
     EpdPageScrollConfig scroll_cfg;       ///< 滚动配置 (当 scrollable=true 时生效)

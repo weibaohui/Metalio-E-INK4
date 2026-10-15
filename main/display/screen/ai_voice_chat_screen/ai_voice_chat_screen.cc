@@ -659,6 +659,7 @@ lv_obj_t* AiVoiceChatScreen::Create() {
 
     auto* scaffold = EpdWidgetKit::EpdPageScaffold::Create({
         .title = "AI 语音对话",
+        .show_header = true,
         .show_status_bar = true,
         .show_back_btn = true,
         .scrollable = false,

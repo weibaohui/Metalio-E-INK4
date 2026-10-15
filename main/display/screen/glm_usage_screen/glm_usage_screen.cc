@@ -171,7 +171,7 @@ void RebuildContextTabs(const std::vector<GlmUsageContext>& contexts) {
 }
 
 void RefreshUsageUi() {
-    if (!s_screen_alive || s_ui.title_lbl == nullptr) {
+    if (!s_screen_alive) {
         return;
     }
 
@@ -188,7 +188,9 @@ void RefreshUsageUi() {
     }
 
     if (contexts.empty()) {
-        lv_label_set_text(s_ui.title_lbl, "GLM 用量");
+        if (s_ui.title_lbl != nullptr) {
+            lv_label_set_text(s_ui.title_lbl, "GLM 用量");
+        }
         lv_label_set_text(s_ui.plan_lbl, "等待 MCP 配置");
         lv_label_set_text(s_ui.five_pct_lbl, "5 小时窗口  --");
         lv_bar_set_value(s_ui.five_bar, 0, LV_ANIM_OFF);
@@ -205,7 +207,9 @@ void RefreshUsageUi() {
         ? status.active_context : 0;
     const GlmUsageContext& context = contexts[selected];
     const GlmUsage& usage = context.usage;
-    lv_label_set_text(s_ui.title_lbl, context.name.c_str());
+    if (s_ui.title_lbl != nullptr) {
+        lv_label_set_text(s_ui.title_lbl, context.name.c_str());
+    }
 
     const std::string plan_state = context.last_ok
         ? UpdatedText(context.updated_at) : "尚未成功";
@@ -432,35 +436,6 @@ lv_obj_t* GlmUsageScreen::Create() {
     s_ui.scaffold = scaffold;
     s_ui.screen = scaffold->GetScreen();
     lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
-
-    // 头部右侧挂载刷新按钮
-    lv_obj_t* head = scaffold->GetHeader();
-    if (head != nullptr) {
-        // child 0: 返回按钮, child 1: 标题标签
-        s_ui.title_lbl = lv_obj_get_child(head, 1);
-
-        s_ui.refresh_btn = lv_obj_create(head);
-        lv_obj_remove_style_all(s_ui.refresh_btn);
-        lv_obj_set_size(s_ui.refresh_btn, 80, 38);
-        lv_obj_set_style_bg_color(s_ui.refresh_btn, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(s_ui.refresh_btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(s_ui.refresh_btn, lv_color_black(), 0);
-        lv_obj_set_style_border_width(s_ui.refresh_btn, 2, 0);
-        lv_obj_set_style_radius(s_ui.refresh_btn, LV_RADIUS_CIRCLE, 0);
-        lv_obj_add_flag(s_ui.refresh_btn, LV_OBJ_FLAG_CLICKABLE);
-        HapticAttachClick(s_ui.refresh_btn);
-        lv_obj_add_event_cb(s_ui.refresh_btn, [](lv_event_t*) {
-            GlmUsageService::GetInstance().RequestRefresh();
-            StatusBarManager::GetInstance().ShowToast("正在请求刷新用量...", 1500);
-        }, LV_EVENT_CLICKED, nullptr);
-
-        lv_obj_t* r_lbl = lv_label_create(s_ui.refresh_btn);
-        lv_label_set_text(r_lbl, "刷新");
-        lv_obj_set_style_text_font(r_lbl, UiFont(), 0);
-        lv_obj_set_style_text_color(r_lbl, lv_color_black(), 0);
-        lv_obj_center(r_lbl);
-        lv_obj_clear_flag(r_lbl, LV_OBJ_FLAG_CLICKABLE);
-    }
 
     BuildBody(scaffold->GetContentContainer());
 
