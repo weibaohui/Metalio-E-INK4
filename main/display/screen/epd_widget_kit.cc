@@ -489,7 +489,7 @@ EpdPageScaffold* EpdPageScaffold::Create(const Config& cfg) {
         top_offset += scaffold->status_bar_.height;
     }
 
-    if (cfg.title != nullptr) {
+    if (cfg.show_header && cfg.title != nullptr) {
         scaffold->header_ = EpdHeader::Create(scaffold->scr_, cfg.title, cfg.on_back);
         if (scaffold->header_ != nullptr) {
             lv_obj_align(scaffold->header_, LV_ALIGN_TOP_MID, 0, top_offset);
