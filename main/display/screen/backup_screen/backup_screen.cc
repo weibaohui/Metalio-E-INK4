@@ -16,7 +16,7 @@
 #include "display/screen/epd_widget_kit.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
-#include "nvs_backup_service.h"
+#include "services/backup/nvs_backup_service.h"
 #include "reader/file_size.h"
 #include "screen_common.h"
 #include "sd_paths.h"
