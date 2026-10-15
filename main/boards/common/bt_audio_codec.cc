@@ -85,12 +85,21 @@ BTAudioCodecDuplex::BTAudioCodecDuplex(int input_sample_rate, int output_sample_
         .gpio_cfg = {.mclk = I2S_GPIO_UNUSED, .bclk = bclk, .ws = ws, .dout = dout, .din = din, .invert_flags = {.mclk_inv = false, .bclk_inv = false, .ws_inv = false}}};
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle_, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle_, &std_cfg));
-    ESP_LOGI(TAG, "Duplex channels created");
+    esp_err_t tx_en = i2s_channel_enable(tx_handle_);
+    esp_err_t rx_en = i2s_channel_enable(rx_handle_);
+    if (tx_en == ESP_OK && rx_en == ESP_OK) {
+        started_ = true;
+    }
+    ESP_LOGI(TAG, "Duplex channels created and enabled (tx=%s, rx=%s)",
+             esp_err_to_name(tx_en), esp_err_to_name(rx_en));
 }
 
 int BTAudioCodec::Write(const int16_t *data, int samples)
 {
     std::lock_guard<std::mutex> lock(data_if_mutex_);
+    if (tx_handle_ == nullptr) {
+        return 0;
+    }
     // 双声道：每个采样点需要输出左右两个声道的数据。
     // 复用成员缓冲(容量只增不减),杜绝每次调用 8KB 内部堆的分配/释放抖动。
     if (static_cast<int>(tx_buffer_.size()) < samples * 2) {
@@ -120,6 +129,12 @@ int BTAudioCodec::Write(const int16_t *data, int samples)
     // (音频毛刺),远优于重启/假死。60ms 分片喂流,1000ms 超时留足 DMA 排空余量。
     esp_err_t err = i2s_channel_write(tx_handle_, buffer.data(), samples * 2 * sizeof(int32_t),
                                       &bytes_written, pdMS_TO_TICKS(1000));
+    if (err == ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "i2s tx not enabled, auto-enabling...");
+        i2s_channel_enable(tx_handle_);
+        err = i2s_channel_write(tx_handle_, buffer.data(), samples * 2 * sizeof(int32_t),
+                                &bytes_written, pdMS_TO_TICKS(1000));
+    }
     if (err != ESP_OK) {
         static int64_t s_last_recover_us = 0;
         const int64_t now_us = esp_timer_get_time();
@@ -137,6 +152,9 @@ int BTAudioCodec::Write(const int16_t *data, int samples)
 
 int BTAudioCodec::Read(int16_t *dest, int samples)
 {
+    if (rx_handle_ == nullptr) {
+        return 0;
+    }
     size_t bytes_read = 0;
 
     // 复用成员缓冲(容量只增不减),对齐 Write/tx_buffer_:杜绝每次调用临时
@@ -151,6 +169,13 @@ int BTAudioCodec::Read(int16_t *dest, int samples)
     esp_err_t err = i2s_channel_read(rx_handle_, bit32_buffer.data(),
                                      samples * sizeof(int32_t), &bytes_read,
                                      pdMS_TO_TICKS(1000));
+    if (err == ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "i2s rx not enabled, auto-enabling...");
+        i2s_channel_enable(rx_handle_);
+        err = i2s_channel_read(rx_handle_, bit32_buffer.data(),
+                               samples * sizeof(int32_t), &bytes_read,
+                               pdMS_TO_TICKS(1000));
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "i2s_channel_read failed: %s (samples=%d)", esp_err_to_name(err), samples);
         return 0;
