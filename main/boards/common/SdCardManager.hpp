@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -35,7 +37,8 @@ public:
     SdCardManager& operator=(const SdCardManager&) = delete;
 
     bool Mount() {
-        if (mounted_) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (mounted_.load(std::memory_order_acquire)) {
             ESP_LOGD(kTag, "SD card already mounted");
             return true;
         }
@@ -68,7 +71,7 @@ public:
         }
 
         raw_owned_ = false;
-        mounted_ = true;
+        mounted_.store(true, std::memory_order_release);
         sdmmc_card_print_info(stdout, card_);
         ESP_LOGI(kTag, "SD卡挂载成功!");
         if (!SdEnsureAppLayout()) {
@@ -79,7 +82,8 @@ public:
     }
 
     void Unmount() {
-        if (!mounted_ || card_ == nullptr) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (!mounted_.load(std::memory_order_acquire) || card_ == nullptr) {
             ReleaseRawCard();
             return;
         }
@@ -89,14 +93,15 @@ public:
             ESP_LOGW(kTag, "sdcard_unmount: %s", esp_err_to_name(err));
         }
         card_ = nullptr;
-        mounted_ = false;
+        mounted_.store(false, std::memory_order_release);
         raw_owned_ = false;
         ESP_LOGI(kTag, "SD card unmounted");
     }
 
     // 卸掉 VFS（若有），重新 sdmmc_card_init，供后续 MSC 等 raw 访问。
     sdmmc_card_t* InitRawCardForMsc() {
-        if (mounted_) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (mounted_.load(std::memory_order_acquire)) {
             Unmount();
         } else {
             ReleaseRawCard();
@@ -155,8 +160,9 @@ public:
     }
 
     void ReleaseRawCard() {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (!raw_owned_ || card_ == nullptr) {
-            if (!mounted_) {
+            if (!mounted_.load(std::memory_order_acquire)) {
                 card_ = nullptr;
             }
             raw_owned_ = false;
@@ -167,27 +173,32 @@ public:
         free(card_);
         card_ = nullptr;
         raw_owned_ = false;
-        mounted_ = false;
+        mounted_.store(false, std::memory_order_release);
     }
 
     void NotifyExternalAppMount(sdmmc_card_t* card) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         card_ = card;
-        mounted_ = (card != nullptr);
+        mounted_.store(card != nullptr, std::memory_order_release);
     }
 
     void NotifyExportedToHost() {
-        mounted_ = false;
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        mounted_.store(false, std::memory_order_release);
     }
 
     bool RemountVfsFromCard() {
-        if (mounted_ && !raw_owned_) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (mounted_.load(std::memory_order_acquire) && !raw_owned_) {
             return true;
         }
         ReleaseRawCard();
         return Mount();
     }
 
-    bool IsMounted() const { return mounted_; }
+    bool IsMounted() const { return mounted_.load(std::memory_order_acquire); }
+
+    std::recursive_mutex& GetIoMutex() const { return mutex_; }
 
     sdmmc_card_t* GetCard() const { return card_; }
 
@@ -270,8 +281,9 @@ private:
         ESP_LOGI(kTag, "Total %u entries", (unsigned)entries.size());
     }
 
+    mutable std::recursive_mutex mutex_;
     sdmmc_card_t* card_ = nullptr;
-    bool mounted_ = false;
+    std::atomic<bool> mounted_{false};
     bool raw_owned_ = false;
 };
 
