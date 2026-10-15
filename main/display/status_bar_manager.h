@@ -13,7 +13,8 @@
 
 #include <lvgl.h>
 #include <string>
-#include <map>
+#include <vector>
+#include <utility>
 #include <mutex>
 #include <cstdint>
 
@@ -95,7 +96,7 @@ private:
     uint64_t transient_expire_us_ = 0;
     void* transient_timer_ = nullptr;
 
-    std::map<std::string, std::string> ongoing_statuses_;
+    std::vector<std::pair<std::string, std::string>> ongoing_statuses_;
     std::string clock_str_;
 
     std::string current_rendered_text_;
