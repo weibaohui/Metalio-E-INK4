@@ -295,11 +295,6 @@ bool ScreenIsHome() {
 void ScreenLoadReplace(lv_obj_t* new_scr) {
     ModalManager::GetInstance().DismissAll();
     lv_obj_t* old_scr = lv_screen_active();
-    if (old_scr != nullptr && old_scr != new_scr) {
-        if (auto* disp = GetAdapterDisplay()) {
-            disp->RequestNextFullRefresh();
-        }
-    }
     lv_screen_load(new_scr);
     if (old_scr != nullptr && old_scr != new_scr) {
         lv_obj_delete_async(old_scr);
