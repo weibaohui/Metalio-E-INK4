@@ -28,11 +28,18 @@ static const char* TAG = "PowerHw";
 
 // MAIN_PWR 掉电后外置 BT 模组冷启动，AT 前需短 settle（异步任务，勿堵 Flush/定时器）
 static constexpr uint32_t kMainRailBtSettleMs = 400;
-static constexpr uint32_t kMainRailBtTaskStack = 3072;
+static constexpr uint32_t kMainRailBtTaskStack = 4096;
 
 static bool s_main_rail_known = false;
 static bool s_main_rail_on = false;
 static std::atomic<bool> s_main_rail_bt_reinit_busy{false};
+
+void power_hw_main_rail_sync_boot(bool on)
+{
+    s_main_rail_known = true;
+    s_main_rail_on = on;
+    ESP_LOGI(TAG, "MAIN_PWR boot synced: %s", on ? "on" : "off");
+}
 
 /** 仅 4G 模式返回 Nt26Board；WiFi 模式 / 非双网板为 nullptr */
 static Nt26Board* GetCellularBoardOrNull()
@@ -51,9 +58,11 @@ static void NotifyNetworkIconChanged()
 
 static void MainRailBtReinitTask(void* /*arg*/)
 {
+    ESP_LOGI(TAG, "MainRailBtReinitTask: settling %u ms before BT Mode 1...", static_cast<unsigned>(kMainRailBtSettleMs));
     vTaskDelay(pdMS_TO_TICKS(kMainRailBtSettleMs));
     BluetoothScreen::ApplyDefaultMode();
     s_main_rail_bt_reinit_busy.store(false, std::memory_order_release);
+    ESP_LOGI(TAG, "MainRailBtReinitTask: BT Mode 1 applied");
     vTaskDelete(nullptr);
 }
 
@@ -65,6 +74,7 @@ static void ScheduleBtMode1AfterRailOn()
         ESP_LOGW(TAG, "MAIN_PWR BT reinit already pending");
         return;
     }
+    ESP_LOGI(TAG, "ScheduleBtMode1AfterRailOn: spawning main_rail_bt task...");
     if (xTaskCreate(MainRailBtReinitTask, "main_rail_bt", kMainRailBtTaskStack, nullptr, 5,
                     nullptr) != pdPASS) {
         s_main_rail_bt_reinit_busy.store(false, std::memory_order_release);

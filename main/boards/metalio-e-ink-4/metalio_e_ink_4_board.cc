@@ -268,6 +268,7 @@ private:
         ESP_ERROR_CHECK(io.setLevel(IOExpander::Pin::MAIN_PWR, false));
         vTaskDelay(pdMS_TO_TICKS(200));
         ESP_ERROR_CHECK(io.setLevel(IOExpander::Pin::MAIN_PWR, true));
+        power_hw_main_rail_sync_boot(true);
         ESP_ERROR_CHECK(io.setLevel(IOExpander::Pin::SCREEN_SOCKET_PWR, true));
         // 功放路由给 ESP32；PA 由 PowerPolicy 按 Speaking/通话 按需开，不在开机强开
         ESP_ERROR_CHECK(io.setLevel(IOExpander::Pin::PA_SWITCH, false));

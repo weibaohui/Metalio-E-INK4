@@ -34,6 +34,11 @@ esp_err_t power_hw_main_rail_set(bool on);
 bool power_hw_main_rail_is_on(void);
 
 /**
+ * @brief 开机初始化完成后对齐 MAIN_PWR 电源已知状态
+ */
+void power_hw_main_rail_sync_boot(bool on);
+
+/**
  * @brief 待机浅睡：暂停射频（保留 netif）
  * @return ESP_OK 成功
  */
