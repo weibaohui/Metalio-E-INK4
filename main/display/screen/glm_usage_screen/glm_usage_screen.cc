@@ -246,7 +246,13 @@ void RefreshUsageUi() {
     lv_label_set_text(s_ui.week_reset_lbl, week_reset_text.c_str());
 
     if (s_ui.scaffold != nullptr && s_ui.scaffold->GetScrollView() != nullptr) {
-        s_ui.scaffold->GetScrollView()->UpdatePageInfo();
+        auto* scroll = s_ui.scaffold->GetScrollView();
+        if (!contexts.empty()) {
+            scroll->SetPageInfo(static_cast<int>(selected + 1), static_cast<int>(contexts.size()));
+            scroll->SetNavButtonsEnabled(selected > 0, selected + 1 < contexts.size());
+        } else {
+            scroll->SetPageInfo(1, 1);
+        }
     }
 }
 
@@ -457,6 +463,22 @@ lv_obj_t* GlmUsageScreen::Create() {
     }
 
     BuildBody(scaffold->GetContentContainer());
+
+    auto* scroll = scaffold->GetScrollView();
+    if (scroll != nullptr) {
+        scroll->SetOnPageNav([](int dir) {
+            auto& service = GlmUsageService::GetInstance();
+            const auto contexts = service.GetContexts();
+            if (contexts.empty()) return;
+            const size_t count = contexts.size();
+            const size_t active = service.GetStatus().active_context;
+            if (dir < 0 && active > 0) {
+                service.SelectContext(active - 1);
+            } else if (dir > 0 && active + 1 < count) {
+                service.SelectContext(active + 1);
+            }
+        });
+    }
 
     RefreshUsageUi();
     SyncFooter();
