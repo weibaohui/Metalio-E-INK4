@@ -103,8 +103,6 @@ void PeekAllIntoCache(const std::vector<BookInfo>& books) {
 
 void WorkerTask(void* /*arg*/) {
     {
-        book_home_snapshot::HydrateFromNvs();
-
         ESP_LOGI(TAG, "开机书库预热: 开始");
         SetPhase(Phase::kScan);
         s_cache_ready.store(false, std::memory_order_release);
