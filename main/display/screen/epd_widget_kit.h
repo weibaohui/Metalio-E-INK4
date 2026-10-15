@@ -103,6 +103,7 @@ namespace EpdScroll {
  */
 struct EpdPageScrollConfig {
     bool show_page_bar = true;       ///< 是否显示翻页控制栏
+    bool auto_hide_single_page = true;///< 仅 1 页时自动隐藏翻页控制栏，释放屏幕空间 (默认开启)
     bool enable_swipe = true;         ///< 是否启用触摸上下滑动手势
     int overlap_px = 40;              ///< 翻页视口重叠留白 (像素)
     int bar_height = 48;              ///< 控制栏高度
@@ -117,7 +118,8 @@ struct EpdPageScrollConfig {
  * 2. 原生支持触摸上下滑动 (Swipe Up/Down) 顺畅翻页;
  * 3. 内置高对比度大热区翻页控制栏 ([ ▲ 上一页 ] [ 第 1 / 4 页 ] [ ▼ 下一页 ]), 附带触觉振动反馈;
  * 4. 自动管理页码计算与首尾边界禁用状态;
- * 5. 生命周期绑定: 外部删除父容器时, C++ 控件对象自动安全析构。
+ * 5. 支持业务层接管页码与拦截前后翻页事件;
+ * 6. 生命周期绑定: 外部删除父容器时, C++ 控件对象自动安全析构。
  */
 class EpdPageScrollView {
 public:
@@ -156,6 +158,26 @@ public:
     /** @brief 内容动态增减后, 重新测量并刷新页码指示与按钮可用状态 */
     void UpdatePageInfo();
 
+    /** @brief 允许应用自行接管页码显示 (如由业务数据决定的第 x / y 页) */
+    void SetPageInfo(int cur_page, int total_pages);
+
+    /** @brief 自定义中间页码文本 (如 "第 1 / 2 组织" 等) */
+    void SetPageText(const char* text);
+
+    /** @brief 重置为自动基于视口滚动高度计算页码 */
+    void ResetAutoPageInfo();
+
+    /** @brief 动态显隐翻页控制栏 */
+    void SetPageBarVisible(bool visible);
+
+    /** @brief 独立设置前后翻页按钮可用状态 */
+    void SetNavButtonsEnabled(bool prev_enabled, bool next_enabled);
+
+    /** @brief 注册自定义翻页动作拦截器 (dir: -1=上一页, +1=下一页; 若注册则点击前后按钮时优先调用此回调) */
+    void SetOnPageNav(std::function<void(int dir)> on_nav) {
+        on_page_nav_ = on_nav;
+    }
+
     int GetCurrentPage() const { return cur_page_; }
     int GetTotalPages() const { return total_pages_; }
 
@@ -178,6 +200,9 @@ private:
 
     int cur_page_ = 1;
     int total_pages_ = 1;
+    bool manual_page_info_ = false;
+    std::string custom_page_text_;
+    std::function<void(int dir)> on_page_nav_;
     std::function<void(int cur_page, int total_pages)> on_page_changed_;
 
     void RefreshBarUI();

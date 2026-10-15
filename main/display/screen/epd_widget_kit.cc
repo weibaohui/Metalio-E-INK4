@@ -317,14 +317,24 @@ EpdPageScrollView* EpdPageScrollView::Create(lv_obj_t* parent, const Config& cfg
 
         view->prev_btn_ = CreateNavBtn(view->bar_, "▲ 上一页", [](lv_event_t* e) {
             auto* self = static_cast<EpdPageScrollView*>(lv_event_get_user_data(e));
-            if (self) self->PageUp();
+            if (!self) return;
+            if (self->on_page_nav_) {
+                self->on_page_nav_(-1);
+            } else {
+                self->PageUp();
+            }
         }, view);
 
         view->page_lbl_ = ScreenMakeLabel(view->bar_, "第 1 / 1 页", 22, false);
 
         view->next_btn_ = CreateNavBtn(view->bar_, "▼ 下一页", [](lv_event_t* e) {
             auto* self = static_cast<EpdPageScrollView*>(lv_event_get_user_data(e));
-            if (self) self->PageDown();
+            if (!self) return;
+            if (self->on_page_nav_) {
+                self->on_page_nav_(1);
+            } else {
+                self->PageDown();
+            }
         }, view);
     };
 
@@ -379,6 +389,10 @@ void EpdPageScrollView::ScrollToBottom() {
 }
 
 void EpdPageScrollView::UpdatePageInfo() {
+    if (manual_page_info_) {
+        RefreshBarUI();
+        return;
+    }
     EpdScroll::GetPageInfo(container_, &cur_page_, &total_pages_, cfg_.overlap_px);
     RefreshBarUI();
     if (on_page_changed_) {
@@ -386,12 +400,62 @@ void EpdPageScrollView::UpdatePageInfo() {
     }
 }
 
-void EpdPageScrollView::RefreshBarUI() {
-    if (!cfg_.show_page_bar || page_lbl_ == nullptr) return;
+void EpdPageScrollView::SetPageInfo(int cur_page, int total_pages) {
+    manual_page_info_ = true;
+    cur_page_ = (cur_page < 1) ? 1 : cur_page;
+    total_pages_ = (total_pages < 1) ? 1 : total_pages;
+    custom_page_text_.clear();
+    RefreshBarUI();
+    if (on_page_changed_) {
+        on_page_changed_(cur_page_, total_pages_);
+    }
+}
 
-    char buf[32];
-    snprintf(buf, sizeof(buf), "第 %d / %d 页", cur_page_, total_pages_);
-    lv_label_set_text(page_lbl_, buf);
+void EpdPageScrollView::SetPageText(const char* text) {
+    manual_page_info_ = true;
+    custom_page_text_ = (text != nullptr) ? text : "";
+    RefreshBarUI();
+}
+
+void EpdPageScrollView::ResetAutoPageInfo() {
+    manual_page_info_ = false;
+    custom_page_text_.clear();
+    UpdatePageInfo();
+}
+
+void EpdPageScrollView::SetPageBarVisible(bool visible) {
+    if (bar_ != nullptr) {
+        if (visible) {
+            lv_obj_clear_flag(bar_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(bar_, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+void EpdPageScrollView::SetNavButtonsEnabled(bool prev_enabled, bool next_enabled) {
+    if (prev_btn_) SetBtnEnabled(prev_btn_, prev_enabled);
+    if (next_btn_) SetBtnEnabled(next_btn_, next_enabled);
+}
+
+void EpdPageScrollView::RefreshBarUI() {
+    if (!cfg_.show_page_bar || bar_ == nullptr || page_lbl_ == nullptr) return;
+
+    // 单页时自动隐藏翻页控制栏，直接把空间返还给内容视口
+    if (cfg_.auto_hide_single_page && total_pages_ <= 1) {
+        lv_obj_add_flag(bar_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    } else {
+        lv_obj_clear_flag(bar_, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (!custom_page_text_.empty()) {
+        lv_label_set_text(page_lbl_, custom_page_text_.c_str());
+    } else {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "第 %d / %d 页", cur_page_, total_pages_);
+        lv_label_set_text(page_lbl_, buf);
+    }
 
     if (prev_btn_) {
         SetBtnEnabled(prev_btn_, cur_page_ > 1);
