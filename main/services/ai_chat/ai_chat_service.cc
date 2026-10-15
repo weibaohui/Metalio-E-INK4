@@ -31,6 +31,7 @@
 #include "tts_decoder.h"
 #include "minimax_speech.h"
 #include "minimax_bidi_tts.h"
+#include "boards/common/power_policy/power_hw.h"
 #include "audio_focus_manager.h"
 #include "protocols/api_http.h"
 
@@ -616,9 +617,13 @@ std::vector<int16_t> RecordWhileHeld() {
 // 碰 flash,禁 PSRAM 栈)。
 void PipelineTask(void*) {
     ESP_LOGI(TAG, "pipeline start (hold to record)");
+    if (!power_hw_main_rail_is_on()) {
+        power_hw_main_rail_set(true);
+    }
     auto* codec = Board::GetInstance().GetAudioCodec();
     if (codec == nullptr) { SetState(AiChatState::Error, "无音频编解码器"); ESP_LOGE(TAG, "no codec"); goto done; }
-    if (!codec->input_enabled()) codec->EnableInput(true);
+    codec->Start();
+    codec->EnableInput(true);
 
     while (!s_cancel.load()) {
         const bool barge = s_barge_record.exchange(false);

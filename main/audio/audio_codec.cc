@@ -94,6 +94,9 @@ void AudioCodec::EnableInput(bool enable) {
         return;
     }
     input_enabled_ = enable;
+    if (enable && rx_handle_ != nullptr) {
+        i2s_channel_enable(rx_handle_);
+    }
     ESP_LOGI(TAG, "Set input enable to %s", enable ? "true" : "false");
 }
 
@@ -102,5 +105,8 @@ void AudioCodec::EnableOutput(bool enable) {
         return;
     }
     output_enabled_ = enable;
+    if (enable && tx_handle_ != nullptr) {
+        i2s_channel_enable(tx_handle_);
+    }
     ESP_LOGI(TAG, "Set output enable to %s", enable ? "true" : "false");
 }
