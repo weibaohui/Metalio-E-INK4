@@ -22,7 +22,6 @@
 #define MAIN_EVENT_SEND_AUDIO (1 << 1)
 #define MAIN_EVENT_VAD_CHANGE (1 << 3)
 #define MAIN_EVENT_ERROR (1 << 4)
-#define MAIN_EVENT_CHECK_NEW_VERSION_DONE (1 << 5)
 #define MAIN_EVENT_CLOCK_TICK (1 << 6)
 
 
@@ -68,11 +67,6 @@ public:
     void EnsureAudioServiceRunning();
     void StopAudioServiceIfRunning();
 
-    // 待机浅睡唤醒后：恢复激活 UI 并继续 CheckVersion/Activate。
-    void ResumeActivationAfterStandby();
-    // 仍有未绑定验证码时，Idle 顶栏显示验证码而非时钟。
-    bool HasPendingActivationCode() const { return !activation_code_.empty(); }
-
 private:
     Application();
     ~Application();
@@ -92,18 +86,9 @@ private:
     bool audio_running_ = false;
     std::atomic<bool> boot_ready_{false}; // Start() 跑完后置 true
     int clock_ticks_ = 0;
-    std::string activation_code_;
-    std::string activation_message_;
-    std::atomic<bool> activation_kick_{false};
-    TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
-    void CheckNewVersion(Ota& ota);
-    void CheckAssetsVersion();
-    void ShowActivationCode(const std::string& code, const std::string& message);
     // Idle 状态栏：允许时钟页面刷 HH:MM；固定文案页改用 GetIdleStatusFixedText。
     void ApplyIdleStatusBar();
-    // 可中断延迟；Idle 时返回 false，activation_kick 时返回 true。
-    bool DelayMsInterruptible(int ms);
 };
 
 

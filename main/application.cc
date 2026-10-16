@@ -15,25 +15,21 @@
 #include "services/syslog_sender.h"
 #include "services/time_service.h"
 #include "services/mem_report/mem_report.h"
-#include "assets.h"
 #include "app_manager.h"
 #include "boot_key_handler.h"
 #include "fontpack_lvgl.h"
 #include "settings.h"
 #include "standby_screen/standby_screen.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
-#include "ota_confirm_dialog/ota_confirm_dialog.h"
 #include "ota_ignore.h"
 #include "reader/book_home_snapshot.h"
 #include "reader/book_progress_sync.h"
 #include "reader/book_library_warmup.h"
-#include "api_endpoints.h"
 
 #include <cstring>
 #include <ctime>
 #include <array>
 #include <algorithm>
-#include <thread>
 #include <esp_log.h>
 #include <esp_app_desc.h>
 #include <cJSON.h>
@@ -42,13 +38,6 @@
 #include <font_awesome.h>
 
 #define TAG "Application"
-
-namespace {
-
-constexpr int kAssistantNetSliceMs = 200;
-constexpr int kAssistantNetBudgetMs = 30000;
-
-}  // namespace
 
 static const char* const STATE_STRINGS[] = {
     "unknown",
@@ -127,220 +116,6 @@ void Application::StopAudioServiceIfRunning() {
     ESP_LOGI(TAG, "Audio service stopped");
 }
 
-void Application::CheckAssetsVersion() {
-    auto& board = Board::GetInstance();
-    auto display = board.GetDisplay();
-    auto& assets = Assets::GetInstance();
-
-    if (!assets.partition_valid()) {
-        ESP_LOGW(TAG, "Assets partition is disabled for board %s", BOARD_NAME);
-        return;
-    }
-    
-    Settings settings("assets", true);
-    // Check if there is a new assets need to be downloaded
-    std::string download_url = settings.GetString("download_url");
-
-    if (!download_url.empty()) {
-        settings.EraseKey("download_url");
-
-        char message[256];
-        snprintf(message, sizeof(message), Lang::Strings::FOUND_NEW_ASSETS, download_url.c_str());
-        Alert(Lang::Strings::LOADING_ASSETS, message, "cloud_arrow_down", Lang::Sounds::OGG_UPGRADE);
-        
-        // Wait for the audio service to be idle for 3 seconds
-        vTaskDelay(pdMS_TO_TICKS(3000));
-        SetDeviceState(kDeviceStateUpgrading);
-        display->SetChatMessage("system", Lang::Strings::PLEASE_WAIT);
-
-        bool success = assets.Download(download_url, [display](int progress, size_t speed) -> void {
-            std::thread([display, progress, speed]() {
-                char buffer[32];
-                snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
-                display->SetChatMessage("system", buffer);
-            }).detach();
-        });
-
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-        if (!success) {
-            Alert(Lang::Strings::ERROR, Lang::Strings::DOWNLOAD_ASSETS_FAILED, "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
-            vTaskDelay(pdMS_TO_TICKS(2000));
-            return;
-        }
-    }
-
-    // Apply assets
-    assets.Apply();
-    display->SetChatMessage("system", "");
-    display->SetEmotion("microchip_ai");
-}
-
-void Application::CheckNewVersion(Ota& ota) {
-    const int MAX_RETRY = 10;
-    int retry_count = 0;
-    int retry_delay = 10; // 初始重试延迟为10秒
-
-    activation_code_.clear();
-    activation_message_.clear();
-
-    auto& board = Board::GetInstance();
-    // 开机未连上时不空等激活重试；下次 EnsureNetworkReady 后再走 OTA/激活
-    if (!board.IsNetworkReady()) {
-        ESP_LOGW(TAG, "skip CheckNewVersion: network not ready");
-        xEventGroupSetBits(event_group_, MAIN_EVENT_CHECK_NEW_VERSION_DONE);
-        return;
-    }
-    // Cloudzao 空白开源版必须无条件跳过 OTA / 激活检测；即使旧 NVS 里残留 ota_url 也不能继续请求。
-    if (!api::HasDefaultOtaUrl()) {
-        ESP_LOGW(TAG, "skip CheckNewVersion: Cloudzao blank endpoints");
-        xEventGroupSetBits(event_group_, MAIN_EVENT_CHECK_NEW_VERSION_DONE);
-        return;
-    }
-    if (ota.GetCheckVersionUrl().length() < 10) {
-        ESP_LOGW(TAG, "skip CheckNewVersion: OTA URL not configured");
-        xEventGroupSetBits(event_group_, MAIN_EVENT_CHECK_NEW_VERSION_DONE);
-        return;
-    }
-    while (true) {
-        SetDeviceState(kDeviceStateActivating);
-        auto display = board.GetDisplay();
-        display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
-
-        esp_err_t err = ota.CheckVersion();
-        if (err != ESP_OK) {
-            retry_count++;
-            if (retry_count >= MAX_RETRY) {
-                ESP_LOGE(TAG, "Too many retries, exit version check");
-                return;
-            }
-
-            char error_message[128];
-            snprintf(error_message, sizeof(error_message), "code=%d, url=%s", err, ota.GetCheckVersionUrl().c_str());
-            char buffer[256];
-            snprintf(buffer, sizeof(buffer), Lang::Strings::CHECK_NEW_VERSION_FAILED, retry_delay, error_message);
-            Alert(Lang::Strings::ERROR, buffer, "cloud_slash", Lang::Sounds::OGG_EXCLAMATION);
-
-            ESP_LOGW(TAG, "Check new version failed, retry in %d seconds (%d/%d)", retry_delay, retry_count, MAX_RETRY);
-            for (int i = 0; i < retry_delay; i++) {
-                if (device_state_ == kDeviceStateIdle) {
-                    break;
-                }
-                if (DelayMsInterruptible(1000)) {
-                    break;
-                }
-            }
-            retry_delay *= 2; // 每次重试后延迟时间翻倍
-            continue;
-        }
-        retry_count = 0;
-        retry_delay = 10; // 重置重试延迟时间
-
-        if (ota.HasNewVersion()) {
-            const std::string& new_ver = ota.GetFirmwareVersion();
-            if (OtaIgnore::IsIgnored(new_ver)) {
-                ESP_LOGI(TAG, "firmware %s ignored in NVS; skip prompt", new_ver.c_str());
-            } else {
-                const auto choice = OtaConfirmDialog::ShowBlocking(
-                    ota.GetCurrentVersion().c_str(), new_ver.c_str(), OtaConfirmDialog::Mode::Boot);
-                if (choice == OtaConfirmDialog::Choice::Upgrade) {
-                    if (UpgradeFirmware(ota)) {
-                        return;  // reboot
-                    }
-                    // upgrade failed → fall through existing boot path
-                } else if (choice == OtaConfirmDialog::Choice::IgnorePersist) {
-                    OtaIgnore::Set(new_ver);
-                }
-                // RemindLater / ignore-after-set / upgrade-fail: same fall through as no new version
-            }
-        }
-
-        // No new version, mark the current version as valid
-        ota.MarkCurrentVersionValid();
-        if (!ota.HasActivationCode() && !ota.HasActivationChallenge()) {
-            activation_code_.clear();
-            activation_message_.clear();
-            xEventGroupSetBits(event_group_, MAIN_EVENT_CHECK_NEW_VERSION_DONE);
-            // Exit the loop if done checking new version
-            break;
-        }
-
-        display->SetStatus(Lang::Strings::ACTIVATION);
-        // Activation code is shown to the user and waiting for the user to input
-        if (ota.HasActivationCode()) {
-            ShowActivationCode(ota.GetActivationCode(), ota.GetActivationMessage());
-        }
-
-        // This will block the loop until the activation is done or timeout
-        for (int i = 0; i < 10; ++i) {
-            ESP_LOGI(TAG, "Activating... %d/%d", i + 1, 10);
-            esp_err_t err = ota.Activate();
-            if (err == ESP_OK) {
-                activation_code_.clear();
-                activation_message_.clear();
-                xEventGroupSetBits(event_group_, MAIN_EVENT_CHECK_NEW_VERSION_DONE);
-                break;
-            }
-            if (device_state_ == kDeviceStateIdle) {
-                break;
-            }
-            const int delay_ms = (err == ESP_ERR_TIMEOUT) ? 3000 : 10000;
-            if (DelayMsInterruptible(delay_ms)) {
-                continue;
-            }
-            if (device_state_ == kDeviceStateIdle) {
-                break;
-            }
-        }
-    }
-}
-
-void Application::ShowActivationCode(const std::string& code, const std::string& message) {
-    activation_code_ = code;
-    activation_message_ = message;
-    // 只在顶部状态栏显示验证码，不语音播报；日志里不打印 host 文本，避免任何云域名残留。
-    char status[64];
-    std::snprintf(status, sizeof(status), Lang::Strings::ACTIVATION_CODE_FMT, code.c_str());
-
-    ESP_LOGW(TAG, "Activation [%s]", status);
-    auto display = Board::GetInstance().GetDisplay();
-    display->SetStatus(status);
-}
-
-bool Application::DelayMsInterruptible(int ms) {
-    constexpr int kStepMs = 100;
-    for (int elapsed = 0; elapsed < ms; elapsed += kStepMs) {
-        if (device_state_ == kDeviceStateIdle) {
-            return false;
-        }
-        if (activation_kick_.exchange(false, std::memory_order_acq_rel)) {
-            return true;
-        }
-        vTaskDelay(pdMS_TO_TICKS(kStepMs));
-    }
-    if (device_state_ == kDeviceStateIdle) {
-        return false;
-    }
-    return activation_kick_.exchange(false, std::memory_order_acq_rel);
-}
-
-void Application::ResumeActivationAfterStandby() {
-    Schedule([this]() {
-        if (device_state_ != kDeviceStateActivating) {
-            return;
-        }
-        auto display = Board::GetInstance().GetDisplay();
-        display->SetStatus(activation_code_.empty() ? Lang::Strings::CHECKING_NEW_VERSION
-                                                    : Lang::Strings::ACTIVATION);
-        display->SetEmotion("neutral");
-        if (!activation_code_.empty()) {
-            ShowActivationCode(activation_code_, activation_message_);
-        }
-        activation_kick_.store(true, std::memory_order_release);
-        ESP_LOGI(TAG, "resume activation after standby LP");
-    });
-}
-
 void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
     ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
     auto display = Board::GetInstance().GetDisplay();
@@ -358,12 +133,6 @@ void Application::ApplyIdleStatusBar() {
     if (!display->AllowsIdleStatusClock()) {
         const char* text = display->GetIdleStatusFixedText();
         display->SetStatus((text != nullptr && text[0] != '\0') ? text : Lang::Strings::STANDBY);
-        return;
-    }
-
-    // 未绑定：Idle 顶栏保持验证码，勿被时钟盖住（进百问会改 state，退回首页也立刻恢复）
-    if (!activation_code_.empty()) {
-        ShowActivationCode(activation_code_, activation_message_);
         return;
     }
 
