@@ -45,7 +45,6 @@ public:
     void Schedule(std::function<void()> callback);
     void SetDeviceState(DeviceState state);
     void Alert(const char* status, const char* message, const char* emotion = "", const std::string_view& sound = "");
-    void DismissAlert();
     void Reboot();
     bool UpgradeFirmware(Ota& ota, const std::string& url = "");
     bool UpgradeFirmwareUrl(const std::string& url, const std::string& current_version,

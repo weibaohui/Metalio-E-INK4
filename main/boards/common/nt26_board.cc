@@ -305,7 +305,8 @@ bool Nt26Board::StartOrRestartModem(int timeout_ms, bool wait_for_ready) {
 }
 
 void Nt26Board::StartNetwork() {
-    StartOrRestartModem(static_cast<int>(kNetworkWaitTimeoutMs), true);
+    // 异步等网：无需同步阻塞开机，模组在后台发起注册并经事件驱动通知
+    StartOrRestartModem(static_cast<int>(kNetworkWaitTimeoutMs), false);
 }
 
 bool Nt26Board::IsNetworkReady() {
