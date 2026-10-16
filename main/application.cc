@@ -6,7 +6,6 @@
 #include "display.h"
 #include "system_info.h"
 #include "audio_codec.h"
-#include "websocket_protocol.h"
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 #include "services/glm_usage/glm_usage_service.h"
@@ -126,159 +125,6 @@ void Application::StopAudioServiceIfRunning() {
     audio_service_.Stop();
     audio_running_ = false;
     ESP_LOGI(TAG, "Audio service stopped");
-}
-
-void Application::EnsureProtocolReady() {
-    if (!api::HasHost()) {
-        ESP_LOGI(TAG, "EnsureProtocolReady skipped: blank cloud endpoints");
-        protocol_ready_ = false;
-        protocol_.reset();
-        return;
-    }
-    if (protocol_ready_ && protocol_) {
-        return;
-    }
-
-    auto display = Board::GetInstance().GetDisplay();
-    display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
-
-    protocol_ = std::make_unique<WebsocketProtocol>();
-
-    protocol_->OnConnected([this]() {
-        DismissAlert();
-    });
-
-    protocol_->OnNetworkError([this](const std::string& message) {
-        last_error_message_ = message;
-        xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
-    });
-    protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
-        if (device_state_ == kDeviceStateSpeaking) {
-            audio_service_.PushPacketToDecodeQueue(std::move(packet));
-        }
-    });
-    protocol_->OnAudioChannelOpened([this]() {
-        auto& board = Board::GetInstance();
-        auto codec = board.GetAudioCodec();
-        PowerPolicy::GetInstance().Acquire(PowerNeed::AudioSession);
-        if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
-            ESP_LOGW(TAG, "Server sample rate %d does not match device output sample rate %d, resampling may cause distortion",
-                protocol_->server_sample_rate(), codec->output_sample_rate());
-        }
-    });
-    protocol_->OnAudioChannelClosed([this]() {
-        PowerPolicy::GetInstance().Release(PowerNeed::AudioSession);
-        Schedule([this]() {
-            auto display = Board::GetInstance().GetDisplay();
-            display->SetChatMessage("system", "");
-            SetDeviceState(kDeviceStateIdle);
-        });
-    });
-    protocol_->OnIncomingJson([this](const cJSON* root) {
-        auto display = Board::GetInstance().GetDisplay();
-        auto type = cJSON_GetObjectItem(root, "type");
-        if (strcmp(type->valuestring, "tts") == 0) {
-            auto state = cJSON_GetObjectItem(root, "state");
-            if (strcmp(state->valuestring, "start") == 0) {
-                Schedule([this]() {
-                    if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
-                        SetDeviceState(kDeviceStateSpeaking);
-                    }
-                });
-            } else if (strcmp(state->valuestring, "stop") == 0) {
-                Schedule([this]() {
-                    if (device_state_ == kDeviceStateSpeaking) {
-                        if (listening_mode_ == kListeningModeManualStop) {
-                            SetDeviceState(kDeviceStateIdle);
-                        } else {
-                            SetDeviceState(kDeviceStateListening);
-                        }
-                    }
-                });
-            } else if (strcmp(state->valuestring, "sentence_start") == 0) {
-                auto text = cJSON_GetObjectItem(root, "text");
-                if (cJSON_IsString(text)) {
-                    ESP_LOGI(TAG, "<< %s", text->valuestring);
-                    Schedule([this, display, message = std::string(text->valuestring)]() {
-                        display->SetChatMessage("assistant", message.c_str());
-                    });
-                }
-            }
-        } else if (strcmp(type->valuestring, "stt") == 0) {
-            auto text = cJSON_GetObjectItem(root, "text");
-            if (cJSON_IsString(text)) {
-                ESP_LOGI(TAG, ">> %s", text->valuestring);
-                Schedule([this, display, message = std::string(text->valuestring)]() {
-                    display->SetChatMessage("user", message.c_str());
-                });
-            }
-        } else if (strcmp(type->valuestring, "llm") == 0) {
-            auto emotion = cJSON_GetObjectItem(root, "emotion");
-            if (cJSON_IsString(emotion)) {
-                Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
-                    display->SetEmotion(emotion_str.c_str());
-                });
-            }
-        } else if (strcmp(type->valuestring, "mcp") == 0) {
-            auto payload = cJSON_GetObjectItem(root, "payload");
-            if (cJSON_IsObject(payload)) {
-                McpServer::GetInstance().ParseMessage(payload);
-            }
-        } else if (strcmp(type->valuestring, "system") == 0) {
-            auto command = cJSON_GetObjectItem(root, "command");
-            if (cJSON_IsString(command)) {
-                ESP_LOGI(TAG, "System command: %s", command->valuestring);
-                if (strcmp(command->valuestring, "reboot") == 0) {
-                    Schedule([this]() {
-                        Reboot();
-                    });
-                } else {
-                    ESP_LOGW(TAG, "Unknown system command: %s", command->valuestring);
-                }
-            }
-        } else if (strcmp(type->valuestring, "alert") == 0) {
-            auto status = cJSON_GetObjectItem(root, "status");
-            auto message = cJSON_GetObjectItem(root, "message");
-            auto emotion = cJSON_GetObjectItem(root, "emotion");
-            if (cJSON_IsString(status) && cJSON_IsString(message) && cJSON_IsString(emotion)) {
-                Alert(status->valuestring, message->valuestring, emotion->valuestring, Lang::Sounds::OGG_VIBRATION);
-            } else {
-                ESP_LOGW(TAG, "Alert command requires status, message and emotion");
-            }
-#if CONFIG_RECEIVE_CUSTOM_MESSAGE
-        } else if (strcmp(type->valuestring, "custom") == 0) {
-            auto payload = cJSON_GetObjectItem(root, "payload");
-            ESP_LOGI(TAG, "Received custom message: %s", cJSON_PrintUnformatted(root));
-            if (cJSON_IsObject(payload)) {
-                Schedule([this, display, payload_str = std::string(cJSON_PrintUnformatted(payload))]() {
-                    display->SetChatMessage("system", payload_str.c_str());
-                });
-            } else {
-                ESP_LOGW(TAG, "Invalid custom message format: missing payload");
-            }
-#endif
-        } else {
-            ESP_LOGW(TAG, "Unknown message type: %s", type->valuestring);
-        }
-    });
-
-    bool protocol_started = protocol_->Start();
-    protocol_ready_ = true;
-
-    if (protocol_started && !current_version_.empty()) {
-        auto display = Board::GetInstance().GetDisplay();
-        std::string message = std::string(Lang::Strings::VERSION) + current_version_;
-        display->ShowNotification(message.c_str());
-        display->SetChatMessage("system", "");
-    }
-}
-
-void Application::TeardownProtocol() {
-    if (protocol_ && protocol_->IsAudioChannelOpened()) {
-        protocol_->CloseAudioChannel();
-    }
-    protocol_.reset();
-    protocol_ready_ = false;
 }
 
 void Application::CheckAssetsVersion() {
@@ -650,12 +496,6 @@ void Application::SetDeviceState(DeviceState state) {
 
 void Application::Reboot() {
     ESP_LOGI(TAG, "Rebooting...");
-    // Disconnect the audio channel
-    if (protocol_ && protocol_->IsAudioChannelOpened()) {
-        protocol_->CloseAudioChannel();
-    }
-    protocol_.reset();
-    protocol_ready_ = false;
     StopAudioServiceIfRunning();
 
     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -683,11 +523,6 @@ bool Application::UpgradeFirmwareUrl(const std::string& url, const std::string& 
     std::string cur = current_version.empty() ? "—" : current_version;
     std::string next = new_version.empty() ? "—" : new_version;
 
-    // Close audio channel if it's open
-    if (protocol_ && protocol_->IsAudioChannelOpened()) {
-        ESP_LOGI(TAG, "Closing audio channel before firmware upgrade");
-        protocol_->CloseAudioChannel();
-    }
     ESP_LOGD(TAG, "Starting firmware upgrade from URL: %s (cur=%s new=%s)", upgrade_url.c_str(),
              cur.c_str(), next.c_str());
 
@@ -741,23 +576,6 @@ bool Application::UpgradeFirmwareUrl(const std::string& url, const std::string& 
     return true;
 }
 
-void Application::SendMcpMessage(const std::string& payload) {
-    // protocol_ 可能在排队期间被 TeardownProtocol() 拆掉（离开助手页）。
-    // 真正发送时必须再判空，避免 LoadProhibited。
-    if (xTaskGetCurrentTaskHandle() == main_event_loop_task_handle_) {
-        if (protocol_) {
-            protocol_->SendMcpMessage(payload);
-        }
-        return;
-    }
-
-    Schedule([this, payload]() {
-        if (protocol_) {
-            protocol_->SendMcpMessage(payload);
-        }
-    });
-}
-
 void Application::SetAecMode(AecMode mode) {
     aec_mode_ = mode;
     Schedule([this]() {
@@ -779,11 +597,6 @@ void Application::SetAecMode(AecMode mode) {
             audio_service_.EnableDeviceAec(true);
             display->ShowNotification(Lang::Strings::RTC_MODE_ON);
             break;
-        }
-
-        // If the AEC mode is changed, close the audio channel
-        if (protocol_ && protocol_->IsAudioChannelOpened()) {
-            protocol_->CloseAudioChannel();
         }
     });
 }

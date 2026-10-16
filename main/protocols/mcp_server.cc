@@ -321,7 +321,7 @@ void McpServer::ParseMessage(const std::string& message) {
 
 void McpServer::ParseMessage(const cJSON* json) {
     ParseMessage(json, [](const std::string& payload) {
-        Application::GetInstance().SendMcpMessage(payload);
+        ESP_LOGD(TAG, "MCP response (no sink): %s", payload.c_str());
     });
 }
 
