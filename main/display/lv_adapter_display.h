@@ -64,6 +64,7 @@ public:
     void UpdateStatusBar(bool update_all = false) override;
     void SetPowerSaveMode(bool on) override;
     void SetPreviewImage(const void* image);
+    bool is_monochrome() const override { return true; }
 
     // 由各 Screen 在 Create 时绑定当前页控件；切页时覆盖。
     void BindStatusWidgets(lv_obj_t* network, lv_obj_t* mute, lv_obj_t* volume, lv_obj_t* battery,

@@ -12,7 +12,6 @@
 
 #include "application.h"
 #include "display.h"
-#include "oled_display.h"
 #include "board.h"
 #include "settings.h"
 #include "lvgl_theme.h"
@@ -158,11 +157,7 @@ void McpServer::AddUserOnlyTools() {
                 cJSON *json = cJSON_CreateObject();
                 cJSON_AddNumberToObject(json, "width", display->width());
                 cJSON_AddNumberToObject(json, "height", display->height());
-                if (dynamic_cast<OledDisplay*>(display)) {
-                    cJSON_AddBoolToObject(json, "monochrome", true);
-                } else {
-                    cJSON_AddBoolToObject(json, "monochrome", false);
-                }
+                cJSON_AddBoolToObject(json, "monochrome", display->is_monochrome());
                 return json;
             });
 

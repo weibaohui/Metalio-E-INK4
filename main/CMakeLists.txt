@@ -2,16 +2,8 @@
 set(SOURCES "audio/audio_codec.cc"
             "audio/audio_service.cc"
             "audio/codecs/no_audio_codec.cc"
-            "audio/codecs/box_audio_codec.cc"
-            "audio/codecs/es8311_audio_codec.cc"
-            "audio/codecs/es8374_audio_codec.cc"
-            "audio/codecs/es8388_audio_codec.cc"
-            "audio/codecs/es8389_audio_codec.cc"
-            "audio/codecs/dummy_audio_codec.cc"
             "audio/processors/audio_debugger.cc"
             "display/display.cc"
-            "display/lcd_display.cc"
-            "display/oled_display.cc"
             "display/lv_adapter_display.cc"
             "display/a2ui/a2ui.c"
             "display/a2ui/a2ui_render.c"
@@ -109,7 +101,6 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/bluetooth_screen/bluetooth_screen.cc"
             "display/screen/touch_missing_screen/touch_missing_screen.cc"
             "display/lvgl_display/lvgl_display.cc"
-            "display/emote_display.cc"
             "display/lvgl_display/emoji_collection.cc"
             "display/lvgl_display/lvgl_theme.cc"
             "display/lvgl_display/lvgl_font.cc"
@@ -332,15 +323,6 @@ endif()
 set(ASSISTANT_HINT_EN_A2I1
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded/ic_s_assistant_hint_en.a2i1")
 
-# If target chip is ESP32, exclude specific files to avoid build errors
-if(CONFIG_IDF_TARGET_ESP32)
-    list(REMOVE_ITEM SOURCES "audio/codecs/box_audio_codec.cc"
-                             "audio/codecs/es8388_audio_codec.cc"
-                             "audio/codecs/es8389_audio_codec.cc"
-                             "display/lvgl_display/jpg/image_to_jpeg.cpp"
-                             "display/lvgl_display/jpg/jpeg_to_image.c"
-                             )
-endif()
 
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${FACTORY_TEST_SOUNDS}

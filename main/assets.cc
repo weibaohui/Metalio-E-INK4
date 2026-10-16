@@ -3,10 +3,6 @@
 #include "display.h"
 #include "application.h"
 #include "lvgl_theme.h"
-#include "emote_display.h"
-#ifdef HAVE_LVGL
-#include "display/lcd_display.h"
-#endif
 
 #include <esp_log.h>
 #include <spi_flash_mmap.h>
@@ -236,9 +232,8 @@ bool Assets::Apply() {
     cJSON* hide_subtitle = cJSON_GetObjectItem(root, "hide_subtitle");
     if (cJSON_IsBool(hide_subtitle)) {
         bool hide = cJSON_IsTrue(hide_subtitle);
-        auto lcd_display = dynamic_cast<LcdDisplay*>(display);
-        if (lcd_display != nullptr) {
-            lcd_display->SetHideSubtitle(hide);
+        if (display != nullptr) {
+            display->SetHideSubtitle(hide);
             ESP_LOGI(TAG, "Set hide_subtitle to %s", hide ? "true" : "false");
         }
     }
