@@ -80,14 +80,12 @@ private:
     std::string last_error_message_;
     AudioService audio_service_;
 
-    bool has_server_time_ = false;
     std::string current_version_;
     bool audio_initialized_ = false;
     bool audio_running_ = false;
     std::atomic<bool> boot_ready_{false}; // Start() 跑完后置 true
-    int clock_ticks_ = 0;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
-    // Idle 状态栏：允许时钟页面刷 HH:MM；固定文案页改用 GetIdleStatusFixedText。
+    // Idle 状态栏：固定文案页设固定文案，时钟页直接清空状态恢复底栏时钟
     void ApplyIdleStatusBar();
 };
 
