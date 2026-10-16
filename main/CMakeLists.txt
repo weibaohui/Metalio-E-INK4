@@ -60,6 +60,8 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/book_screen/book_cover_loader.cc"
             "display/screen/book_screen/book_cloud_library.cc"
             "display/screen/book_screen/book_font_manager.cc"
+            "display/screen/book_screen/book_ui_state.cc"
+            "display/screen/book_screen/book_ttf_panel.cc"
             "reader/book_library.cc"
             "reader/book_home_snapshot.cc"
             "reader/book_stats_service.cc"
@@ -120,7 +122,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/backup_screen" "display/screen/system_upgrade_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services" "services/backup" "services/system_upgrade")
+set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/book_screen" "display/screen/backup_screen" "display/screen/system_upgrade_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services" "services/backup" "services/system_upgrade")
 
 # Add board common files explicitly (replaces GLOB to avoid cache issues and unwanted sources)
 list(APPEND SOURCES
