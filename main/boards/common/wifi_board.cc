@@ -136,17 +136,20 @@ void WifiBoard::StartNetwork() {
     }
     wifi_station.Start();
 
-    // 有已存 WiFi：等保网时长拿 IP；失败不自动 SoftAP，Pause STA（停扫），下次 EnsureNetworkReady 再拉
-    // 永久档(-1)此处仍按默认 30s：开机等待必须有界，AP 不在时不能 hang 住开机;
-    // "永久"只管开机后的空闲断网策略。
+    // 异步等网：启动连接后将超时守护移入后台线程，使开机主流程无需同步阻塞 8~30 秒。
+    // 开机主屏可 1 秒内迅速呈现，WiFi 连通或超时由后台自动处理并经 SystemEventBus 通知。
     const int grace_s = PowerPolicy::GetInstance().GetNetGraceSec();
     const int wait_ms = (grace_s > 0 ? grace_s : 30) * 1000;
-    if (!wifi_station.WaitForConnected(wait_ms)) {
-        ESP_LOGW(TAG, "WiFi not connected within net_grace %d s; skip auto SoftAP, pause STA",
-                 wait_ms / 1000);
-        wifi_station.PauseForLp();
-        return;
-    }
+    xTaskCreate([](void* arg) {
+        const int wait = static_cast<int>(reinterpret_cast<intptr_t>(arg));
+        auto& ws = WifiStation::GetInstance();
+        if (!ws.WaitForConnected(wait)) {
+            ESP_LOGW(TAG, "WiFi not connected within net_grace %d s; skip auto SoftAP, pause STA",
+                     wait / 1000);
+            ws.PauseForLp();
+        }
+        vTaskDelete(NULL);
+    }, "wifi_boot_wait", 2048, reinterpret_cast<void*>(static_cast<intptr_t>(wait_ms)), 2, nullptr);
 }
 
 bool WifiBoard::IsWifiConfigMode() {

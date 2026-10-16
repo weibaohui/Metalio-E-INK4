@@ -138,15 +138,6 @@ void Application::ApplyIdleStatusBar() {
     }
 }
 
-void Application::DismissAlert() {
-    if (device_state_ == kDeviceStateIdle) {
-        auto display = Board::GetInstance().GetDisplay();
-        ApplyIdleStatusBar();
-        display->SetEmotion("neutral");
-        display->SetChatMessage("system", "");
-    }
-}
-
 void Application::StartMainEventLoop() {
     // 开机不启动音频 / 唤醒词 / 协议；主事件循环仍负责 Schedule 与状态栏
     // 栈须内部 DRAM：Schedule 路径含 NVS/flash（关 cache），SPIRAM 栈会 assert
