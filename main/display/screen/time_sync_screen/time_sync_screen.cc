@@ -281,9 +281,9 @@ lv_obj_t* TimeSyncScreen::Create() {
         .show_status_bar = true,
         .show_back_btn = true,
         .pad_h = 16,
-        .pad_v = 10,
+        .pad_v = 8,
         .flex_column = true,
-        .row_gap = 12,
+        .row_gap = 10,
     });
 
     s_ui.screen = scaffold->GetScreen();
@@ -291,7 +291,7 @@ lv_obj_t* TimeSyncScreen::Create() {
     lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
 
     // ==================== 卡片 1: 当前系统时间与对时状态 (Hero Card) ====================
-    lv_obj_t* clock_card = MakeCard(body, lv_pct(100), 285);
+    lv_obj_t* clock_card = MakeCard(body, lv_pct(100), 330);
     lv_obj_set_style_pad_all(clock_card, 12, 0);
     lv_obj_set_style_pad_row(clock_card, 4, 0);
 
@@ -320,8 +320,11 @@ lv_obj_t* TimeSyncScreen::Create() {
     // 状态信息列表
     s_ui.status_lbl = ScreenMakeLabel(clock_card, "○ 对时状态: 检测中…", 22, false);
     s_ui.last_sync_lbl = ScreenMakeLabel(clock_card, "上次对时: 尚未对时", 22, false);
-    s_ui.rtc_lbl = ScreenMakeLabel(clock_card, "硬件时钟: PCF8563 运行正常", 22, false);
-    ScreenMakeLabel(clock_card, "授时节点: ntp.aliyun.com", 22, false);
+
+    lv_obj_t* diag_row = MakeRow(clock_card, 24);
+    s_ui.rtc_lbl = ScreenMakeLabel(diag_row, "硬件时钟: PCF8563 正常", 20, false);
+    lv_obj_t* node_lbl = ScreenMakeLabel(diag_row, "授时源: ntp.aliyun.com", 20, false);
+    lv_obj_set_style_text_color(node_lbl, lv_palette_darken(LV_PALETTE_GREY, 2), 0);
 
     // 弹性撑开，将对时按钮停靠在卡片底部
     lv_obj_t* spacer = lv_obj_create(clock_card);
@@ -329,10 +332,10 @@ lv_obj_t* TimeSyncScreen::Create() {
     lv_obj_set_size(spacer, lv_pct(100), 1);
     lv_obj_set_flex_grow(spacer, 1);
 
-    s_ui.sntp_btn = MakeButton(clock_card, "立即联网对时 (SNTP)", lv_pct(100), 42, OnSyncNow, nullptr, true);
+    s_ui.sntp_btn = MakeButton(clock_card, "立即联网对时 (SNTP)", lv_pct(100), 44, OnSyncNow, nullptr, true);
 
     // ==================== 卡片 2: 时区配置 ====================
-    lv_obj_t* tz_card = MakeCard(body, lv_pct(100), 108);
+    lv_obj_t* tz_card = MakeCard(body, lv_pct(100), 106);
     lv_obj_set_style_pad_all(tz_card, 12, 0);
     lv_obj_set_style_pad_row(tz_card, 8, 0);
 
@@ -347,9 +350,9 @@ lv_obj_t* TimeSyncScreen::Create() {
     MakeButton(tz_btn_row, "+ 1小时", 120, 40, OnTzStep, reinterpret_cast<void*>(60));
 
     // ==================== 卡片 3: 手动校准 ====================
-    lv_obj_t* man_card = MakeCard(body, lv_pct(100), 215);
+    lv_obj_t* man_card = MakeCard(body, lv_pct(100), 210);
     lv_obj_set_style_pad_all(man_card, 12, 0);
-    lv_obj_set_style_pad_row(man_card, 8, 0);
+    lv_obj_set_style_pad_row(man_card, 6, 0);
 
     lv_obj_t* man_head_row = MakeRow(man_card, 26);
     ScreenMakeLabel(man_head_row, "手动校准", 25, false);
