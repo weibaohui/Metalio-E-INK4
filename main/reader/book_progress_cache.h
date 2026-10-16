@@ -1,7 +1,7 @@
 #pragma once
 
 #include "book_session.h"
-#include "reader_types.h"
+#include "reader_core/reader_types.h"
 
 #include <cstddef>
 #include <cstdint>

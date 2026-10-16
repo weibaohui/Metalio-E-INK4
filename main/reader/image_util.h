@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "reader_types.h"
+#include "reader_core/reader_types.h"
 
 namespace reader {
 

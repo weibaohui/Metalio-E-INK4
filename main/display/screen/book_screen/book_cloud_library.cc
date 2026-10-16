@@ -10,7 +10,7 @@
 #include "reader/book_library.h"
 #include "reader/book_progress_cache.h"
 #include "reader/book_session.h"
-#include "reader/file_size.h"
+#include "reader_core/file_size.h"
 #include "reader/http_download_file.h"
 #include "sd_paths.h"
 #include "SdCardManager.hpp"

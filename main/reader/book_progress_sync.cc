@@ -9,7 +9,7 @@
 #include "book_progress_cache.h"
 #include "book_session.h"
 #include "power_policy.h"
-#include "reader_types.h"
+#include "reader_core/reader_types.h"
 #include "utils/psr_worker.h"
 
 #include <atomic>

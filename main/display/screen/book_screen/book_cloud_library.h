@@ -1,7 +1,7 @@
 #pragma once
 
-#include "reader/download_gate.h"
-#include "reader/reader_types.h"
+#include "reader_core/download_gate.h"
+#include "reader_core/reader_types.h"
 
 #include <cstdint>
 #include <string>

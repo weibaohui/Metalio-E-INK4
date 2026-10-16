@@ -41,7 +41,7 @@
 #include "lv_adapter_display.h"
 #include "reader/reader.h"
 #include "reader/reader_page_render.h"
-#include "reader/text_encoding.h"
+#include "reader_core/text_encoding.h"
 #include "screen_common.h"
 #include "sd_paths.h"
 #include "utils/psr_worker.h"

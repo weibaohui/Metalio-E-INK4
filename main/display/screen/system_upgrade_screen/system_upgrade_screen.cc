@@ -18,7 +18,7 @@
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
-#include "reader/file_size.h"
+#include "reader_core/file_size.h"
 #include "screen_common.h"
 #include "services/system_upgrade/system_upgrade_service.h"
 #include "vk_key_handler.h"
