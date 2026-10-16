@@ -30,6 +30,7 @@
 #include "book_screen/book_font_manager.h"
 #include "book_screen/book_ttf_panel.h"
 #include "book_screen/book_bookshelf.h"
+#include "book_screen/book_toc.h"
 #include "book_screen/book_ui_state.h"
 #include "book_screen/book_reader_prefs.h"
 #include "reader/book_cover_sidecar.h"
@@ -79,16 +80,9 @@ constexpr lv_coord_t kRecentCoverH = 290;  // 最近阅读封面高度上限（�
 constexpr lv_coord_t kRecentTitleGap = 14; // 最近阅读封面与书名间距
 constexpr lv_coord_t kCoverFrameBorder = 1; // 封面外框；图须缩进，避免 L8 盖住描边
 constexpr lv_coord_t kCoverSpineInset = 6;  // 书脊竖线相对左边框内缩
-constexpr lv_coord_t kTocCoverW = 194;  // 目录页封面（约原 216×0.9）
-constexpr lv_coord_t kTocCoverH = 259;
-constexpr lv_coord_t kTocHeadGap = 16;  // 封面与书名间距
-constexpr lv_coord_t kTocRowH = 44;     // 目录章行（底部分隔线）
-constexpr lv_coord_t kTocRowGap = 6;    // 字号列表行距；目录列表用底线不用此值
-constexpr lv_coord_t kTocRowPad = 6;
-constexpr lv_coord_t kTocHeadListGap = 12; // 书头与章节列表间距
-constexpr lv_coord_t kTocBelowStatus = 12; // 封面与顶栏之间留白
-constexpr lv_coord_t kTocLineThin = 1;     // 章间分隔线
-constexpr lv_coord_t kTocLineCur = 3;      // 当前章上下分隔线
+constexpr lv_coord_t kTocRowGap = 6;    // 字号列表行距（目录 UI 已拆到 book_toc）
+constexpr lv_coord_t kTocLineThin = 1;     // 章间/字体行分隔线
+constexpr lv_coord_t kTocLineCur = 3;      // 当前章/选中字体上下分隔线
 constexpr lv_coord_t kRowBorderW = 2;
 constexpr lv_coord_t kRowRadius = 8;
 constexpr lv_coord_t kReadPadTop = kListPad;  // 与左右边距一致
@@ -160,9 +154,25 @@ using book_screen_detail::SetBookshelfCreateCoverSlotHandler;
 using book_screen_detail::SetBookshelfOpenDetailHandler;
 using book_screen_detail::SetBookshelfTruncateHandler;
 using book_screen_detail::SetBookshelfAttachVkHandler;
+using book_screen_detail::OpenReadToc;
+using book_screen_detail::RenderTocList;
+using book_screen_detail::RequestRenderTocList;
+using book_screen_detail::ResetTocPaint;
+using book_screen_detail::SetTocFlushLayoutHandler;
+using book_screen_detail::SetTocPrepareEnterHandler;
+using book_screen_detail::SetTocCancelListCoverHandler;
+using book_screen_detail::SetTocScheduleListCoverHandler;
+using book_screen_detail::SetTocEnqueueListCoverHandler;
+using book_screen_detail::SetTocSetStatusVisibleHandler;
+using book_screen_detail::SetTocSetStatusTitleHandler;
+using book_screen_detail::SetTocApplyOverlayPadsHandler;
+using book_screen_detail::SetTocDetachBodyInputHandler;
+using book_screen_detail::SetTocTruncateHandler;
+using book_screen_detail::SetTocUpdateFooterHandler;
+using book_screen_detail::SetTocResetLongPressHandler;
+using book_screen_detail::SetTocRenderReaderPageHandler;
 
 ScreenPaintCoalesce s_reader_paint{};
-ScreenPaintCoalesce s_toc_paint{};
 ScreenPaintCoalesce s_settings_sheet_paint{}; // 设置卡：连点只记状态，抬起后一次刷控件
 // 盖板键/长按定时器只累加；真正 Next/Prev 在 LVGL 绘制里做，避免跨章重建 pages_ 时 UAF
 std::atomic<int> s_reader_page_delta{0};
@@ -560,7 +570,6 @@ void OnFontMultiCancel(lv_event_t* e);
 void OnFontMultiSelectAll(lv_event_t* e);
 void OnFontMultiRemove(lv_event_t* e);
 void RenderReaderPage();
-void RenderTocList();
 void OnReaderUnderlineDraw(lv_event_t* e);
 void AttachReaderUnderline(lv_obj_t* label, int mode);
 void ShowOpenProgress(int percent);
@@ -575,7 +584,6 @@ void ScheduleListCoverFill();
 void FinishDeferredCleanup();
 void HideReadChrome();
 void ShowReadSettingsSheet();
-void OpenReadToc();
 void RebuildSettingsSheet();
 void ClearSettingsSheetWidgetRefs();
 void SetSheetBtnEnabled(lv_obj_t* btn, bool enabled);
@@ -622,11 +630,9 @@ void OnSheetGapDec(lv_event_t* e);
 void OnSheetGapInc(lv_event_t* e);
 void OnSheetProgShow(lv_event_t* e);
 void OnSheetProgHide(lv_event_t* e);
-void OnTocRowClicked(lv_event_t* e);
 void AttachReadBodyInput(lv_obj_t* obj);
 bool BookLvAsync(void (*cb)(void*), void* user_data = nullptr);
 void RequestRenderReaderPage();
-void RequestRenderTocList();
 void ApplyReaderPageDelta();
 bool QueueReaderPageTurn(int dir);
 bool ReadEventPoint(lv_event_t* e, lv_point_t* out);
@@ -804,7 +810,7 @@ void ReleaseReaderSessionForLeave() {
     StopLayoutHintTimer();
     st.layout_hint_done_until_us = 0;
     ScreenPaintCoalesceReset(&s_reader_paint);
-    ScreenPaintCoalesceReset(&s_toc_paint);
+    ResetTocPaint();
     ScreenPaintCoalesceReset(&s_settings_sheet_paint);
     s_reader_page_delta.store(0, std::memory_order_release);
     ResetReadTouch();
@@ -861,18 +867,9 @@ void PaintReaderPage() {
     ESP_LOGI(TAG, "async RenderReaderPage done");
 }
 
-void PaintTocList() {
-    ESP_LOGI(TAG, "async RenderTocList page=%d begin", State().toc_list_page);
-    RenderTocList();
-    ESP_LOGI(TAG, "async RenderTocList done");
-}
-
 void EnsureBookPaintFns() {
     if (s_reader_paint.paint == nullptr) {
         s_reader_paint.paint = PaintReaderPage;
-    }
-    if (s_toc_paint.paint == nullptr) {
-        s_toc_paint.paint = PaintTocList;
     }
     if (s_settings_sheet_paint.paint == nullptr) {
         s_settings_sheet_paint.paint = RefreshSettingsSheet;
@@ -883,11 +880,6 @@ void EnsureBookPaintFns() {
 void RequestRenderReaderPage() {
     EnsureBookPaintFns();
     ScreenPaintCoalesceRequest(&s_reader_paint);
-}
-
-void RequestRenderTocList() {
-    EnsureBookPaintFns();
-    ScreenPaintCoalesceRequest(&s_toc_paint);
 }
 
 /** 设置卡状态已改完：与正文翻页同形，按下中只记序号，抬起后一次刷最终态 */
@@ -2039,24 +2031,6 @@ void ShowReadSettingsSheet() {
         return;
     }
     RebuildSettingsSheet();
-}
-
-void OpenReadToc() {
-    auto& st = State();
-    if (st.read_scr == nullptr || st.opening.load() || !st.session || !st.session->IsOpen()) {
-        return;
-    }
-    FlushLayoutDebounce();
-    if (st.read_chrome == BookUiState::ReadChrome::kToc) {
-        return;
-    }
-    s_reader_page_delta.store(0, std::memory_order_release);
-    SetReadSettingsSheetVisible(false);
-    st.read_chrome = BookUiState::ReadChrome::kToc;
-    // -1：等 RenderTocList 算出本页行数后再落到当前章所在页
-    st.toc_list_page = -1;
-    ApplyReaderPageGeometry(ReaderGeomMode::kOverlayList);
-    RenderTocList();
 }
 
 void ScanReadFonts() {
@@ -3556,19 +3530,6 @@ void RebuildSettingsSheet() {
     }
 }
 
-void OnTocRowClicked(lv_event_t* e) {
-    const int index = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    auto& st = State();
-    if (!st.session || !st.session->IsOpen()) {
-        return;
-    }
-    if (!st.session->GoToToc(index)) {
-        return;
-    }
-    st.read_chrome = BookUiState::ReadChrome::kReading;
-    RenderReaderPage();
-}
-
 void OnReadContentLongPressed(lv_event_t* e) {
     auto& st = State();
     if (st.content == nullptr || lv_event_get_target(e) != st.content) {
@@ -3668,252 +3629,6 @@ void UpdateReadFooter() {
         std::snprintf(buf, sizeof(buf), "%s%s", title.c_str(), suffix);
     }
     lv_label_set_text(st.page_label, buf);
-}
-
-void RenderTocList() {
-    auto& st = State();
-    if (st.content == nullptr || !st.session || !st.session->IsOpen()) {
-        return;
-    }
-    CancelListCoverFill();
-    st.open_bar = nullptr;
-    st.open_pct_lbl = nullptr;
-    SetReadStatusVisible(true);
-    SetReadStatusCenterTitle(nullptr);
-    lv_obj_clean(st.content);
-    // 顶栏盖住正文：书头下移，并与顶栏留一缝，避免封面顶死
-    const lv_coord_t top_pad =
-        (st.status_h > 0 ? st.status_h : kReadPadTop) + kTocBelowStatus;
-    ApplyOverlayListContentPads(top_pad);
-    lv_obj_set_style_layout(st.content, LV_LAYOUT_FLEX, 0);
-    lv_obj_set_flex_flow(st.content, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(st.content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(st.content, kTocHeadListGap, 0);
-    DisableScroll(st.content);
-    // 目录页不挂正文触摸（不退出/不翻页）；章行自带点击
-    DetachReadBodyInput(st.content);
-    lv_obj_clear_flag(st.content, LV_OBJ_FLAG_CLICKABLE);
-
-    const reader::BookInfo& info = st.session->Info();
-    const bool toc_has_page = (info.format == reader::BookFormat::kTxt);
-    const int toc_n = st.session->TocCount();
-
-    // 书头：封面 + 书名/作者（白底黑字，顶栏仍用现有状态栏）
-    lv_obj_t* head = lv_obj_create(st.content);
-    lv_obj_remove_style_all(head);
-    lv_obj_set_width(head, ContentWidth());
-    lv_obj_set_height(head, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(head, LV_OPA_TRANSP, 0);
-    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(head, kTocHeadGap, 0);
-    lv_obj_clear_flag(head, LV_OBJ_FLAG_CLICKABLE);
-    DisableScroll(head);
-
-    lv_obj_t* cover_host = lv_obj_create(head);
-    lv_obj_remove_style_all(cover_host);
-    lv_obj_set_size(cover_host, kTocCoverW, kTocCoverH);
-    lv_obj_set_style_bg_color(cover_host, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(cover_host, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_all(cover_host, kCoverFrameBorder, 0);
-    StyleBookCoverFrame(cover_host);
-    lv_obj_clear_flag(cover_host, LV_OBJ_FLAG_CLICKABLE);
-    DisableScroll(cover_host);
-
-    const int toc_inner_w = CoverFrameInner(kTocCoverW);
-    const int toc_inner_h = CoverFrameInner(kTocCoverH);
-    // 详情已删时复用 detail_cover；否则旁路秒读，无则占位并后台抽内嵌回写 .a2i1。
-    if (st.detail_scr == nullptr || !lv_obj_is_valid(st.detail_scr)) {
-        if (st.detail_cover.empty() || st.detail_cover.width + 8 < toc_inner_w ||
-            st.detail_cover.height + 8 < toc_inner_h) {
-            st.detail_cover.Reset();
-            book_ui::TryLoadBookDetailSidecar(info, toc_inner_w, toc_inner_h, st.detail_cover);
-        }
-    }
-    if (!st.detail_cover.empty()) {
-        st.detail_cover.BindDsc();
-        lv_obj_t* img = lv_image_create(cover_host);
-        lv_image_set_src(img, &st.detail_cover.dsc);
-        lv_obj_center(img);
-        lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
-    } else {
-        lv_obj_t* ph = lv_label_create(cover_host);
-        lv_label_set_text(ph, reader::FormatLabel(info.format));
-        lv_obj_set_style_text_font(ph, ItemFont(), 0);
-        lv_obj_set_style_text_color(ph, lv_color_black(), 0);
-        lv_obj_center(ph);
-        lv_obj_clear_flag(ph, LV_OBJ_FLAG_CLICKABLE);
-        EnqueueListCoverFill(info, toc_inner_w, toc_inner_h, cover_host, &st.detail_cover);
-        ScheduleListCoverFill();
-    }
-
-    lv_obj_t* meta = lv_obj_create(head);
-    lv_obj_remove_style_all(meta);
-    lv_obj_set_flex_grow(meta, 1);
-    lv_obj_set_height(meta, kTocCoverH); // 与封面同高，便于作者贴底
-    lv_obj_set_style_bg_opa(meta, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_layout(meta, LV_LAYOUT_NONE, 0);
-    lv_obj_clear_flag(meta, LV_OBJ_FLAG_CLICKABLE);
-    DisableScroll(meta);
-
-    const lv_coord_t meta_w = ContentWidth() - kTocCoverW - kTocHeadGap;
-    std::string book_title = st.session->Title();
-    if (book_title.empty()) {
-        book_title = info.title;
-    }
-    const lv_font_t* title_font = ListFont();
-    const lv_coord_t title_lh =
-        (title_font != nullptr && title_font->line_height > 0) ? title_font->line_height : 30;
-    lv_obj_t* title_lbl = lv_label_create(meta);
-    lv_obj_set_style_text_font(title_lbl, title_font, 0);
-    lv_obj_set_style_text_color(title_lbl, lv_color_black(), 0);
-    lv_obj_set_size(title_lbl, meta_w, title_lh * 3); // 最多三行，超出省略
-    lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_DOT);
-    lv_label_set_text(title_lbl, book_title.c_str());
-    lv_obj_align(title_lbl, LV_ALIGN_TOP_LEFT, 0, 40); // 相对 meta 顶下移
-    lv_obj_clear_flag(title_lbl, LV_OBJ_FLAG_CLICKABLE);
-
-    std::string author = st.session->Author();
-    if (author.empty()) {
-        author = info.author;
-    }
-    if (author.empty()) {
-        author = Lang::Strings::COMMON_UNKNOWN;
-    }
-    const lv_font_t* author_font = ItemFont();
-    const lv_coord_t author_lh =
-        (author_font != nullptr && author_font->line_height > 0) ? author_font->line_height : 25;
-    lv_obj_t* author_lbl = lv_label_create(meta);
-    lv_obj_set_style_text_font(author_lbl, author_font, 0);
-    lv_obj_set_style_text_color(author_lbl, lv_color_black(), 0);
-    lv_obj_set_size(author_lbl, meta_w, author_lh);
-    lv_label_set_long_mode(author_lbl, LV_LABEL_LONG_DOT);
-    lv_label_set_text(author_lbl, TruncateTextToWidth(author, author_font, meta_w).c_str());
-    lv_obj_align(author_lbl, LV_ALIGN_BOTTOM_LEFT, 0, -12); // 相对 meta 底上移 12px
-    lv_obj_clear_flag(author_lbl, LV_OBJ_FLAG_CLICKABLE);
-
-    const lv_coord_t body_h = lv_obj_get_height(st.content);
-    const lv_coord_t usable = body_h - top_pad - kTocCoverH - kTocHeadListGap;
-    st.toc_page_size = std::max(1, static_cast<int>(usable / std::max<lv_coord_t>(1, kTocRowH)));
-    // 进入目录时 toc_list_page==-1：按当前章定位（须在算出 page_size 之后）
-    if (st.toc_list_page < 0) {
-        const int cur0 = st.session->CurrentTocIndex();
-        st.toc_list_page =
-            (cur0 >= 0 && st.toc_page_size > 0) ? (cur0 / st.toc_page_size) : 0;
-    }
-    const int page_count =
-        toc_n <= 0 ? 1
-                   : static_cast<int>((toc_n + st.toc_page_size - 1) / st.toc_page_size);
-    if (st.toc_list_page >= page_count) {
-        st.toc_list_page = page_count - 1;
-    }
-
-    if (toc_n <= 0) {
-        lv_obj_t* empty = lv_label_create(st.content);
-        lv_obj_set_style_text_font(empty, ListFont(), 0);
-        lv_obj_set_style_text_color(empty, lv_color_black(), 0);
-        lv_label_set_text(empty, Lang::Strings::BOOK_TOC_EMPTY);
-        lv_obj_set_width(empty, ContentWidth());
-        lv_obj_clear_flag(empty, LV_OBJ_FLAG_CLICKABLE);
-        UpdateReadFooter();
-        ResetPointerLongPress();
-        return;
-    }
-
-    lv_obj_t* list = lv_obj_create(st.content);
-    lv_obj_remove_style_all(list);
-    lv_obj_set_width(list, ContentWidth());
-    lv_obj_set_height(list, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
-    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(list, 0, 0);
-    lv_obj_clear_flag(list, LV_OBJ_FLAG_CLICKABLE);
-    DisableScroll(list);
-
-    const int begin = st.toc_list_page * st.toc_page_size;
-    const int end = std::min(toc_n, begin + st.toc_page_size);
-    const int cur = st.session->CurrentTocIndex();
-    const lv_font_t* row_font = ItemFont();
-    for (int i = begin; i < end; ++i) {
-        std::string title;
-        int page_1based = -1;
-        if (const reader::TocEntry* ent = st.session->TocAt(i)) {
-            title = ent->title;
-            if (toc_has_page) {
-                page_1based = ent->first_page + 1;
-            }
-        } else {
-            char b[48];
-            std::snprintf(b, sizeof(b), Lang::Strings::BOOK_CHAPTER_FMT, i + 1);
-            title = b;
-        }
-        const bool is_cur = (i == cur);
-        const bool next_is_cur = (i + 1 == cur);
-        const lv_coord_t line_h =
-            (row_font != nullptr && row_font->line_height > 0) ? row_font->line_height : 30;
-        const lv_coord_t row_h =
-            std::max(kTocRowH, static_cast<lv_coord_t>(line_h + kTocRowPad * 2));
-
-        char page_buf[16] = {};
-        if (page_1based > 0) {
-            std::snprintf(page_buf, sizeof(page_buf), "%d", page_1based);
-        }
-        const lv_coord_t page_w = MeasureTextWidth(row_font, page_buf);
-        const lv_coord_t title_budget =
-            std::max<lv_coord_t>(24, ContentWidth() - page_w - (page_w > 0 ? 16 : 0));
-        const std::string display_title = TruncateTextToWidth(title, row_font, title_budget);
-
-        lv_obj_t* row = lv_obj_create(list);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, ContentWidth(), row_h);
-        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-        // 当前章：上下横线加粗；上一行若紧挨当前章则不画底线，避免叠细线
-        if (is_cur) {
-            lv_obj_set_style_border_width(row, kTocLineCur, 0);
-            lv_obj_set_style_border_side(
-                row, static_cast<lv_border_side_t>(LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM), 0);
-        } else if (next_is_cur) {
-            lv_obj_set_style_border_width(row, 0, 0);
-            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_NONE, 0);
-        } else {
-            lv_obj_set_style_border_width(row, kTocLineThin, 0);
-            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
-        }
-        lv_obj_set_style_border_color(row, lv_color_black(), 0);
-        lv_obj_set_style_pad_ver(row, kTocRowPad, 0);
-        lv_obj_set_style_layout(row, LV_LAYOUT_NONE, 0);
-        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        HapticAttachClick(row);
-        DisableScroll(row);
-        lv_obj_add_event_cb(row, OnTocRowClicked, LV_EVENT_CLICKED,
-                            reinterpret_cast<void*>(static_cast<intptr_t>(i)));
-        lv_obj_add_event_cb(
-            row,
-            [](lv_event_t* ev) { lv_event_stop_bubbling(ev); },
-            LV_EVENT_CLICKED, nullptr);
-
-        lv_obj_t* lbl = lv_label_create(row);
-        lv_obj_set_style_text_font(lbl, row_font, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-        lv_obj_set_size(lbl, title_budget, line_h);
-        lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
-        lv_label_set_text(lbl, display_title.c_str());
-        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
-        lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-
-        if (page_buf[0] != '\0') {
-            lv_obj_t* page_lbl = lv_label_create(row);
-            lv_obj_set_style_text_font(page_lbl, row_font, 0);
-            lv_obj_set_style_text_color(page_lbl, lv_color_black(), 0);
-            lv_label_set_text(page_lbl, page_buf);
-            lv_obj_align(page_lbl, LV_ALIGN_RIGHT_MID, 0, 0);
-            lv_obj_clear_flag(page_lbl, LV_OBJ_FLAG_CLICKABLE);
-        }
-    }
-    UpdateReadFooter();
-    ResetPointerLongPress();
-    SetReadStatusVisible(true);
 }
 
 void OnReaderUnderlineDraw(lv_event_t* e) {
@@ -4716,6 +4431,35 @@ struct BookshelfHooksInit {
     }
 };
 static BookshelfHooksInit s_bookshelf_hooks_init;
+
+void TocFlushLayoutFromHost() {
+    FlushLayoutDebounce();
+}
+
+void TocPrepareEnterFromHost() {
+    s_reader_page_delta.store(0, std::memory_order_release);
+    SetReadSettingsSheetVisible(false);
+    ApplyReaderPageGeometry(ReaderGeomMode::kOverlayList);
+}
+
+struct TocHooksInit {
+    TocHooksInit() {
+        SetTocFlushLayoutHandler(&TocFlushLayoutFromHost);
+        SetTocPrepareEnterHandler(&TocPrepareEnterFromHost);
+        SetTocCancelListCoverHandler(&CancelListCoverFill);
+        SetTocScheduleListCoverHandler(&ScheduleListCoverFill);
+        SetTocEnqueueListCoverHandler(&EnqueueListCoverFill);
+        SetTocSetStatusVisibleHandler(&SetReadStatusVisible);
+        SetTocSetStatusTitleHandler(&SetReadStatusCenterTitle);
+        SetTocApplyOverlayPadsHandler(&ApplyOverlayListContentPads);
+        SetTocDetachBodyInputHandler(&DetachReadBodyInput);
+        SetTocTruncateHandler(&BookshelfTruncateFromHost);
+        SetTocUpdateFooterHandler(&UpdateReadFooter);
+        SetTocResetLongPressHandler(&ResetPointerLongPress);
+        SetTocRenderReaderPageHandler(&RenderReaderPage);
+    }
+};
+static TocHooksInit s_toc_hooks_init;
 
 
 void DrawHomeBarChart(lv_obj_t* parent, lv_coord_t area_w, lv_coord_t area_h, int finished,
