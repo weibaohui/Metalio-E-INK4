@@ -57,6 +57,8 @@ public:
 
     inline int width() const { return width_; }
     inline int height() const { return height_; }
+    virtual bool is_monochrome() const { return false; }
+    virtual void SetHideSubtitle(bool hide) {}
 
 protected:
     int width_ = 0;
