@@ -124,7 +124,6 @@ set(SOURCES "audio/audio_codec.cc"
             "core/device_state_event.cc"
             "core/boot_orchestrator.cc"
             "application.cc"
-            "assets.cc"
             "main.cc"
             )
 

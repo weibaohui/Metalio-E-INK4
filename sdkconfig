@@ -2506,45 +2506,6 @@ CONFIG_WIFI_PROV_STA_ALL_CHANNEL_SCAN=y
 # end of ESP LVGL PORT
 
 #
-# ESP Emote Graphics Framework
-#
-# CONFIG_GFX_FONT_FREETYPE_SUPPORT is not set
-# end of ESP Emote Graphics Framework
-
-#
-# Animation Player Configuration
-#
-CONFIG_ANIM_PLAYER_DEFAULT_FPS=30
-# end of Animation Player Configuration
-
-#
-# ADC Battery Estimation
-#
-CONFIG_OCV_SOC_MODEL_1=y
-# CONFIG_OCV_SOC_MODEL_2 is not set
-CONFIG_ADC_FILTER_WINDOW_SIZE=10
-CONFIG_BATTERY_CAPACITY_LPF_COEFFICIENT=2
-CONFIG_BATTERY_STATE_SOFTWARE_ESTIMATION=y
-
-#
-# Software Estimation Configuration
-#
-CONFIG_SOFTWARE_ESTIMATION_SAMPLE_COUNT=10
-CONFIG_SOFTWARE_ESTIMATION_SAMPLE_INTERVAL=20000
-# end of Software Estimation Configuration
-# end of ADC Battery Estimation
-
-#
-# ADC Mic
-#
-CONFIG_ADC_MIC_APPLY_GAIN=3
-CONFIG_ADC_MIC_OFFSET=16380
-CONFIG_ADC_MIC_TASK_PRIORITY=1
-CONFIG_ADC_MIC_TASK_STACK_SIZE=3072
-CONFIG_ADC_MIC_TASK_CORE=-1
-# end of ADC Mic
-
-#
 # IoT Button
 #
 CONFIG_BUTTON_PERIOD_TIME_MS=5
@@ -3284,10 +3245,6 @@ CONFIG_LVGL_VERSION_PATCH=0
 # CONFIG_LV_BUILD_DEMOS is not set
 # end of Demos
 # end of LVGL configuration
-
-#
-# SH1106 ESP-IDF Driver
-#
 # end of Component config
 
 # CONFIG_IDF_EXPERIMENTAL_FEATURES is not set

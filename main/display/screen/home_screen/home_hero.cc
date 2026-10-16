@@ -37,27 +37,6 @@ const lv_font_t* WeatherFont() {
     return f != nullptr ? f : fontpack_lv_font_ui();
 }
 
-const char* WeekdayName(int wday) {
-    switch (wday) {
-        case 0:
-            return Lang::Strings::HOME_WDAY_SUN;
-        case 1:
-            return Lang::Strings::HOME_WDAY_MON;
-        case 2:
-            return Lang::Strings::HOME_WDAY_TUE;
-        case 3:
-            return Lang::Strings::HOME_WDAY_WED;
-        case 4:
-            return Lang::Strings::HOME_WDAY_THU;
-        case 5:
-            return Lang::Strings::HOME_WDAY_FRI;
-        case 6:
-            return Lang::Strings::HOME_WDAY_SAT;
-        default:
-            return "";
-    }
-}
-
 struct UiState {
     HeroKind kind = HeroKind::Classic;
     lv_obj_t* root = nullptr;
