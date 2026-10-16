@@ -18,7 +18,7 @@
 #include "SdCardManager.hpp"
 #include "sd_paths.h"
 #include "services/wifi_transfer/wifi_transfer_service.h"
-#include "reader/file_size.h"
+#include "reader_core/file_size.h"
 #include "vk_key_handler.h"
 #include "core/system_event_bus.h"
 #include "ff.h"

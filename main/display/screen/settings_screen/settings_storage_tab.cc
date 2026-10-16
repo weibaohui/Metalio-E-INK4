@@ -3,7 +3,7 @@
 #include "SdCardManager.hpp"
 #include "display/status_bar_manager.h"
 #include "fontpack_lvgl.h"
-#include "reader/file_size.h"
+#include "reader_core/file_size.h"
 #include "settings_common.h"
 #include "usb_virtual_disk.h"
 

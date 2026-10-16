@@ -26,8 +26,8 @@
 #include "book_progress_cache.h"
 #endif
 #include "image_util.h"
-#include "text_encoding.h"
-#include "txt_chapter.h"
+#include "reader_core/text_encoding.h"
+#include "reader_core/txt_chapter.h"
 #ifndef EBOOK_EMULATOR
 #include "assets/lang_config.h"
 #include "fontpack_lvgl.h"

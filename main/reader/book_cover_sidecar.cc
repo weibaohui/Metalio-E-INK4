@@ -1,10 +1,10 @@
 #include "book_cover_sidecar.h"
 
 #include "book_library.h"
-#include "ebook_document.h"
-#include "epub_document.h"
+#include "reader_core/ebook_document.h"
+#include "reader_core/epub_document.h"
 #include "image_util.h"
-#include "reader_image_budget.h"
+#include "reader_core/reader_image_budget.h"
 #include "sd_paths.h"
 
 #include <cstring>

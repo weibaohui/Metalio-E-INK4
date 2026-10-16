@@ -1,6 +1,6 @@
 #pragma once
 
-#include "download_gate.h"
+#include "reader_core/download_gate.h"
 
 #include <cstddef>
 #include <cstdint>

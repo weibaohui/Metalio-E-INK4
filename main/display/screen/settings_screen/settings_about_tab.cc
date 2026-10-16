@@ -5,7 +5,7 @@
 #include "board.h"
 #include "display.h"
 #include "fontpack_lvgl.h"
-#include "reader/file_size.h"
+#include "reader_core/file_size.h"
 #include "settings_common.h"
 #include "system_info.h"
 

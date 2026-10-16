@@ -7,11 +7,11 @@
 #include <string>
 #include <vector>
 
-#include "ebook_document.h"
-#include "epub_document.h"
+#include "reader_core/ebook_document.h"
+#include "reader_core/epub_document.h"
 #include "lvgl.h"
-#include "reader_types.h"
-#include "txt_chapter.h"
+#include "reader_core/reader_types.h"
+#include "reader_core/txt_chapter.h"
 
 namespace reader {
 

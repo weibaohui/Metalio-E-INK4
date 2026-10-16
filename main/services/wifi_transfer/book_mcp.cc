@@ -13,7 +13,7 @@
 #include "mcp_server.h"
 #include "reader/book_library.h"
 #include "reader/http_download_file.h"
-#include "reader/file_size.h"
+#include "reader_core/file_size.h"
 #include "SdCardManager.hpp"
 #include "sd_paths.h"
 #include "transfer_utils.h"

@@ -1,6 +1,6 @@
 #include "book_progress_cache.h"
 
-#include "reader_types.h"
+#include "reader_core/reader_types.h"
 
 #include <algorithm>
 #include <mutex>

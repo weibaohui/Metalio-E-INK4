@@ -1,7 +1,7 @@
 #pragma once
 
 #include "lvgl.h"
-#include "reader_types.h"
+#include "reader_core/reader_types.h"
 
 namespace reader {
 

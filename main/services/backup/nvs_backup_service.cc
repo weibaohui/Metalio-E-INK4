@@ -18,7 +18,7 @@
 #include "sd_paths.h"
 #include "home_screen/home_screen.h"
 #include "ff.h"
-#include "reader/file_size.h"
+#include "reader_core/file_size.h"
 
 namespace backup_restore {
 

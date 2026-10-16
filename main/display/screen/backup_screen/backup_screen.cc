@@ -17,7 +17,7 @@
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "services/backup/nvs_backup_service.h"
-#include "reader/file_size.h"
+#include "reader_core/file_size.h"
 #include "screen_common.h"
 #include "sd_paths.h"
 #include "vk_key_handler.h"

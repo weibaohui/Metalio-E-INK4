@@ -2,7 +2,7 @@
 
 #include "lvgl.h"
 
-#include "reader/reader_types.h"
+#include "reader_core/reader_types.h"
 
 // 阅读应用：首页（继续阅读 / 时长 / 已看完 / 我的书架 / 最近阅读两本）→ 书架网格 → 详情 → 正文。
 // 封面：同步只读 .a2i1；无旁路则占位，后台抽内嵌并回写 .a2i1 后刷槽（列表串行，避免卡顿）。
