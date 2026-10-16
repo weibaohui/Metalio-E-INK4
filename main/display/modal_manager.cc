@@ -1,9 +1,19 @@
 // main/display/modal_manager.cc
 #include "modal_manager.h"
+#include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include <esp_log.h>
 
 static const char* TAG = "ModalManager";
+
+namespace {
+
+const lv_font_t* UiFont() {
+    const lv_font_t* f = fontpack_lv_font_ui();
+    return f != nullptr ? f : LV_FONT_DEFAULT;
+}
+
+}  // namespace
 
 ModalManager& ModalManager::GetInstance() {
     static ModalManager s_instance;
@@ -73,10 +83,13 @@ lv_obj_t* ModalManager::PushCustomModal(std::function<void(lv_obj_t* card)> buil
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(card, lv_color_black(), 0);
     lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 8, 0);
-    lv_obj_set_style_pad_all(card, 20, 0);
+    lv_obj_set_style_radius(card, 12, 0);
+    lv_obj_set_style_pad_all(card, 24, 0);
+    lv_obj_set_style_shadow_width(card, 0, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(card, 16, 0);
+    lv_obj_set_style_pad_row(card, 18, 0);
+    lv_obj_set_style_text_font(card, UiFont(), 0);
+    lv_obj_set_style_text_color(card, lv_color_black(), 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     if (builder) {
@@ -113,66 +126,91 @@ lv_obj_t* ModalManager::ShowDialog(const char* title,
         if (title != nullptr && title[0] != '\0') {
             lv_obj_t* t_lbl = lv_label_create(card);
             lv_label_set_text(t_lbl, title);
+            const lv_font_t* title_font = fontpack_lv_font_get(28, 2);
+            lv_obj_set_style_text_font(t_lbl, title_font != nullptr ? title_font : UiFont(), 0);
+            lv_obj_set_style_text_color(t_lbl, lv_color_black(), 0);
             lv_obj_set_style_text_align(t_lbl, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_width(t_lbl, lv_pct(100));
+            lv_label_set_long_mode(t_lbl, LV_LABEL_LONG_WRAP);
+            lv_obj_clear_flag(t_lbl, LV_OBJ_FLAG_CLICKABLE);
         }
 
         // 正文
         lv_obj_t* msg_lbl = lv_label_create(card);
         lv_label_set_text(msg_lbl, message != nullptr ? message : "");
+        lv_obj_set_style_text_font(msg_lbl, UiFont(), 0);
+        lv_obj_set_style_text_color(msg_lbl, lv_color_black(), 0);
         lv_obj_set_style_text_align(msg_lbl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(msg_lbl, lv_pct(100));
         lv_label_set_long_mode(msg_lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_clear_flag(msg_lbl, LV_OBJ_FLAG_CLICKABLE);
 
         // 按钮栏
         lv_obj_t* btn_row = lv_obj_create(card);
         lv_obj_remove_style_all(btn_row);
-        lv_obj_set_size(btn_row, lv_pct(100), 48);
+        lv_obj_set_size(btn_row, lv_pct(100), 50);
         lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(btn_row, 12, 0);
+        lv_obj_set_style_pad_column(btn_row, 16, 0);
+
+        // 堆分配回调上下文，在卡片销毁 (LV_EVENT_DELETE) 时统一释放，杜绝内存泄漏
+        auto* ctx = new std::function<void(bool)>(on_result);
+        lv_obj_add_event_cb(card, [](lv_event_t* e) {
+            auto* cb = static_cast<std::function<void(bool)>*>(lv_event_get_user_data(e));
+            delete cb;
+        }, LV_EVENT_DELETE, ctx);
 
         // 取消按钮
         lv_obj_t* cancel_btn = lv_btn_create(btn_row);
         lv_obj_set_flex_grow(cancel_btn, 1);
-        lv_obj_set_height(cancel_btn, 44);
+        lv_obj_set_height(cancel_btn, 48);
         lv_obj_set_style_bg_color(cancel_btn, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(cancel_btn, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(cancel_btn, lv_color_black(), 0);
         lv_obj_set_style_border_width(cancel_btn, 2, 0);
-        lv_obj_set_style_radius(cancel_btn, 4, 0);
+        lv_obj_set_style_radius(cancel_btn, 8, 0);
+        lv_obj_set_style_pad_all(cancel_btn, 0, 0);
+        lv_obj_set_style_shadow_width(cancel_btn, 0, 0);
         HapticAttachClick(cancel_btn);
 
         lv_obj_t* cancel_lbl = lv_label_create(cancel_btn);
         lv_label_set_text(cancel_lbl, cancel_text != nullptr ? cancel_text : "取消");
+        lv_obj_set_style_text_font(cancel_lbl, UiFont(), 0);
         lv_obj_set_style_text_color(cancel_lbl, lv_color_black(), 0);
         lv_obj_center(cancel_lbl);
+        lv_obj_clear_flag(cancel_lbl, LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_add_event_cb(cancel_btn, [](lv_event_t* e) {
             auto* cb = static_cast<std::function<void(bool)>*>(lv_event_get_user_data(e));
             if (cb && *cb) (*cb)(false);
             ModalManager::GetInstance().PopModal();
-        }, LV_EVENT_CLICKED, new std::function<void(bool)>(on_result));
+        }, LV_EVENT_CLICKED, ctx);
 
         // 确定按钮
         lv_obj_t* confirm_btn = lv_btn_create(btn_row);
         lv_obj_set_flex_grow(confirm_btn, 1);
-        lv_obj_set_height(confirm_btn, 44);
+        lv_obj_set_height(confirm_btn, 48);
         lv_obj_set_style_bg_color(confirm_btn, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(confirm_btn, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(confirm_btn, lv_color_black(), 0);
         lv_obj_set_style_border_width(confirm_btn, 2, 0);
-        lv_obj_set_style_radius(confirm_btn, 4, 0);
+        lv_obj_set_style_radius(confirm_btn, 8, 0);
+        lv_obj_set_style_pad_all(confirm_btn, 0, 0);
+        lv_obj_set_style_shadow_width(confirm_btn, 0, 0);
         HapticAttachClick(confirm_btn);
 
         lv_obj_t* confirm_lbl = lv_label_create(confirm_btn);
         lv_label_set_text(confirm_lbl, confirm_text != nullptr ? confirm_text : "确定");
+        lv_obj_set_style_text_font(confirm_lbl, UiFont(), 0);
         lv_obj_set_style_text_color(confirm_lbl, lv_color_white(), 0);
         lv_obj_center(confirm_lbl);
+        lv_obj_clear_flag(confirm_lbl, LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_add_event_cb(confirm_btn, [](lv_event_t* e) {
             auto* cb = static_cast<std::function<void(bool)>*>(lv_event_get_user_data(e));
             if (cb && *cb) (*cb)(true);
             ModalManager::GetInstance().PopModal();
-        }, LV_EVENT_CLICKED, new std::function<void(bool)>(on_result));
+        }, LV_EVENT_CLICKED, ctx);
     });
 }
 
@@ -184,32 +222,53 @@ lv_obj_t* ModalManager::ShowAlert(const char* title,
         if (title != nullptr && title[0] != '\0') {
             lv_obj_t* t_lbl = lv_label_create(card);
             lv_label_set_text(t_lbl, title);
+            const lv_font_t* title_font = fontpack_lv_font_get(28, 2);
+            lv_obj_set_style_text_font(t_lbl, title_font != nullptr ? title_font : UiFont(), 0);
+            lv_obj_set_style_text_color(t_lbl, lv_color_black(), 0);
             lv_obj_set_style_text_align(t_lbl, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_width(t_lbl, lv_pct(100));
+            lv_label_set_long_mode(t_lbl, LV_LABEL_LONG_WRAP);
+            lv_obj_clear_flag(t_lbl, LV_OBJ_FLAG_CLICKABLE);
         }
 
         lv_obj_t* msg_lbl = lv_label_create(card);
         lv_label_set_text(msg_lbl, message != nullptr ? message : "");
+        lv_obj_set_style_text_font(msg_lbl, UiFont(), 0);
+        lv_obj_set_style_text_color(msg_lbl, lv_color_black(), 0);
         lv_obj_set_style_text_align(msg_lbl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_width(msg_lbl, lv_pct(100));
         lv_label_set_long_mode(msg_lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_clear_flag(msg_lbl, LV_OBJ_FLAG_CLICKABLE);
+
+        // 堆分配回调上下文，在卡片销毁 (LV_EVENT_DELETE) 时统一释放，杜绝内存泄漏
+        auto* ctx = new std::function<void()>(on_close);
+        lv_obj_add_event_cb(card, [](lv_event_t* e) {
+            auto* cb = static_cast<std::function<void()>*>(lv_event_get_user_data(e));
+            delete cb;
+        }, LV_EVENT_DELETE, ctx);
 
         lv_obj_t* btn = lv_btn_create(card);
         lv_obj_set_width(btn, lv_pct(100));
-        lv_obj_set_height(btn, 44);
+        lv_obj_set_height(btn, 48);
         lv_obj_set_style_bg_color(btn, lv_color_black(), 0);
-        lv_obj_set_style_radius(btn, 4, 0);
+        lv_obj_set_style_border_color(btn, lv_color_black(), 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_set_style_pad_all(btn, 0, 0);
+        lv_obj_set_style_shadow_width(btn, 0, 0);
         HapticAttachClick(btn);
 
         lv_obj_t* btn_lbl = lv_label_create(btn);
         lv_label_set_text(btn_lbl, btn_text != nullptr ? btn_text : "我知道了");
+        lv_obj_set_style_text_font(btn_lbl, UiFont(), 0);
         lv_obj_set_style_text_color(btn_lbl, lv_color_white(), 0);
         lv_obj_center(btn_lbl);
+        lv_obj_clear_flag(btn_lbl, LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_add_event_cb(btn, [](lv_event_t* e) {
             auto* cb = static_cast<std::function<void()>*>(lv_event_get_user_data(e));
             if (cb && *cb) (*cb)();
             ModalManager::GetInstance().PopModal();
-        }, LV_EVENT_CLICKED, new std::function<void()>(on_close));
+        }, LV_EVENT_CLICKED, ctx);
     });
 }
