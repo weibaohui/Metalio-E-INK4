@@ -281,86 +281,73 @@ lv_obj_t* TimeSyncScreen::Create() {
         .show_status_bar = true,
         .show_back_btn = true,
         .pad_h = 16,
-        .pad_v = 8,
-        .flex_column = false,
-        .row_gap = 14,
+        .pad_v = 10,
+        .flex_column = true,
+        .row_gap = 12,
     });
 
     s_ui.screen = scaffold->GetScreen();
     lv_obj_t* body = scaffold->GetBody();
     lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
 
-    // 主视口水平双栏流式排版
-    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(body, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    // ==================== 卡片 1: 当前系统时间与对时状态 (Hero Card) ====================
+    lv_obj_t* clock_card = MakeCard(body, lv_pct(100), 285);
+    lv_obj_set_style_pad_all(clock_card, 12, 0);
+    lv_obj_set_style_pad_row(clock_card, 4, 0);
 
-    // ==================== 左栏: 当前系统时间与对时状态 Hero Card ====================
-    lv_obj_t* left_card = MakeCard(body, 372, 372);
-    lv_obj_set_style_pad_all(left_card, 14, 0);
-    lv_obj_set_style_pad_row(left_card, 4, 0);
-
-    lv_obj_t* tag_lbl = ScreenMakeLabel(left_card, "当前系统时间 (RTC)", 22, false);
+    lv_obj_t* tag_lbl = ScreenMakeLabel(clock_card, "当前系统时间 (RTC)", 22, false);
     lv_obj_set_style_text_color(tag_lbl, lv_palette_darken(LV_PALETTE_GREY, 3), 0);
     lv_obj_set_width(tag_lbl, lv_pct(100));
     lv_obj_set_style_text_align(tag_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
-    s_ui.clock_lbl = ScreenMakeLabel(left_card, "--:--:--", 56, false);
+    s_ui.clock_lbl = ScreenMakeLabel(clock_card, "--:--:--", 56, false);
     lv_obj_set_width(s_ui.clock_lbl, lv_pct(100));
     lv_obj_set_style_text_align(s_ui.clock_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_pad_ver(s_ui.clock_lbl, 2, 0);
 
-    s_ui.date_lbl = ScreenMakeLabel(left_card, "----年--月--日", 25, false);
+    s_ui.date_lbl = ScreenMakeLabel(clock_card, "----年--月--日", 25, false);
     lv_obj_set_width(s_ui.date_lbl, lv_pct(100));
     lv_obj_set_style_text_align(s_ui.date_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
     // 分隔线
-    lv_obj_t* div = lv_obj_create(left_card);
+    lv_obj_t* div = lv_obj_create(clock_card);
     lv_obj_remove_style_all(div);
     lv_obj_set_size(div, lv_pct(100), 1);
     lv_obj_set_style_bg_color(div, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(div, LV_OPA_COVER, 0);
-    lv_obj_set_style_margin_ver(div, 6, 0);
+    lv_obj_set_style_margin_ver(div, 4, 0);
 
     // 状态信息列表
-    s_ui.status_lbl = ScreenMakeLabel(left_card, "○ 对时状态: 检测中…", 22, false);
-    s_ui.last_sync_lbl = ScreenMakeLabel(left_card, "上次对时: 尚未对时", 22, false);
-    s_ui.rtc_lbl = ScreenMakeLabel(left_card, "硬件时钟: PCF8563 运行正常", 22, false);
-    ScreenMakeLabel(left_card, "授时节点: ntp.aliyun.com", 22, false);
+    s_ui.status_lbl = ScreenMakeLabel(clock_card, "○ 对时状态: 检测中…", 22, false);
+    s_ui.last_sync_lbl = ScreenMakeLabel(clock_card, "上次对时: 尚未对时", 22, false);
+    s_ui.rtc_lbl = ScreenMakeLabel(clock_card, "硬件时钟: PCF8563 运行正常", 22, false);
+    ScreenMakeLabel(clock_card, "授时节点: ntp.aliyun.com", 22, false);
 
-    // 弹性撑开，将按钮稳固停靠在卡片底部
-    lv_obj_t* spacer = lv_obj_create(left_card);
+    // 弹性撑开，将对时按钮停靠在卡片底部
+    lv_obj_t* spacer = lv_obj_create(clock_card);
     lv_obj_remove_style_all(spacer);
     lv_obj_set_size(spacer, lv_pct(100), 1);
     lv_obj_set_flex_grow(spacer, 1);
 
-    s_ui.sntp_btn = MakeButton(left_card, "立即联网对时 (SNTP)", lv_pct(100), 44, OnSyncNow, nullptr, true);
+    s_ui.sntp_btn = MakeButton(clock_card, "立即联网对时 (SNTP)", lv_pct(100), 42, OnSyncNow, nullptr, true);
 
-    // ==================== 右栏: 时区配置与手动校正 ====================
-    lv_obj_t* right_col = lv_obj_create(body);
-    lv_obj_remove_style_all(right_col);
-    lv_obj_set_size(right_col, 382, 372);
-    lv_obj_set_flex_flow(right_col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(right_col, 12, 0);
-    lv_obj_clear_flag(right_col, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(right_col, LV_OBJ_FLAG_CLICKABLE);
-
-    // 右上卡片: 时区配置
-    lv_obj_t* tz_card = MakeCard(right_col, 382, 132);
+    // ==================== 卡片 2: 时区配置 ====================
+    lv_obj_t* tz_card = MakeCard(body, lv_pct(100), 108);
     lv_obj_set_style_pad_all(tz_card, 12, 0);
-    lv_obj_set_style_pad_row(tz_card, 10, 0);
+    lv_obj_set_style_pad_row(tz_card, 8, 0);
 
-    lv_obj_t* tz_head_row = MakeRow(tz_card, 28);
+    lv_obj_t* tz_head_row = MakeRow(tz_card, 26);
     ScreenMakeLabel(tz_head_row, "时区配置", 25, false);
     s_ui.tz_value_lbl = ScreenMakeLabel(tz_head_row, "UTC+8 (北京时间)", 22, false);
     lv_obj_set_style_text_align(s_ui.tz_value_lbl, LV_TEXT_ALIGN_RIGHT, 0);
 
-    lv_obj_t* tz_btn_row = MakeRow(tz_card, 42);
-    MakeButton(tz_btn_row, "- 1小时", 100, 42, OnTzStep, reinterpret_cast<void*>(-60));
-    MakeButton(tz_btn_row, "默认 (UTC+8)", 130, 42, OnTzDefault, nullptr);
-    MakeButton(tz_btn_row, "+ 1小时", 100, 42, OnTzStep, reinterpret_cast<void*>(60));
+    lv_obj_t* tz_btn_row = MakeRow(tz_card, 40, LV_FLEX_ALIGN_SPACE_BETWEEN);
+    MakeButton(tz_btn_row, "- 1小时", 120, 40, OnTzStep, reinterpret_cast<void*>(-60));
+    MakeButton(tz_btn_row, "默认 (UTC+8)", 150, 40, OnTzDefault, nullptr);
+    MakeButton(tz_btn_row, "+ 1小时", 120, 40, OnTzStep, reinterpret_cast<void*>(60));
 
-    // 右下卡片: 手动校准
-    lv_obj_t* man_card = MakeCard(right_col, 382, 228);
+    // ==================== 卡片 3: 手动校准 ====================
+    lv_obj_t* man_card = MakeCard(body, lv_pct(100), 215);
     lv_obj_set_style_pad_all(man_card, 12, 0);
     lv_obj_set_style_pad_row(man_card, 8, 0);
 
@@ -369,25 +356,25 @@ lv_obj_t* TimeSyncScreen::Create() {
     lv_obj_t* man_hint = ScreenMakeLabel(man_head_row, "无网时校正RTC", 20, false);
     lv_obj_set_style_text_color(man_hint, lv_palette_darken(LV_PALETTE_GREY, 2), 0);
 
-    // 日期行
-    lv_obj_t* date_row = MakeRow(man_card, 34);
+    // 日期调节行
+    lv_obj_t* date_row = MakeRow(man_card, 36, LV_FLEX_ALIGN_SPACE_BETWEEN);
     ScreenMakeLabel(date_row, "日期", 22, false);
-    MakeButton(date_row, "- 1天", 68, 34, OnAdjustDate, reinterpret_cast<void*>(-1));
+    MakeButton(date_row, "- 1天", 80, 36, OnAdjustDate, reinterpret_cast<void*>(-1));
     s_ui.man_date_lbl = ScreenMakeLabel(date_row, "2026-10-16", 24, false);
     lv_obj_set_width(s_ui.man_date_lbl, 130);
     lv_obj_set_style_text_align(s_ui.man_date_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    MakeButton(date_row, "+ 1天", 68, 34, OnAdjustDate, reinterpret_cast<void*>(1));
+    MakeButton(date_row, "+ 1天", 80, 36, OnAdjustDate, reinterpret_cast<void*>(1));
 
-    // 时间行
-    lv_obj_t* time_row = MakeRow(man_card, 34);
+    // 时间调节行
+    lv_obj_t* time_row = MakeRow(man_card, 36, LV_FLEX_ALIGN_SPACE_BETWEEN);
     ScreenMakeLabel(time_row, "时间", 22, false);
-    MakeButton(time_row, "-1时", 54, 34, OnAdjustHour, reinterpret_cast<void*>(-1));
-    MakeButton(time_row, "-5分", 54, 34, OnAdjustMin, reinterpret_cast<void*>(-5));
+    MakeButton(time_row, "-1时", 58, 36, OnAdjustHour, reinterpret_cast<void*>(-1));
+    MakeButton(time_row, "-5分", 58, 36, OnAdjustMin, reinterpret_cast<void*>(-5));
     s_ui.man_time_lbl = ScreenMakeLabel(time_row, "12 : 00", 24, false);
     lv_obj_set_width(s_ui.man_time_lbl, 80);
     lv_obj_set_style_text_align(s_ui.man_time_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    MakeButton(time_row, "+5分", 54, 34, OnAdjustMin, reinterpret_cast<void*>(5));
-    MakeButton(time_row, "+1时", 54, 34, OnAdjustHour, reinterpret_cast<void*>(1));
+    MakeButton(time_row, "+5分", 58, 36, OnAdjustMin, reinterpret_cast<void*>(5));
+    MakeButton(time_row, "+1时", 58, 36, OnAdjustHour, reinterpret_cast<void*>(1));
 
     // 保存按钮
     MakeButton(man_card, "保存并写入硬件RTC芯片", lv_pct(100), 40, OnManualSave, nullptr, false);
