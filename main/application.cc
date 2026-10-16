@@ -6,6 +6,7 @@
 #include "display.h"
 #include "system_info.h"
 #include "audio_codec.h"
+#include "audio/sound_player.h"
 #include "assets/lang_config.h"
 #include "services/mem_report/mem_report.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
@@ -338,8 +339,5 @@ void Application::PlaySound(const std::string_view& sound) {
     if (sound.empty()) {
         return;
     }
-    if (!audio_running_) {
-        EnsureAudioServiceRunning();
-    }
-    audio_service_.PlaySound(sound);
+    SoundPlayer::GetInstance().Play(sound);
 }
