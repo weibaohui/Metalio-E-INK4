@@ -9,19 +9,19 @@
 | 共享状态 | `book_ui_state.h` / `.cc` | `BookUiState` + `State()`，供后续模块复用 |
 | TTF 导入面板 | `book_ttf_panel.h` / `.cc` | SD `fonts_ttf` 扫描、列表/确认/进度/结果 UI、转换轮询 |
 | 书架 UI | `book_bookshelf.h` / `.cc` | `CreateBookshelfScreen` / `RenderBookshelfPage` / 多选；封面格供首页复用；经 hooks 接封面队列与进屏收尾 |
+| 目录 UI | `book_toc.h` / `.cc` | `OpenReadToc` / `RenderTocList` / 翻页 coalesce；经 hooks 接状态栏、封面队列与回正文 |
 | 云书库 | `book_cloud_library.*` | 已有 |
 | 封面加载 | `book_cover_loader.*` | 已有 |
 | 字库管理 | `book_font_manager.*` | 已有（TTF UI 此前仍半留在主文件，现已拆出） |
 | 阅读偏好 | `book_reader_prefs.*` | 已有 |
 
-`book_screen.cc`：约 6954 → 6196（TTF）→ 约 5490（书架 UI）行。
+`book_screen.cc`：约 6954 → 6196（TTF）→ 约 5566（书架 UI）→ 约 5310（目录 UI）行。
 
 ## 建议顺序（未做）
 
-1. **目录 UI** — `OpenReadToc` / `RenderTocList`；复用 `BookUiState`
-2. **阅读页 UI** — 翻页手势、进度条、页图展示；与 session 解耦
-3. **`book_session.cc` 按格式拆** — TXT / EPUB / 进度持久化分文件
-4. （可选）设置卡「字体列表」与 TTF 面板对称再拆一层
+1. **阅读页 UI** — 翻页手势、进度条、页图展示；与 session 解耦
+2. **`book_session.cc` 按格式拆** — TXT / EPUB / 进度持久化分文件
+3. （可选）设置卡「字体列表」与 TTF 面板对称再拆一层
 
 ## 纪律
 
