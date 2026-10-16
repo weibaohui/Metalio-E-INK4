@@ -2875,6 +2875,12 @@ CONFIG_KNOB_LOW_LIMIT=-1000
 # end of IOT Knob
 
 #
+# libpng
+#
+CONFIG_LIBPNG_PREFER_PSRAM=y
+# end of libpng
+
+#
 # USB HOST UVC
 #
 # CONFIG_UVC_PRINTF_CONFIGURATION_DESCRIPTOR is not set

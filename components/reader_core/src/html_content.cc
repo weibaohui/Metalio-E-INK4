@@ -39,13 +39,6 @@ void FlushParagraph(std::string& buf, std::vector<ContentBlock>& out) {
     buf.clear();
 }
 
-std::string ToLower(std::string s) {
-    for (char& c : s) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-    return s;
-}
-
 bool StartsWithIgnoreCase(const char* p, const char* lit) {
     while (*lit) {
         if (std::tolower(static_cast<unsigned char>(*p)) !=
