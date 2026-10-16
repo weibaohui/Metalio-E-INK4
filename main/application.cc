@@ -1,4 +1,5 @@
 #include "application.h"
+#include "core/boot_orchestrator.h"
 #include "board.h"
 #include <esp_heap_caps.h>
 #include "power_policy.h"
@@ -541,158 +542,20 @@ void Application::DismissAlert() {
     }
 }
 
+void Application::StartMainEventLoop() {
+    // 开机不启动音频 / 唤醒词 / 协议；主事件循环仍负责 Schedule 与状态栏
+    // 栈须内部 DRAM：Schedule 路径含 NVS/flash（关 cache），SPIRAM 栈会 assert
+    xTaskCreate([](void* arg) {
+        ((Application*)arg)->MainEventLoop();
+        vTaskDelete(NULL);
+    }, "main_event_loop", 2048 * 4, this, 3, &main_event_loop_task_handle_);
+    /* Start the clock timer to update the status bar */
+    esp_timer_start_periodic(clock_timer_handle_, 1000000);
+}
+
 void Application::Start() {
-    // §2.8 boot 表驱动:开机流程拆 BootStep 表,每步打耗时日志——以后排查
-    // "开机慢/某步崩"直接看日志表,不用顺着 150 行顺序调用猜。步骤顺序即
-    // 原实现顺序;条件与注释原样保留在各步内。
-    auto& board = Board::GetInstance();
-    ESP_LOGI(TAG, "board initialization begin");
-    board.Initialize();
-    ESP_LOGI(TAG, "board initialization complete");
-    auto display = board.GetDisplay();
+    BootOrchestrator::Run(*this);
 
-    struct BootStep {
-        const char* name;
-        std::function<void()> fn;
-    };
-    const BootStep kSteps[] = {
-        {"lang",
-         [&] {
-             // UI 语言：NVS ui/language，无则 LANG_DEFAULT_CODE（跟 CONFIG_LANGUAGE_*）
-             Lang::InitFromNvs();
-         }},
-        {"device_starting",
-         [&] {
-             SetDeviceState(kDeviceStateStarting);
-         }},
-        {"fontpack",
-         [&] {
-             // fontpack mmap 须在内部 DRAM 栈任务上完成；开机预热 UI 25@2，避免各页首绘空字体
-             fontpack_lv_ensure_ready();
-             (void)fontpack_lv_font_ui();
-         }},
-        {"a2ui_cache",
-         [&] {
-         }},
-        {"chat_store",
-         [&] {
-         }},
-        {"chat_message",
-         [&] {
-             // Print board name/version info
-             display->SetChatMessage("system", SystemInfo::GetUserAgent().c_str());
-         }},
-        {"main_loop",
-         [&] {
-             // 开机不启动音频 / 唤醒词 / 协议；主事件循环仍负责 Schedule 与状态栏
-             // 栈须内部 DRAM：Schedule 路径含 NVS/flash（关 cache），SPIRAM 栈会 assert
-             xTaskCreate([](void* arg) {
-                 ((Application*)arg)->MainEventLoop();
-                 vTaskDelete(NULL);
-             }, "main_event_loop", 2048 * 4, this, 3, &main_event_loop_task_handle_);
-             /* Start the clock timer to update the status bar */
-             esp_timer_start_periodic(clock_timer_handle_, 1000000);
-         }},
-        {"reader_warmup",
-         [&] {
-             // 书库预热须在 StartNetwork 之前（仅创建后台任务）。
-             reader::book_home_snapshot::HydrateFromNvs();
-             reader::book_library_warmup::RequestBootWarmup();
-         }},
-        {"app_toggles",
-         [&] {
-             // APP 开关(需求一.3):开机把 NVS 开关载入 RAM 缓存(main 任务,内部栈)。
-             // 必须早于:1) 下方 MCP 工具注册的开关门控;2) 首页首次渲染。
-             AppManager::GetInstance().Init();
-             // GLM 用量服务的 Init(NVS 读 + MCP 工具注册)必须在 StartNetwork 之前完成:
-             // StartNetwork 会阻塞数十秒(慢路由连网),期间用户已可进入 GLM 用量屏;
-             // 若 Init 迟到,屏幕侧 Start() 因 !inited_ 空手而归 → 无 worker 不刷新,
-             // 卡"尚未查询"(2026-10-09 实测:22s 进屏报 start-before-init,125s Init 才跑)。
-             // Init 幂等。应用开关关掉 GLM 用量时不初始化:不注册 MCP,也不载入状态。
-             if (AppManager::GetInstance().IsAppEnabled("glm")) {
-                 GlmUsageService::GetInstance().Init();
-             }
-             if (AppManager::GetInstance().IsAppEnabled("radio")) {
-                 RadioPlayer::GetInstance().Init();
-             }
-         }},
-        {"network",
-         [&] {
-             /* 有已存 WiFi：等保网时长；失败不 SoftAP。无 SSID 跳过联网，到设置→网络机上配网 */
-             board.StartNetwork();
-             // Update the status bar immediately to show the network state
-             display->UpdateStatusBar(true);
-         }},
-        {"ota_url",
-         [&] {
-             // 清理 NVS 中残留的 ota_url 与激活状态
-             Settings settings("wifi", true);
-             settings.EraseKey("ota_url");
-             activation_code_.clear();
-             activation_message_.clear();
-             ESP_LOGI(TAG, "cleared stale ota_url and activation state");
-         }},
-        {"ota_check",
-         [&] {
-             // 禁用开机 OTA 检查与激活轮询
-             current_version_ = esp_app_get_description()->version;
-             ESP_LOGI(TAG, "skip ota_check & activation (disabled)");
-         }},
-        {"post_net_jobs",
-         [&] {
-             // 阅读快照：显示初始化 / StartNetwork 前已灌；此处幂等补灌
-             reader::book_home_snapshot::HydrateFromNvs();
-             // 禁用天气拉取、云端待办同步、阅读进度上报与 WiFi 位置上报
-             ESP_LOGI(TAG, "skip weather, checklist, book sync, and wifi-loc (disabled)");
-         }},
-        {"mcp_services",
-         [&] {
-             // MCP 工具可提前注册；真正连协议在进入 AI 聊天页时
-             auto& mcp_server = McpServer::GetInstance();
-             mcp_server.AddCommonTools();
-             mcp_server.AddUserOnlyTools();
-             // MCP 注册跟随应用开关,表驱动(关掉的 APP 连 MCP 工具都不注册,重启后生效)。
-             // syslog/MCP 自身是系统服务非 APP,常注册;GLM 的 Init(含 MCP 注册)
-             // 已按开关在 StartNetwork 前完成(见上)。
-             AppManager::GetInstance().RegisterEnabledMcpTools();
-             SyslogRegisterMcpTools();   // 需求一.2:syslog 的 MCP 配置接口(self.syslog.*)
-             MemReport_RegisterMcpTools();  // 每任务内存占用查询(self.mem.tasks)
-             LocalMcpServer::GetInstance().Start();
-             // syslog 日志上报(需求一.2):读 NVS 配置,已启用且配了 IP 则启动发送任务。
-             Syslog_Init();
-             // 网络对时服务(SNTP,需求一.1):读时区偏移 + 起后台任务,网络就绪后自动对时。
-             // Init 在 main 任务(内部栈)读 NVS,安全。
-             TimeService_Init();
-             // ICS 日历订阅:读 NVS 订阅 URL/最近同步时间(main 任务,内部栈,安全)。
-             // 不联网下载——首次进日历屏时按过期策略自动同步。
-             CalendarIcs_Init();
-             // APP 开关(需求一.3):NVS→RAM 缓存已随显示初始化(SetupUI 首次渲染首页前)
-             // 载入,开机第一屏就按开关过滤图标;此处幂等重载兜底,防启动路径变动回归。
-             AppManager::GetInstance().Init();
-         }},
-        {"boot_ready",
-         [&] {
-             boot_ready_.store(true, std::memory_order_release);
-             StopAudioServiceIfRunning();
-             SetDeviceState(kDeviceStateIdle);
-             ESP_LOGI(TAG, "Boot complete");
-         }},
-    };
-
-    const int64_t boot_t0 = esp_timer_get_time();
-    for (const auto& step : kSteps) {
-        const int64_t t0 = esp_timer_get_time();
-        step.fn();
-        const int64_t cost_ms = (esp_timer_get_time() - t0) / 1000;
-        // 本机 newlib 是 nano 格式,%lld 不支持,用 %lu
-        ESP_LOGI(TAG, "boot[%s] %lu ms", step.name, static_cast<unsigned long>(cost_ms));
-        if (cost_ms >= 1000) {
-            // 慢步单独立 W 级,开机慢时一眼定位
-            ESP_LOGW(TAG, "boot[%s] slow: %lu ms", step.name, static_cast<unsigned long>(cost_ms));
-        }
-    }
-    ESP_LOGI(TAG, "boot total %lu ms",
-             static_cast<unsigned long>((esp_timer_get_time() - boot_t0) / 1000));
     // 内存全景快照:各区域总量/最小水位一屏打尽,内存调优的对照基线
     heap_caps_print_heap_info(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     heap_caps_print_heap_info(MALLOC_CAP_SPIRAM);
