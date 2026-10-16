@@ -320,11 +320,7 @@ lv_obj_t* TimeSyncScreen::Create() {
     // 状态信息列表
     s_ui.status_lbl = ScreenMakeLabel(clock_card, "○ 对时状态: 检测中…", 22, false);
     s_ui.last_sync_lbl = ScreenMakeLabel(clock_card, "上次对时: 尚未对时", 22, false);
-
-    lv_obj_t* diag_row = MakeRow(clock_card, 24);
-    s_ui.rtc_lbl = ScreenMakeLabel(diag_row, "硬件时钟: PCF8563 正常", 20, false);
-    lv_obj_t* node_lbl = ScreenMakeLabel(diag_row, "授时源: ntp.aliyun.com", 20, false);
-    lv_obj_set_style_text_color(node_lbl, lv_palette_darken(LV_PALETTE_GREY, 2), 0);
+    s_ui.rtc_lbl = ScreenMakeLabel(clock_card, "硬件时钟: PCF8563 RTC (运行正常)", 22, false);
 
     // 弹性撑开，将对时按钮停靠在卡片底部
     lv_obj_t* spacer = lv_obj_create(clock_card);
