@@ -28,13 +28,14 @@
 #include "assets/lang_config.h"
 #include "book_screen/book_cover_loader.h"
 #include "book_screen/book_font_manager.h"
+#include "book_screen/book_ttf_panel.h"
+#include "book_screen/book_ui_state.h"
 #include "book_screen/book_reader_prefs.h"
 #include "reader/book_cover_sidecar.h"
 #include "reader/book_home_snapshot.h"
 #include "reader/book_progress_cache.h"
 #include "reader/book_stats_service.h"
 #include "display/font/epdfont.h"
-#include "display/font/ttf_convert.h"
 #include "display/status_bar_manager.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
@@ -111,9 +112,6 @@ constexpr uint32_t kLayoutDebounceMs = 300;   // 抬起且停顿后再排版（�
 constexpr uint32_t kLayoutHintTickMs = 500;   // 「完成」提示到期检查
 constexpr int64_t kLayoutHintDoneUs = 1500 * 1000;  // 「完成」显示时长
 constexpr int kBuiltinReadingSizePx = 25; // 无 SD .ef 时正文回退 fontpack
-constexpr int kTtfConvertSizeMin = 20;
-constexpr int kTtfConvertSizeMax = 40;
-constexpr int kTtfConvertSizeDefault = 25;
 constexpr lv_coord_t kDetailCoverMaxW = 152;
 constexpr lv_coord_t kDetailCoverMaxH = 214;
 constexpr lv_coord_t kDetailCtaBottom = 24; // 继续阅读距屏幕底（+8）
@@ -144,174 +142,15 @@ using book_font::EnsureBookFont;
 using book_font::ReleaseBookFont;
 using book_font::PrewarmPageFont;
 
-struct BookUiState {
-    std::vector<reader::BookInfo> books;
-    std::unique_ptr<reader::BookSession> session;
-    int selected = -1;
-    int list_page = 0;
-    int list_page_size = 9; // 书架默认 3×3；首页不用
-    lv_coord_t shelf_cover_h = 0; // 书架封面高（按三行可用高度算）
-
-    // 详情返回根：首页或书架
-    enum class NavRoot : uint8_t { kHome = 0, kShelf };
-    NavRoot back_root = NavRoot::kHome;
-
-    lv_obj_t* list_scr = nullptr;
-    lv_obj_t* list_body = nullptr;
-    lv_obj_t* list_footer = nullptr; // 页码；多选时靠右下
-    lv_obj_t* multi_bar = nullptr;   // 取消 / 全选 / 移除
-    bool shelf_multi = false;
-    std::vector<uint8_t> shelf_selected; // 与 books 等长
-    int64_t shelf_suppress_click_until_us = 0;
-    int shelf_suppress_click_idx = -1;
-
-    // 首页最近阅读 / 书架网格：旁路封面像素（控件只引用 dsc）
-    std::vector<std::unique_ptr<reader::RasterImage>> recent_covers;
-    std::vector<std::unique_ptr<reader::RasterImage>> shelf_covers;
-    // 列表/目录：无旁路时串行后台抽内嵌；token 作废翻页/离页迟到回调
-    std::atomic<uint32_t> list_cover_token{0};
-    struct ListCoverPending {
-        reader::BookInfo info;
-        int max_w = 0;
-        int max_h = 0;
-        lv_obj_t* host = nullptr;
-        reader::RasterImage* slot = nullptr;  // recent/shelf/detail_cover，非拥有
-    };
-    std::vector<ListCoverPending> list_cover_pending;
-    // 已确认无内嵌封面的路径（进程内）；避免每次回书架重复 Open 抽封面
-    std::vector<std::string> cover_embed_miss;
-
-    lv_obj_t* detail_scr = nullptr;
-    reader::RasterImage detail_cover;
-    // 无旁路时后台补文件内封面；token 作废离开/换书的迟到回调
-    std::atomic<uint32_t> detail_cover_token{0};
-    lv_obj_t* detail_cover_host = nullptr;
-    lv_coord_t detail_cover_fw = kDetailCoverMaxW; // 详情封面外框宽
-    lv_coord_t detail_cover_fh = kDetailCoverMaxH; // 详情封面外框高
-    lv_obj_t* detail_title_lbl = nullptr;
-    lv_obj_t* detail_meta_lbl = nullptr;
-    reader::BookFormat detail_format = reader::BookFormat::kTxt;
-
-    lv_obj_t* read_scr = nullptr;
-    lv_obj_t* content = nullptr;
-    lv_obj_t* page_label = nullptr;
-    lv_obj_t* title_label = nullptr;
-    lv_obj_t* open_bar = nullptr;
-    lv_obj_t* open_pct_lbl = nullptr;
-
-    // 阅读浮层状态机（均不另开 screen）：
-    // kSettings → 顶部悬浮设置卡片（盖在正文上）；kToc → 目录整页
-    enum class ReadChrome : uint8_t {
-        kReading = 0,
-        kToc,
-        kSettings,
-    };
-    ReadChrome read_chrome = ReadChrome::kReading;
-    bool settings_resume_after_open = false;  // 整本重开失败回退时回到设置卡片
-    int toc_list_page = 0;
-    int toc_page_size = 8;
-    lv_obj_t* status_bar = nullptr;
-    lv_obj_t* status_overlay = nullptr;
-    lv_coord_t status_h = 0;
-    lv_obj_t* settings_sheet = nullptr;  // 悬浮设置卡片（盖正文）
-    // 设置卡控件缓存：字体翻页 / 边距行距 ± 原地刷，避免整卡 clean
-    struct SheetFontRow {
-        lv_obj_t* row = nullptr;
-        lv_obj_t* name = nullptr;
-        lv_obj_t* px = nullptr;
-        lv_obj_t* check = nullptr; // 多选勾选框
-    };
-    SheetFontRow sheet_font_rows[kFontListPageSize]{};
-    lv_obj_t* sheet_font_title = nullptr; // 「字体」/「已选 N」
-    lv_obj_t* sheet_font_page_prev = nullptr;
-    lv_obj_t* sheet_font_page_next = nullptr;
-    lv_obj_t* sheet_font_page_lab = nullptr;
-    lv_obj_t* sheet_font_multi_bar = nullptr; // 多选时插入的操作行：取消 / 全选 / 移除
-    lv_obj_t* sheet_margin_value = nullptr;
-    lv_obj_t* sheet_margin_dec = nullptr;
-    lv_obj_t* sheet_margin_inc = nullptr;
-    lv_obj_t* sheet_margin_bound = nullptr;
-    lv_obj_t* sheet_gap_value = nullptr;
-    lv_obj_t* sheet_gap_dec = nullptr;
-    lv_obj_t* sheet_gap_inc = nullptr;
-    lv_obj_t* sheet_gap_bound = nullptr;
-    lv_coord_t viewport_w = 0;
-    lv_coord_t viewport_h = 0;
-    std::vector<ReadFontEntry> font_entries;
-    int font_list_page = 0;  // 设置卡字体列表页码
-    bool font_multi = false;
-    std::vector<uint8_t> font_selected; // 与 font_entries 等长
-    int64_t font_suppress_click_until_us = 0;
-    int font_suppress_click_idx = -1;
-    bool font_suppress_next_click = false; // 长按进多选后吃掉松手假 CLICKED
-
-    // TTF 导入转换：面板覆盖设置卡（随 settings_sheet 隐藏/重建）
-    enum class TtfMode : uint8_t { kNone, kList, kConfirm, kProgress, kResult };
-    TtfMode ttf_mode = TtfMode::kNone;
-    std::vector<std::string> ttf_files;
-    int ttf_page = 0;
-    std::string ttf_pick;      // 选中的字体文件名（fonts_ttf 内）
-    int ttf_size_px = 25;      // 确认页步进器：20–40，默认 25；只输出一档
-    bool ttf_result_ok = false;
-    lv_obj_t* sheet_font_import = nullptr; // 字体标题行右侧「导入 TTF」
-    lv_obj_t* ttf_sheet = nullptr;
-    struct TtfRow {
-        lv_obj_t* row = nullptr;
-        lv_obj_t* name = nullptr;
-    };
-    TtfRow ttf_rows[kFontListPageSize]{};
-    lv_obj_t* ttf_bar = nullptr;
-    lv_obj_t* ttf_pct_lbl = nullptr;
-    lv_obj_t* ttf_msg_lbl = nullptr;
-    lv_obj_t* ttf_size_value = nullptr;
-    lv_obj_t* ttf_size_dec = nullptr;
-    lv_obj_t* ttf_size_inc = nullptr;
-    lv_timer_t* ttf_poll_timer = nullptr;
-
-    // 正文触摸：长按后抑制紧随其后的 CLICKED
-    struct ReadTouch {
-        bool suppress_click = false;
-    } read_touch;
-
-    // 异步打开：worker 解析，经 ScreenLvAsync 回 LVGL（禁止 worker 裸 lv_async_call）
-    std::atomic<bool> opening{false};
-    std::atomic<uint32_t> open_token{0};
-    bool deferred_cleanup = false;  // 打开中离开：结束后再关 session/字库
-    reader::BookFormat opening_format = reader::BookFormat::kTxt;
-
-    // TXT 换参：当前页预览后后台建索引；busy 期间翻页禁用，连点只记 again
-    std::atomic<bool> layout_busy{false};
-    std::atomic<uint32_t> layout_token{0};
-    bool layout_again = false;
-    bool layout_reload_font = false;
-    reader::BookSession::LayoutAnchor layout_anchor{};
-    // ±/字体：卡文案 coalesce；正文排版等抬起+停顿；全书页表关设置卡后再建
-    lv_timer_t* layout_debounce_timer = nullptr;
-    bool layout_debounce_reload_font = false;
-    // 章节全书页表后台重建：不挡翻页（与 layout_busy 分离）
-    std::atomic<bool> chapter_pages_busy{false};
-    std::atomic<uint32_t> chapter_pages_token{0};
-    bool chapter_pages_again = false;
-    // 正文插图流式解码：不挡翻页；token 作废翻页/离页迟到回调
-    std::atomic<bool> page_image_busy{false};
-    std::atomic<uint32_t> page_image_token{0};
-    std::atomic<bool> page_image_abort{false};
-    bool page_image_again = false;
-    struct PageImagePending {
-        std::string href;
-        int max_w = 0;
-        int max_h = 0;
-        lv_obj_t* slot = nullptr; // 占位容器；回调时校验仍有效
-    };
-    std::vector<PageImagePending> page_image_pending;
-    // 底栏总页旁：编排中 / 完成
-    lv_timer_t* layout_hint_timer = nullptr;
-    int64_t layout_hint_done_until_us = 0;
-
-    // 阅读时长 checkpoint：仅 LVGL 任务启停；周期 fold+写 .pos
-    lv_timer_t* read_time_ckpt_timer = nullptr;
-    bool reading_paused_by_standby = false; // 进待机停钟，退出待机可恢复
-};
+using book_screen_detail::BookUiState;
+using book_screen_detail::State;
+using book_screen_detail::OnFontImportClick;
+using book_screen_detail::StopTtfPollTimer;
+using book_screen_detail::TtfEnsurePanel;
+using book_screen_detail::ClearTtfWidgetRefs;
+using book_screen_detail::kTtfConvertSizeDefault;
+using book_screen_detail::SetTtfFontsChangedHandler;
+using book_screen_detail::SetTtfEfTemplateHandler;
 
 ScreenPaintCoalesce s_reader_paint{};
 ScreenPaintCoalesce s_library_paint{};
@@ -393,11 +232,6 @@ struct ListCoverFillWork {
 struct CoverMissMsg {
     std::string path;
 };
-
-BookUiState& State() {
-    static BookUiState s;
-    return s;
-}
 
 bool IsReadOverlayChrome(BookUiState::ReadChrome c) {
     using C = BookUiState::ReadChrome;
@@ -749,25 +583,6 @@ void OnSheetFontLongPressed(lv_event_t* e);
 void OnFontMultiCancel(lv_event_t* e);
 void OnFontMultiSelectAll(lv_event_t* e);
 void OnFontMultiRemove(lv_event_t* e);
-void TtfScanFiles();
-void TtfEnsurePanel();
-void TtfRebuildContent();
-void TtfPanelClose();
-void TtfStartConvert();
-void StopTtfPollTimer();
-void OnFontImportClick(lv_event_t* e);
-void OnTtfRowClick(lv_event_t* e);
-void OnTtfPagePrev(lv_event_t* e);
-void OnTtfPageNext(lv_event_t* e);
-void OnTtfConfirmYes(lv_event_t* e);
-void OnTtfConfirmNo(lv_event_t* e);
-void OnTtfClose(lv_event_t* e);
-void OnTtfResultOk(lv_event_t* e);
-void OnTtfSizeDec(lv_event_t* e);
-void OnTtfSizeInc(lv_event_t* e);
-void ClampTtfSizePx();
-void RefreshTtfConfirmTexts();
-void TtfPollTimerCb(lv_timer_t* t);
 void RenderReaderPage();
 void RenderTocList();
 void OnReaderUnderlineDraw(lv_event_t* e);
@@ -2360,16 +2175,7 @@ void ClearSettingsSheetWidgetRefs() {
     st.sheet_gap_inc = nullptr;
     st.sheet_gap_bound = nullptr;
     st.sheet_font_import = nullptr;
-    st.ttf_sheet = nullptr;
-    for (int i = 0; i < kFontListPageSize; ++i) {
-        st.ttf_rows[i] = {};
-    }
-    st.ttf_bar = nullptr;
-    st.ttf_pct_lbl = nullptr;
-    st.ttf_msg_lbl = nullptr;
-    st.ttf_size_value = nullptr;
-    st.ttf_size_dec = nullptr;
-    st.ttf_size_inc = nullptr;
+    ClearTtfWidgetRefs();
 }
 
 bool SettingsSheetWidgetsReady() {
@@ -2633,603 +2439,6 @@ void ClampFontListPage() {
     }
 }
 
-// ---------- TTF 导入转换面板（覆盖设置卡；转换 worker 独立，UI 只轮询） ----------
-
-bool IsTtfFileName(const char* name) {
-    const size_t n = std::strlen(name);
-    if (n < 5 || n > 63) {
-        return false;
-    }
-    return strcasecmp(name + n - 4, ".ttf") == 0 || strcasecmp(name + n - 4, ".otf") == 0;
-}
-
-int TtfPageCount() {
-    const int n = static_cast<int>(State().ttf_files.size());
-    if (n <= 0) {
-        return 1;
-    }
-    return (n + kFontListPageSize - 1) / kFontListPageSize;
-}
-
-void TtfScanFiles() {
-    auto& st = State();
-    st.ttf_files.clear();
-    DIR* dir = opendir(SD_PATH_FONT_SRC);
-    if (dir == nullptr) {
-        return;
-    }
-    while (dirent* ent = readdir(dir)) {
-        if (ent->d_name[0] == '.' || !IsTtfFileName(ent->d_name)) {
-            continue;
-        }
-        st.ttf_files.push_back(ent->d_name);
-    }
-    closedir(dir);
-    std::sort(st.ttf_files.begin(), st.ttf_files.end());
-}
-
-void TtfPanelClose() {
-    auto& st = State();
-    if (st.ttf_sheet != nullptr && lv_obj_is_valid(st.ttf_sheet)) {
-        lv_obj_del(st.ttf_sheet);
-    }
-    st.ttf_sheet = nullptr;
-    st.ttf_bar = nullptr;
-    st.ttf_pct_lbl = nullptr;
-    st.ttf_msg_lbl = nullptr;
-    st.ttf_size_value = nullptr;
-    st.ttf_size_dec = nullptr;
-    st.ttf_size_inc = nullptr;
-    for (int i = 0; i < kFontListPageSize; ++i) {
-        st.ttf_rows[i] = {};
-    }
-    st.ttf_mode = BookUiState::TtfMode::kNone;
-}
-
-void StopTtfPollTimer() {
-    auto& st = State();
-    if (st.ttf_poll_timer != nullptr) {
-        lv_timer_del(st.ttf_poll_timer);
-        st.ttf_poll_timer = nullptr;
-    }
-}
-
-void TtfEnsurePanel() {
-    auto& st = State();
-    if (st.settings_sheet == nullptr || !lv_obj_is_valid(st.settings_sheet)) {
-        return;
-    }
-    // 设置卡是 COLUMN + SIZE_CONTENT：overlay 必须 FLOATING，否则会被 flex 排到卡底，
-    // 且相对 content 父级的 pct(100) 高度常为 0 → 点「导入 TTF」像没反应。
-    lv_obj_update_layout(st.settings_sheet);
-    if (st.ttf_sheet != nullptr && lv_obj_is_valid(st.ttf_sheet)) {
-        lv_obj_set_size(st.ttf_sheet, lv_pct(100), lv_pct(100));
-        lv_obj_align(st.ttf_sheet, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_move_foreground(st.ttf_sheet);
-        TtfRebuildContent();
-        return;
-    }
-    st.ttf_sheet = lv_obj_create(st.settings_sheet);
-    lv_obj_remove_style_all(st.ttf_sheet);
-    lv_obj_add_flag(st.ttf_sheet, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_size(st.ttf_sheet, lv_pct(100), lv_pct(100));
-    lv_obj_align(st.ttf_sheet, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_set_style_bg_color(st.ttf_sheet, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(st.ttf_sheet, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(st.ttf_sheet, 12, 0);
-    lv_obj_set_style_pad_all(st.ttf_sheet, 16, 0);
-    lv_obj_set_style_pad_row(st.ttf_sheet, 10, 0);
-    lv_obj_set_flex_flow(st.ttf_sheet, LV_FLEX_FLOW_COLUMN);
-    lv_obj_add_flag(st.ttf_sheet, LV_OBJ_FLAG_CLICKABLE);
-    DisableScroll(st.ttf_sheet);
-    lv_obj_move_foreground(st.ttf_sheet);
-    TtfRebuildContent();
-}
-
-void TtfRebuildContent() {
-    auto& st = State();
-    if (st.ttf_sheet == nullptr || !lv_obj_is_valid(st.ttf_sheet)) {
-        return;
-    }
-    lv_obj_clean(st.ttf_sheet);
-    for (int i = 0; i < kFontListPageSize; ++i) {
-        st.ttf_rows[i] = {};
-    }
-    st.ttf_bar = nullptr;
-    st.ttf_pct_lbl = nullptr;
-    st.ttf_msg_lbl = nullptr;
-    st.ttf_size_value = nullptr;
-    st.ttf_size_dec = nullptr;
-    st.ttf_size_inc = nullptr;
-
-    const bool is_progress = (st.ttf_mode == BookUiState::TtfMode::kProgress);
-    auto make_action = [](lv_obj_t* parent, const char* text, lv_event_cb_t cb) -> lv_obj_t* {
-        lv_obj_t* btn = lv_obj_create(parent);
-        lv_obj_remove_style_all(btn);
-        lv_obj_set_height(btn, 36);
-        lv_obj_set_width(btn, LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_pad_hor(btn, 4, 0);
-        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        DisableScroll(btn);
-        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-        HapticAttachClick(btn);
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-        lv_obj_add_event_cb(
-            btn, [](lv_event_t* ev) { lv_event_stop_bubbling(ev); }, LV_EVENT_CLICKED, nullptr);
-        lv_obj_t* wrap = lv_obj_create(btn);
-        lv_obj_remove_style_all(wrap);
-        lv_obj_set_size(wrap, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-        lv_obj_set_style_border_side(wrap, LV_BORDER_SIDE_BOTTOM, 0);
-        lv_obj_set_style_border_width(wrap, kShelfUnderlineH, 0);
-        lv_obj_set_style_border_color(wrap, lv_color_black(), 0);
-        lv_obj_set_style_pad_bottom(wrap, 2, 0);
-        lv_obj_set_style_pad_hor(wrap, kShelfUnderlinePadHor, 0);
-        lv_obj_set_style_bg_opa(wrap, LV_OPA_TRANSP, 0);
-        DisableScroll(wrap);
-        lv_obj_clear_flag(wrap, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_t* lbl = lv_label_create(wrap);
-        lv_label_set_text(lbl, text);
-        lv_obj_set_style_text_font(lbl, ItemFont(), 0);
-        lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-        lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-        return btn;
-    };
-
-    // 头部：标题 + 关闭（进度模式不可关）
-    lv_obj_t* head = lv_obj_create(st.ttf_sheet);
-    lv_obj_remove_style_all(head);
-    lv_obj_set_width(head, lv_pct(100));
-    lv_obj_set_height(head, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(head, LV_OBJ_FLAG_CLICKABLE);
-    DisableScroll(head);
-    const char* title = "";
-    switch (st.ttf_mode) {
-        case BookUiState::TtfMode::kList: title = "选择 TTF 字体"; break;
-        case BookUiState::TtfMode::kConfirm: title = "导入 TTF"; break;
-        case BookUiState::TtfMode::kProgress: title = "转换中"; break;
-        case BookUiState::TtfMode::kResult: title = st.ttf_result_ok ? "转换完成" : "转换失败"; break;
-        default: break;
-    }
-    lv_obj_t* title_lbl = lv_label_create(head);
-    lv_label_set_text(title_lbl, title);
-    lv_obj_set_style_text_font(title_lbl, ListFont(), 0);
-    lv_obj_clear_flag(title_lbl, LV_OBJ_FLAG_CLICKABLE);
-    if (!is_progress) {
-        make_action(head, "关闭", OnTtfClose);
-    }
-
-    switch (st.ttf_mode) {
-        case BookUiState::TtfMode::kList: {
-            if (st.ttf_files.empty()) {
-                lv_obj_t* empty = lv_label_create(st.ttf_sheet);
-                lv_label_set_text(
-                    empty, "未找到 TTF/OTF 字体\n请将字体文件放入 SD 卡 metalio/e-ink/fonts_ttf 目录");
-                lv_label_set_long_mode(empty, LV_LABEL_LONG_WRAP);
-                lv_obj_set_width(empty, lv_pct(100));
-                lv_obj_set_style_text_font(empty, ItemFont(), 0);
-                lv_obj_set_style_text_opa(empty, LV_OPA_70, 0);
-                lv_obj_clear_flag(empty, LV_OBJ_FLAG_CLICKABLE);
-                break;
-            }
-            lv_obj_t* list = lv_obj_create(st.ttf_sheet);
-            lv_obj_remove_style_all(list);
-            lv_obj_set_width(list, lv_pct(100));
-            lv_obj_set_height(list, kFontListRowH * kFontListPageSize);
-            lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-            lv_obj_clear_flag(list, LV_OBJ_FLAG_CLICKABLE);
-            DisableScroll(list);
-            const int start = st.ttf_page * kFontListPageSize;
-            for (int i = 0; i < kFontListPageSize; ++i) {
-                const int idx = start + i;
-                lv_obj_t* row = lv_obj_create(list);
-                lv_obj_remove_style_all(row);
-                lv_obj_set_width(row, lv_pct(100));
-                lv_obj_set_height(row, kFontListRowH);
-                lv_obj_set_style_pad_hor(row, 12, 0);
-                lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-                lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
-                                      LV_FLEX_ALIGN_CENTER);
-                if (i + 1 < kFontListPageSize) {
-                    lv_obj_set_style_border_width(row, kTocLineThin, 0);
-                    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
-                    lv_obj_set_style_border_color(row, lv_color_black(), 0);
-                }
-                DisableScroll(row);
-                lv_obj_t* name = lv_label_create(row);
-                lv_obj_set_flex_grow(name, 1);
-                lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
-                lv_obj_set_style_text_font(name, ItemFont(), 0);
-                lv_obj_clear_flag(name, LV_OBJ_FLAG_CLICKABLE);
-                st.ttf_rows[i].row = row;
-                st.ttf_rows[i].name = name;
-                if (idx >= static_cast<int>(st.ttf_files.size())) {
-                    lv_label_set_text(name, "");
-                    lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
-                    lv_obj_set_user_data(row, reinterpret_cast<void*>(static_cast<intptr_t>(-1)));
-                    continue;
-                }
-                HapticAttachClick(row);
-                lv_obj_add_event_cb(row, OnTtfRowClick, LV_EVENT_CLICKED, nullptr);
-                lv_obj_add_event_cb(
-                    row, [](lv_event_t* ev) { lv_event_stop_bubbling(ev); }, LV_EVENT_CLICKED,
-                    nullptr);
-                lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-                lv_obj_set_user_data(row, reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
-                lv_label_set_text(name, st.ttf_files[static_cast<size_t>(idx)].c_str());
-            }
-            const int pages = TtfPageCount();
-            if (pages > 1) {
-                lv_obj_t* pager = lv_obj_create(st.ttf_sheet);
-                lv_obj_remove_style_all(pager);
-                lv_obj_set_width(pager, lv_pct(100));
-                lv_obj_set_height(pager, 36);
-                lv_obj_set_flex_flow(pager, LV_FLEX_FLOW_ROW);
-                lv_obj_set_flex_align(pager, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
-                                      LV_FLEX_ALIGN_CENTER);
-                lv_obj_clear_flag(pager, LV_OBJ_FLAG_CLICKABLE);
-                DisableScroll(pager);
-                make_action(pager, "▲", OnTtfPagePrev);
-                char meta[32];
-                std::snprintf(meta, sizeof(meta), "%d / %d", st.ttf_page + 1, pages);
-                lv_obj_t* lab = lv_label_create(pager);
-                lv_label_set_text(lab, meta);
-                lv_obj_set_style_text_font(lab, ItemFont(), 0);
-                lv_obj_set_style_text_opa(lab, LV_OPA_70, 0);
-                lv_obj_clear_flag(lab, LV_OBJ_FLAG_CLICKABLE);
-                make_action(pager, "▼", OnTtfPageNext);
-            }
-            break;
-        }
-        case BookUiState::TtfMode::kConfirm: {
-            ClampTtfSizePx();
-            lv_obj_t* msg = lv_label_create(st.ttf_sheet);
-            lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
-            lv_obj_set_width(msg, lv_pct(100));
-            lv_obj_set_style_text_font(msg, ItemFont(), 0);
-            lv_obj_clear_flag(msg, LV_OBJ_FLAG_CLICKABLE);
-            st.ttf_msg_lbl = msg;
-
-            // 字号步进器：20–40，步进 1，默认 25；只生成一档
-            lv_obj_t* size_row = lv_obj_create(st.ttf_sheet);
-            lv_obj_remove_style_all(size_row);
-            lv_obj_set_width(size_row, lv_pct(100));
-            lv_obj_set_height(size_row, kSheetIconBtn);
-            lv_obj_set_flex_flow(size_row, LV_FLEX_FLOW_ROW);
-            lv_obj_set_flex_align(size_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
-                                  LV_FLEX_ALIGN_CENTER);
-            lv_obj_clear_flag(size_row, LV_OBJ_FLAG_CLICKABLE);
-            DisableScroll(size_row);
-            lv_obj_t* size_lab = lv_label_create(size_row);
-            lv_label_set_text(size_lab, "字号");
-            lv_obj_set_style_text_font(size_lab, ItemFont(), 0);
-            lv_obj_clear_flag(size_lab, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_t* stepper = lv_obj_create(size_row);
-            lv_obj_remove_style_all(stepper);
-            lv_obj_set_height(stepper, kSheetIconBtn);
-            lv_obj_set_width(stepper, LV_SIZE_CONTENT);
-            lv_obj_set_flex_flow(stepper, LV_FLEX_FLOW_ROW);
-            lv_obj_set_flex_align(stepper, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                                  LV_FLEX_ALIGN_CENTER);
-            lv_obj_set_style_pad_column(stepper, 10, 0);
-            lv_obj_clear_flag(stepper, LV_OBJ_FLAG_CLICKABLE);
-            DisableScroll(stepper);
-            st.ttf_size_dec =
-                MakeSheetIconBtn(stepper, "-", OnTtfSizeDec, st.ttf_size_px > kTtfConvertSizeMin);
-            lv_obj_t* size_val = lv_label_create(stepper);
-            char size_txt[16];
-            std::snprintf(size_txt, sizeof(size_txt), "%dpx", st.ttf_size_px);
-            lv_label_set_text(size_val, size_txt);
-            lv_obj_set_style_text_font(size_val, ListFont(), 0);
-            lv_obj_clear_flag(size_val, LV_OBJ_FLAG_CLICKABLE);
-            st.ttf_size_value = size_val;
-            st.ttf_size_inc =
-                MakeSheetIconBtn(stepper, "+", OnTtfSizeInc, st.ttf_size_px < kTtfConvertSizeMax);
-
-            RefreshTtfConfirmTexts();
-
-            lv_obj_t* btns = lv_obj_create(st.ttf_sheet);
-            lv_obj_remove_style_all(btns);
-            lv_obj_set_width(btns, lv_pct(100));
-            lv_obj_set_height(btns, LV_SIZE_CONTENT);
-            lv_obj_set_flex_flow(btns, LV_FLEX_FLOW_ROW);
-            lv_obj_set_flex_align(btns, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
-                                  LV_FLEX_ALIGN_CENTER);
-            lv_obj_set_style_pad_hor(btns, 24, 0);
-            lv_obj_clear_flag(btns, LV_OBJ_FLAG_CLICKABLE);
-            DisableScroll(btns);
-            make_action(btns, "开始转换", OnTtfConfirmYes);
-            make_action(btns, "取消", OnTtfConfirmNo);
-            break;
-        }
-        case BookUiState::TtfMode::kProgress: {
-            ClampTtfSizePx();
-            const uint16_t sz = static_cast<uint16_t>(st.ttf_size_px);
-            char out_name[80];
-            ttf_convert::FormatOutputFileList(st.ttf_pick.c_str(), &sz, 1, out_name,
-                                              sizeof(out_name));
-            lv_obj_t* msg = lv_label_create(st.ttf_sheet);
-            char mbuf[200];
-            std::snprintf(mbuf, sizeof(mbuf),
-                          "正在转换：\n%.40s\n→ %s\n请勿拔出 SD 卡…", st.ttf_pick.c_str(),
-                          out_name);
-            lv_label_set_text(msg, mbuf);
-            lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
-            lv_obj_set_width(msg, lv_pct(100));
-            lv_obj_set_style_text_font(msg, ItemFont(), 0);
-            lv_obj_clear_flag(msg, LV_OBJ_FLAG_CLICKABLE);
-            st.ttf_msg_lbl = msg;
-
-            lv_obj_t* bar = lv_bar_create(st.ttf_sheet);
-            lv_obj_set_size(bar, lv_pct(100), 16);
-            lv_bar_set_range(bar, 0, 100);
-            lv_bar_set_value(bar, ttf_convert::Percent(), LV_ANIM_OFF);
-            lv_obj_set_style_bg_color(bar, lv_color_white(), 0);
-            lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-            lv_obj_set_style_border_color(bar, lv_color_black(), 0);
-            lv_obj_set_style_border_width(bar, 2, 0);
-            lv_obj_set_style_radius(bar, 4, 0);
-            lv_obj_set_style_bg_color(bar, lv_color_black(), LV_PART_INDICATOR);
-            lv_obj_set_style_radius(bar, 4, LV_PART_INDICATOR);
-            st.ttf_bar = bar;
-
-            lv_obj_t* pct = lv_label_create(st.ttf_sheet);
-            char pbuf[16];
-            std::snprintf(pbuf, sizeof(pbuf), "%d%%", ttf_convert::Percent());
-            lv_label_set_text(pct, pbuf);
-            lv_obj_set_style_text_font(pct, ListFont(), 0);
-            lv_obj_clear_flag(pct, LV_OBJ_FLAG_CLICKABLE);
-            st.ttf_pct_lbl = pct;
-
-            lv_obj_t* tip = lv_label_create(st.ttf_sheet);
-            lv_label_set_text(tip, "转换完成前，请勿退出页面");
-            lv_label_set_long_mode(tip, LV_LABEL_LONG_WRAP);
-            lv_obj_set_width(tip, lv_pct(100));
-            lv_obj_set_style_text_font(tip, ItemFont(), 0);
-            lv_obj_set_style_text_align(tip, LV_TEXT_ALIGN_CENTER, 0);
-            lv_obj_clear_flag(tip, LV_OBJ_FLAG_CLICKABLE);
-            break;
-        }
-        case BookUiState::TtfMode::kResult: {
-            lv_obj_t* msg = lv_label_create(st.ttf_sheet);
-            if (st.ttf_result_ok) {
-                const uint16_t sz = static_cast<uint16_t>(st.ttf_size_px);
-                char out_name[80];
-                ttf_convert::FormatOutputFileList(st.ttf_pick.c_str(), &sz, 1, out_name,
-                                                  sizeof(out_name));
-                char buf[160];
-                std::snprintf(buf, sizeof(buf), "转换完成：\n%s\n已加入字库列表。", out_name);
-                lv_label_set_text(msg, buf);
-            } else {
-                char buf[96];
-                std::snprintf(buf, sizeof(buf), "转换失败：%.60s", ttf_convert::Error());
-                lv_label_set_text(msg, buf);
-            }
-            lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
-            lv_obj_set_width(msg, lv_pct(100));
-            lv_obj_set_style_text_font(msg, ItemFont(), 0);
-            lv_obj_clear_flag(msg, LV_OBJ_FLAG_CLICKABLE);
-            st.ttf_msg_lbl = msg;
-            lv_obj_t* btns = lv_obj_create(st.ttf_sheet);
-            lv_obj_remove_style_all(btns);
-            lv_obj_set_width(btns, lv_pct(100));
-            lv_obj_set_height(btns, LV_SIZE_CONTENT);
-            lv_obj_set_flex_flow(btns, LV_FLEX_FLOW_ROW);
-            lv_obj_set_flex_align(btns, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                                  LV_FLEX_ALIGN_CENTER);
-            lv_obj_clear_flag(btns, LV_OBJ_FLAG_CLICKABLE);
-            DisableScroll(btns);
-            make_action(btns, "确定", OnTtfResultOk);
-            break;
-        }
-        default:
-            break;
-    }
-}
-
-void OnFontImportClick(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    auto& st = State();
-    if (st.opening.load() || ttf_convert::Busy()) {
-        return;
-    }
-    if (st.font_multi) {
-        return;
-    }
-    TtfScanFiles();
-    st.ttf_page = 0;
-    st.ttf_mode = BookUiState::TtfMode::kList;
-    TtfEnsurePanel();
-}
-
-void OnTtfRowClick(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    auto& st = State();
-    if (st.opening.load()) {
-        return;
-    }
-    lv_obj_t* target = static_cast<lv_obj_t*>(lv_event_get_target(e));
-    const int idx = static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(target)));
-    if (idx < 0 || idx >= static_cast<int>(st.ttf_files.size())) {
-        return;
-    }
-    st.ttf_pick = st.ttf_files[static_cast<size_t>(idx)];
-    st.ttf_size_px = kTtfConvertSizeDefault;
-    st.ttf_mode = BookUiState::TtfMode::kConfirm;
-    TtfRebuildContent();
-}
-
-void ClampTtfSizePx() {
-    auto& st = State();
-    if (st.ttf_size_px < kTtfConvertSizeMin) {
-        st.ttf_size_px = kTtfConvertSizeMin;
-    } else if (st.ttf_size_px > kTtfConvertSizeMax) {
-        st.ttf_size_px = kTtfConvertSizeMax;
-    }
-}
-
-void RefreshTtfConfirmTexts() {
-    auto& st = State();
-    ClampTtfSizePx();
-    if (st.ttf_size_value != nullptr && lv_obj_is_valid(st.ttf_size_value)) {
-        char size_txt[16];
-        std::snprintf(size_txt, sizeof(size_txt), "%dpx", st.ttf_size_px);
-        lv_label_set_text(st.ttf_size_value, size_txt);
-    }
-    SetSheetBtnEnabled(st.ttf_size_dec, st.ttf_size_px > kTtfConvertSizeMin);
-    SetSheetBtnEnabled(st.ttf_size_inc, st.ttf_size_px < kTtfConvertSizeMax);
-    if (st.ttf_msg_lbl != nullptr && lv_obj_is_valid(st.ttf_msg_lbl)) {
-        const uint16_t sz = static_cast<uint16_t>(st.ttf_size_px);
-        char out_name[80];
-        ttf_convert::FormatOutputFileList(st.ttf_pick.c_str(), &sz, 1, out_name, sizeof(out_name));
-        char buf[200];
-        std::snprintf(buf, sizeof(buf),
-                      "将 %.32s 转为：\n%s\n约需 1-2 分钟，同名 .ef 将被覆盖。",
-                      st.ttf_pick.c_str(), out_name);
-        lv_label_set_text(st.ttf_msg_lbl, buf);
-    }
-}
-
-void OnTtfSizeDec(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    auto& st = State();
-    if (st.ttf_mode != BookUiState::TtfMode::kConfirm || st.opening.load() ||
-        ttf_convert::Busy()) {
-        return;
-    }
-    if (st.ttf_size_px > kTtfConvertSizeMin) {
-        --st.ttf_size_px;
-        RefreshTtfConfirmTexts();
-    }
-}
-
-void OnTtfSizeInc(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    auto& st = State();
-    if (st.ttf_mode != BookUiState::TtfMode::kConfirm || st.opening.load() ||
-        ttf_convert::Busy()) {
-        return;
-    }
-    if (st.ttf_size_px < kTtfConvertSizeMax) {
-        ++st.ttf_size_px;
-        RefreshTtfConfirmTexts();
-    }
-}
-
-void OnTtfPagePrev(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    auto& st = State();
-    if (st.ttf_page > 0) {
-        --st.ttf_page;
-        TtfRebuildContent();
-    }
-}
-
-void OnTtfPageNext(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    auto& st = State();
-    if (st.ttf_page + 1 < TtfPageCount()) {
-        ++st.ttf_page;
-        TtfRebuildContent();
-    }
-}
-
-void TtfStartConvert() {
-    auto& st = State();
-    ClampTtfSizePx();
-    // 字集模板：当前选中 .ef；无则回退默认 misans
-    std::string tmpl;
-    const int fi = CurrentFontIndex();
-    if (fi >= 0 && fi < static_cast<int>(st.font_entries.size())) {
-        tmpl = std::string(SD_PATH_FONTS) + "/" + st.font_entries[static_cast<size_t>(fi)].file;
-    } else {
-        tmpl = SD_PATH_BOOK_FONT;
-    }
-    const std::string ttf_path = std::string(SD_PATH_FONT_SRC) + "/" + st.ttf_pick;
-    const uint16_t sizes[1] = {static_cast<uint16_t>(st.ttf_size_px)};
-    if (!ttf_convert::Start(ttf_path.c_str(), tmpl.c_str(), SD_PATH_FONTS, sizes, 1)) {
-        st.ttf_result_ok = false;
-        st.ttf_mode = BookUiState::TtfMode::kResult;
-        TtfRebuildContent();
-        return;
-    }
-    st.ttf_mode = BookUiState::TtfMode::kProgress;
-    TtfRebuildContent();
-    if (st.ttf_poll_timer == nullptr) {
-        st.ttf_poll_timer = lv_timer_create(TtfPollTimerCb, 500, nullptr);
-    }
-}
-
-void OnTtfConfirmYes(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    auto& st = State();
-    if (st.opening.load() || ttf_convert::Busy()) {
-        return;
-    }
-    TtfStartConvert();
-}
-
-void OnTtfConfirmNo(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    auto& st = State();
-    st.ttf_mode = BookUiState::TtfMode::kList;
-    TtfRebuildContent();
-}
-
-void OnTtfClose(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    TtfPanelClose();
-}
-
-void OnTtfResultOk(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    TtfPanelClose();
-}
-
-void TtfPollTimerCb(lv_timer_t* t) {
-    auto& st = State();
-    if (ttf_convert::Busy()) {
-        if (st.ttf_bar != nullptr && lv_obj_is_valid(st.ttf_bar)) {
-            lv_bar_set_value(st.ttf_bar, ttf_convert::Percent(), LV_ANIM_OFF);
-        }
-        if (st.ttf_pct_lbl != nullptr && lv_obj_is_valid(st.ttf_pct_lbl)) {
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "%d%%", ttf_convert::Percent());
-            lv_label_set_text(st.ttf_pct_lbl, buf);
-        }
-        return;
-    }
-    const int s = ttf_convert::State();
-    lv_timer_del(t);
-    st.ttf_poll_timer = nullptr;
-    // 阅读屏已拆掉：只收尾定时器，勿碰已销毁控件
-    if (st.read_scr == nullptr || !lv_obj_is_valid(st.read_scr)) {
-        st.ttf_mode = BookUiState::TtfMode::kNone;
-        return;
-    }
-    ScanReadFonts();
-    st.ttf_result_ok = (s == 2);
-    if (st.ttf_mode == BookUiState::TtfMode::kProgress && st.settings_sheet != nullptr &&
-        lv_obj_is_valid(st.settings_sheet) && st.ttf_sheet != nullptr &&
-        lv_obj_is_valid(st.ttf_sheet)) {
-        st.ttf_mode = BookUiState::TtfMode::kResult;
-        TtfRebuildContent();
-        ClampFontListPage();
-        RefreshSettingsSheetFontList();
-    } else {
-        // 面板已关：静默收尾；字库仍刷新，下次打开设置可见
-        st.ttf_mode = BookUiState::TtfMode::kNone;
-        ClampFontListPage();
-        if (st.settings_sheet != nullptr && lv_obj_is_valid(st.settings_sheet)) {
-            RefreshSettingsSheetFontList();
-        }
-    }
-}
-
 void EnsureFontListPageShowsSelection() {
     auto& st = State();
     const int cur = CurrentFontIndex();
@@ -3240,6 +2449,39 @@ void EnsureFontListPageShowsSelection() {
     st.font_list_page = cur / kFontListPageSize;
     ClampFontListPage();
 }
+
+void OnTtfFontsChangedFromPanel() {
+    ScanReadFonts();
+    ClampFontListPage();
+    auto& st = State();
+    if (st.settings_sheet != nullptr && lv_obj_is_valid(st.settings_sheet)) {
+        RefreshSettingsSheetFontList();
+    }
+}
+
+void FillTtfEfTemplatePath(char* out, size_t out_len) {
+    if (out == nullptr || out_len == 0) {
+        return;
+    }
+    out[0] = '\0';
+    auto& st = State();
+    const int fi = CurrentFontIndex();
+    if (fi >= 0 && fi < static_cast<int>(st.font_entries.size())) {
+        std::snprintf(out, out_len, "%s/%s", SD_PATH_FONTS,
+                      st.font_entries[static_cast<size_t>(fi)].file.c_str());
+    } else {
+        std::snprintf(out, out_len, "%s", SD_PATH_BOOK_FONT);
+    }
+}
+
+struct TtfPanelHooksInit {
+    TtfPanelHooksInit() {
+        SetTtfFontsChangedHandler(&OnTtfFontsChangedFromPanel);
+        SetTtfEfTemplateHandler(&FillTtfEfTemplatePath);
+    }
+};
+static TtfPanelHooksInit s_ttf_panel_hooks_init;
+
 
 /** 列表主文案：去掉 .ef；过长截断 */
 void FormatFontListName(const std::string& file, char* out, size_t out_len) {
