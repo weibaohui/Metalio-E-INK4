@@ -6,6 +6,7 @@
 #include <strings.h>
 
 #include <mutex>
+#include <atomic>
 
 #include "a2ui_img_cache.h"
 #include "api_http.h"
@@ -80,7 +81,7 @@ typedef struct {
  *   while an object still references its dsc.
  */
 static a2ui_img_surface_t s_surfaces[A2UI_IMG_MAX_SURFACES];
-static volatile uint32_t s_job_gen;
+static std::atomic<uint32_t> s_job_gen{0};
 static lv_display_t *s_disp;
 static char s_http_origin[96];
 
@@ -496,7 +497,7 @@ esp_err_t a2ui_image_put_local_l8(const char *url, uint16_t w, uint16_t h, const
 
 void a2ui_image_abort_loads(void)
 {
-    s_job_gen++;
+    s_job_gen.fetch_add(1, std::memory_order_relaxed);
     drain_queue();
 }
 

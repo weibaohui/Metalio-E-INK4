@@ -11,7 +11,6 @@
 
 #include "backlight.h"
 #include "camera.h"
-#include "assets.h"
 
 class Led {
 public:
