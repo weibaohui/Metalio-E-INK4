@@ -136,6 +136,7 @@ esp_err_t WifiStation::ResumeFromLp() {
         ESP_LOGE(TAG, "LP resume wifi start: %s", esp_err_to_name(err));
         return err;
     }
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     ESP_LOGI(TAG, "STA resumed from LP");
     return ESP_OK;
 }
@@ -185,6 +186,7 @@ void WifiStation::Start() {
                                                         &instance_got_ip_));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
 
     if (max_tx_power_ != 0) {
         ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(max_tx_power_));
@@ -382,6 +384,9 @@ void WifiStation::IpEventHandler(void* arg, esp_event_base_t event_base, int32_t
     this_->ip_address_ = ip_address;
     ESP_LOGI(TAG, "Got IP: %s", this_->ip_address_.c_str());
     
+    // 默认开启 Wi-Fi Modem Sleep 省电模式 (空闲时射频自动在 DTIM 间隙休眠，降低 ~75-85mA 功耗)
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+
     xEventGroupSetBits(this_->event_group_, WIFI_EVENT_CONNECTED);
     if (this_->on_connected_) {
         this_->on_connected_(this_->ssid_);

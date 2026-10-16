@@ -661,6 +661,11 @@ void RadioTask(void*) {
                 std::lock_guard<std::mutex> lock(s_snap_mutex);
                 s_snap.catalog_index = -1;
             }
+            if (s_audio_boot_done.load()) {
+                Application::GetInstance().Schedule([]() {
+                    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+                });
+            }
             continue;
         }
         NetHold(true);        // 播放:硬占网。否则无交互 ~90s 后电源策略进待机
@@ -889,6 +894,12 @@ extern "C" void radio_player_shutdown(void) {
         s_radio_pcm_queue.clear();
     }
     s_radio_pcm_cv.notify_all();
+
+    if (s_audio_boot_done.load()) {
+        Application::GetInstance().Schedule([]() {
+            esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+        });
+    }
 
     if (s_task != nullptr || s_play_task != nullptr) {
         s_quit.store(true);

@@ -29,7 +29,7 @@ constexpr const char* kIdleMhzNvsKey = "idle_mhz";
 constexpr const char* kIdleToStandbyNvsKey = "idle_stb_s";
 constexpr const char* kNetGraceNvsKey = "net_grace_s";
 constexpr const char* kStandbyToOffNvsKey = "stb_off_s";
-constexpr int kIdleMhzDefault = 240;
+constexpr int kIdleMhzDefault = 160;
 
 namespace pwr {
 
