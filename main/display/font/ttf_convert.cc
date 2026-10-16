@@ -82,6 +82,7 @@ void FinishOk() {
 /** WithCaps 创建的任务必须用 WithCaps 删除，否则栈块泄漏。 */
 [[noreturn]] void ExitWorker() {
     vTaskDeleteWithCaps(nullptr);
+    for (;;) {}
 }
 
 bool LoadCharset(const char* template_ef_path, std::vector<uint32_t>* cps) {

@@ -58,7 +58,7 @@ char s_hostname[20] = "metalio";
 std::atomic<bool> s_running{false};   // 发送任务运行标志(Stop 置 false 让其自退)
 std::atomic<bool> s_hooked{false};
 volatile bool s_ip_ready = false;
-volatile uint32_t s_hook_depth = 0;
+std::atomic<uint32_t> s_hook_depth{0};
 
 // esp_log 级别字母 → syslog severity
 int SeverityOf(const char* line) {
@@ -123,7 +123,7 @@ int HookedVprintf(const char* fmt, va_list args) {
     if (xPortInIsrContext() || s_hook_depth > 0) {
         return s_prev_vprintf ? s_prev_vprintf(fmt, args) : vprintf(fmt, args);
     }
-    s_hook_depth++;
+    s_hook_depth.fetch_add(1, std::memory_order_relaxed);
     char stack_buf[kFormatCap];
     va_list copy;
     va_copy(copy, args);
@@ -134,7 +134,7 @@ int HookedVprintf(const char* fmt, va_list args) {
         RingWriteBytes(stack_buf, n);
     }
     const int ret = s_prev_vprintf ? s_prev_vprintf(fmt, args) : vprintf(fmt, args);
-    s_hook_depth--;
+    s_hook_depth.fetch_sub(1, std::memory_order_relaxed);
     return ret;
 }
 
