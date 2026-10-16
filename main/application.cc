@@ -133,18 +133,8 @@ void Application::ApplyIdleStatusBar() {
     if (!display->AllowsIdleStatusClock()) {
         const char* text = display->GetIdleStatusFixedText();
         display->SetStatus((text != nullptr && text[0] != '\0') ? text : Lang::Strings::STANDBY);
-        return;
-    }
-
-    // 首页 / 百问 Idle：直接显示时钟
-    time_t now = time(nullptr);
-    struct tm tm_info = {};
-    if (localtime_r(&now, &tm_info) != nullptr && tm_info.tm_year >= (2025 - 1900)) {
-        char time_str[16];
-        strftime(time_str, sizeof(time_str), "%H:%M", &tm_info);
-        display->SetStatus(time_str);
     } else {
-        display->SetStatus("--:--");
+        display->SetStatus("");
     }
 }
 
@@ -213,7 +203,6 @@ void Application::MainEventLoop() {
         }
 
         if (bits & MAIN_EVENT_CLOCK_TICK) {
-            clock_ticks_++;
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
         }
@@ -225,7 +214,6 @@ void Application::SetDeviceState(DeviceState state) {
         return;
     }
     
-    clock_ticks_ = 0;
     auto previous_state = device_state_;
     device_state_ = state;
     ESP_LOGI(TAG, "STATE: %s", STATE_STRINGS[device_state_]);
