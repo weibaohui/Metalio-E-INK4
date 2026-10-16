@@ -51,33 +51,21 @@ public:
     void SetDeviceState(DeviceState state);
     void Alert(const char* status, const char* message, const char* emotion = "", const std::string_view& sound = "");
     void DismissAlert();
-    void AbortSpeaking(AbortReason reason);
-    // 百问 AI BOOT 页内分工：StartListening/StopListening/AbortSpeakingToIdle。
-    void StartListening();
-    void StopListening();
-    void AbortSpeakingToIdle();
     void Reboot();
     bool UpgradeFirmware(Ota& ota, const std::string& url = "");
     bool UpgradeFirmwareUrl(const std::string& url, const std::string& current_version,
                             const std::string& new_version);
-    bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
     AudioService& GetAudioService() { return audio_service_; }
 
-    // 屏级语音会话：进页激活，离页关闭音频与协议，归还任务栈占用。
-    void StartXiaozhiVoice(bool enter_listening = false);
-    void StopXiaozhiVoice();
-    void CancelAssistantNetworkWait();
-    bool IsXiaozhiVoiceActive() const { return xiaozhi_voice_active_; }
     // 开机主流程是否已结束（联网/OTA 等）。
     bool IsBootReady() const { return boot_ready_.load(std::memory_order_acquire); }
 
-    // 按需启动音频服务；不启动小智语音会话。
+    // 按需启动音频服务
     void EnsureAudioServiceRunning();
-    // 关闭按需拉起的音频任务；百问会话路径走 StopXiaozhiVoice。
     void StopAudioServiceIfRunning();
 
     // 待机浅睡唤醒后：恢复激活 UI 并继续 CheckVersion/Activate。
@@ -105,43 +93,23 @@ private:
     bool audio_initialized_ = false;
     bool audio_running_ = false;
     bool protocol_ready_ = false;
-    bool xiaozhi_voice_active_ = false;
-    bool aborted_ = false;
     std::atomic<bool> boot_ready_{false}; // Start() 跑完后置 true
-    // 开机未完成时进百问：记录意图，boot_ready 后自动 StartXiaozhiVoice。
-    std::atomic<bool> pending_xiaozhi_voice_{false};
-    std::atomic<bool> pending_xiaozhi_listen_{false};
     int clock_ticks_ = 0;
     std::string activation_code_;
     std::string activation_message_;
     std::atomic<bool> activation_kick_{false};
     TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
-    bool assistant_network_worker_running_ = false; // MainEventLoop-owned
-    std::atomic<bool> assistant_network_cancel_requested_{false};
-    std::vector<std::function<void(bool)>> assistant_network_waiters_; // MainEventLoop-owned
-    uint32_t voice_session_generation_ = 0; // MainEventLoop-owned; invalidates stale async work
     void CheckNewVersion(Ota& ota);
     void CheckAssetsVersion();
     void ShowActivationCode(const std::string& code, const std::string& message);
-    void SetListeningMode(ListeningMode mode);
-    // 屏级会话：打开音频通道并进入 AutoStop/Realtime 聆听；失败会保持 Idle。
-    // Idle 状态栏：允许时钟页面（含百问）刷 HH:MM；固定文案页改用 GetIdleStatusFixedText。
+    // Idle 状态栏：允许时钟页面刷 HH:MM；固定文案页改用 GetIdleStatusFixedText。
     void ApplyIdleStatusBar();
     // 可中断延迟；Idle 时返回 false，activation_kick 时返回 true。
     bool DelayMsInterruptible(int ms);
 
-    bool ShouldAllowBootAudio() const;
     void EnsureProtocolReady();
     void TeardownProtocol();
-    // Assistant network waits run off MainEventLoop; callbacks return on that loop.
-    void EnsureAssistantNetworkReadyAsync(std::function<void(bool)> callback);
-    void CompleteAssistantNetworkReady(bool ready, bool cancelled);
-    void StartXiaozhiVoiceImpl(bool enter_listening, int network_result = -1);
-    void StartListeningImpl(uint32_t session_generation, int network_result = -1);
-    void StartAssistantNetworkWorker();
-    // 开机完成后：若仍在百问页，则兑现挂起的进页/聆听意图。
-    void FlushPendingXiaozhiVoice();
 };
 
 

@@ -244,10 +244,6 @@ void ReleaseOwnedAudioIfNeeded() {
     }
     s_owns_audio_service = false;
     auto& app = Application::GetInstance();
-    if (app.IsXiaozhiVoiceActive()) {
-        ESP_LOGI(TAG, "skip StopAudio: xiaozhi session active");
-        return;
-    }
     app.StopAudioServiceIfRunning();
 }
 
