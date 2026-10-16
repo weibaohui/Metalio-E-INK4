@@ -2,7 +2,6 @@
 set(SOURCES "audio/audio_codec.cc"
             "audio/audio_service.cc"
             "audio/codecs/no_audio_codec.cc"
-            "audio/processors/audio_debugger.cc"
             "display/display.cc"
             "display/lv_adapter_display.cc"
             "display/a2ui/a2ui.c"
