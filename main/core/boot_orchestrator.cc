@@ -102,7 +102,6 @@ void BootOrchestrator::Run(Application& app) {
              Syslog_Init();
              TimeService_Init();
              CalendarIcs_Init();
-             AppManager::GetInstance().Init();
          }},
         {"boot_ready",
          [&] {

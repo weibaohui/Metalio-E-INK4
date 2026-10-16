@@ -7,19 +7,6 @@
 
 static const char *TAG = "DualNetworkBoard";
 
-DualNetworkBoard::DualNetworkBoard(gpio_num_t ml307_tx_pin, gpio_num_t ml307_rx_pin, gpio_num_t ml307_dtr_pin, int32_t default_net_type) 
-    : Board(), 
-      ml307_tx_pin_(ml307_tx_pin), 
-      ml307_rx_pin_(ml307_rx_pin), 
-      ml307_dtr_pin_(ml307_dtr_pin) {
-    
-    // 从Settings加载网络类型
-    network_type_ = LoadNetworkTypeFromSettings(default_net_type);
-    
-    // 只初始化当前网络类型对应的板卡
-    InitializeCurrentBoard();
-}
-
 DualNetworkBoard::DualNetworkBoard(gpio_num_t cellular_tx_pin,
     gpio_num_t cellular_rx_pin,
     gpio_num_t cellular_dtr_pin,
@@ -54,11 +41,10 @@ void DualNetworkBoard::SaveNetworkTypeToSettings(NetworkType type) {
 
 void DualNetworkBoard::InitializeCurrentBoard() {
     if (network_type_ == NetworkType::ML307) {
-        ESP_LOGI(TAG, "Initialize ML307 board");
+        ESP_LOGI(TAG, "Initialize Cellular(NT26) board");
 
         current_board_ = std::make_unique<Nt26Board>(
             cellular_tx_pin_, cellular_rx_pin_, cellular_dtr_pin_, cellular_ri_pin_);
-        // current_board_ = std::make_unique<Ml307Board>(ml307_tx_pin_, ml307_rx_pin_, ml307_dtr_pin_);
     } else {
         ESP_LOGI(TAG, "Initialize WiFi board");
         current_board_ = std::make_unique<WifiBoard>();

@@ -85,45 +85,6 @@ void SetState(AiChatState st, const std::string& err = "") {
 void SetUserText(const std::string& t) { std::lock_guard<std::mutex> l(s_state_mutex); s_user_text = t; }
 void SetReplyText(const std::string& t) { std::lock_guard<std::mutex> l(s_state_mutex); s_reply_text = t; }
 
-// ---- HTTP 助手(整段 SetContent,内部栈任务调用,用于大模型对话) ----
-// 返回 HTTP 状态码;resp 填响应体。失败返回 <=0。
-int HttpPost(const std::string& url, const std::string& bearer,
-             const std::string& content_type, const std::string& body, std::string& resp) {
-    if (url.empty()) return -1;
-    if (!api::CheckUrlTlsPreflight(url, 14 * 1024)) {
-        ESP_LOGE(TAG, "http: internal RAM too low for TLS handshake");
-        return -3;
-    }
-    ESP_LOGI(TAG, "http: create (%u bytes body)", (unsigned)body.size());
-    auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
-    if (!http) { ESP_LOGE(TAG, "http: create failed"); return -1; }
-    http->SetTimeout(20000);
-    if (!bearer.empty()) http->SetHeader("Authorization", "Bearer " + bearer);
-    http->SetHeader("Content-Type", content_type);
-    http->SetContent(std::string(body));   // 整段 Content-Length POST
-    ESP_LOGI(TAG, "http: open...");
-    if (!http->Open("POST", url)) {
-        ESP_LOGE(TAG, "http: open failed err=0x%x", http->GetLastError());
-        http->Close();
-        return -2;
-    }
-    const int status = http->GetStatusCode();
-    ESP_LOGI(TAG, "http: status %d, reading", status);
-    char chunk[2048];
-    while (true) {
-        if (s_interrupt_tts.load() || s_cancel.load()) {
-            ESP_LOGI(TAG, "http: read interrupted by user");
-            break;
-        }
-        int r = http->Read(chunk, sizeof(chunk));
-        if (r <= 0) break;
-        resp.append(chunk, r);
-    }
-    http->Close();
-    ESP_LOGI(TAG, "http: done %u bytes", (unsigned)resp.size());
-    return status;
-}
-
 // 流式 HTTP POST: 以 SSE (Server-Sent Events) 读取响应, 逐行解析 data:
 int HttpPostStream(const std::string& url, const std::string& bearer,
                    const std::string& content_type, const std::string& body,
@@ -190,11 +151,7 @@ int HttpPostStream(const std::string& url, const std::string& bearer,
     return status;
 }
 
-// STT: 委托给独立 minimax_speech 模块转写 (支持全量与流式)
-bool SttTranscribe(const Cfg& cfg, const std::vector<int16_t>& pcm, std::string& text, std::string& err) {
-    return minimax_speech::Transcribe(cfg.stt_url, cfg.stt_key, cfg.stt_model, pcm, text, err);
-}
-
+// STT: 委托给独立 minimax_speech 模块流式转写
 bool SttTranscribeStream(const Cfg& cfg, const std::vector<int16_t>& pcm,
                          std::function<void(const std::string& delta)> on_delta,
                          std::string& text, std::string& err,
@@ -484,10 +441,6 @@ bool LlmChatStream(const Cfg& cfg, const std::string& user_text,
     return false;
 }
 
-bool LlmChat(const Cfg& cfg, const std::string& user_text, std::string& reply, std::string& err) {
-    return LlmChatStream(cfg, user_text, nullptr, reply, err);
-}
-
 // 对话轮存档:JSONL 追加到 SD(/sdcard/metalio/e-ink/aichat/history.jsonl)。
 // PSRAM 栈任务写 SD 合规(纪律只禁内部 flash/NVS);>512KB 轮转保留一代。
 void SaveHistory(const std::string& user, const std::string& reply) {
@@ -626,7 +579,7 @@ void PipelineTask(void*) {
     codec->EnableInput(true);
 
     while (!s_cancel.load()) {
-        const bool barge = s_barge_record.exchange(false);
+        (void)s_barge_record.exchange(false);
         SetState(AiChatState::Recording);
         std::vector<int16_t> pcm = RecordWhileHeld();
         if (s_cancel.load()) break;

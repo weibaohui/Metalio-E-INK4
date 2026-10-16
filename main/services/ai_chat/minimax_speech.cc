@@ -64,18 +64,6 @@ std::string EscapeJson(const std::string& in) {
 void PutLE32(std::string& s, uint32_t v) { for (int i = 0; i < 4; ++i) s += (char)((v >> (8 * i)) & 0xff); }
 void PutLE16(std::string& s, uint16_t v) { for (int i = 0; i < 2; ++i) s += (char)((v >> (8 * i)) & 0xff); }
 
-std::string BuildWav(const std::vector<int16_t>& pcm) {
-    const uint32_t data_bytes = (uint32_t)(pcm.size() * sizeof(int16_t));
-    std::string out;
-    out.reserve(44 + data_bytes);
-    out += "RIFF"; PutLE32(out, 36 + data_bytes); out += "WAVE";
-    out += "fmt "; PutLE32(out, 16); PutLE16(out, 1); PutLE16(out, 1);  // PCM, mono
-    PutLE32(out, kSampleRate); PutLE32(out, kSampleRate * 2); PutLE16(out, 2); PutLE16(out, 16);
-    out += "data"; PutLE32(out, data_bytes);
-    out.append(reinterpret_cast<const char*>(pcm.data()), data_bytes);
-    return out;
-}
-
 int HttpPostRaw(const std::string& url, const std::string& bearer,
                 const std::string& content_type, const std::string& body, std::string& resp,
                 const std::atomic<bool>* interrupt_flag, const std::atomic<bool>* cancel_flag) {

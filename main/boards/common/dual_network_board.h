@@ -3,7 +3,6 @@
 
 #include "board.h"
 #include "wifi_board.h"
-#include "ml307_board.h"
 #include <memory>
 #include "nt26_board.h"
 
@@ -20,11 +19,6 @@ private:
     std::unique_ptr<Board> current_board_;
     NetworkType network_type_ = NetworkType::ML307;  // Default to ML307
 
-    // ML307的引脚配置
-    gpio_num_t ml307_tx_pin_;
-    gpio_num_t ml307_rx_pin_;
-    gpio_num_t ml307_dtr_pin_;
-    
     // Cellular(NT26) pin configuration
     gpio_num_t cellular_tx_pin_;
     gpio_num_t cellular_rx_pin_;
@@ -38,7 +32,6 @@ private:
     void InitializeCurrentBoard();
  
 public:
-    DualNetworkBoard(gpio_num_t ml307_tx_pin, gpio_num_t ml307_rx_pin, gpio_num_t ml307_dtr_pin = GPIO_NUM_NC, int32_t default_net_type = 1);
     
     // Explicit constructor with SRDY/RI pin.
     DualNetworkBoard(gpio_num_t cellular_tx_pin,
