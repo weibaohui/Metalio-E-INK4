@@ -29,6 +29,7 @@
 #include "book_screen/book_cover_loader.h"
 #include "book_screen/book_font_manager.h"
 #include "book_screen/book_ttf_panel.h"
+#include "book_screen/book_bookshelf.h"
 #include "book_screen/book_ui_state.h"
 #include "book_screen/book_reader_prefs.h"
 #include "reader/book_cover_sidecar.h"
@@ -54,21 +55,17 @@ namespace {
 
 constexpr const char* TAG = "BookScreen";
 constexpr const char* kScreenLibrary = "book";         // 阅读首页
-constexpr const char* kScreenBookshelf = "book_shelf"; // 我的书架网格
 constexpr const char* kScreenDetail = "book_detail";
 constexpr const char* kScreenRead = "book_read";
 constexpr lv_coord_t kListPad = 16;   // 首页/书架外边距
 constexpr lv_coord_t kFooterH = 36;
 // 分页高度相对正文区再收一点：末行字形/下划线(+4)可能略超 line_height，避免钻进底栏
 constexpr lv_coord_t kReadViewportBottomSlack = 8;
-constexpr lv_coord_t kShelfMultiBtnH = 36;     // 底栏多选行（与页码同槽，不挤书籍）
 constexpr lv_coord_t kShelfUnderlineH = 1;
 constexpr lv_coord_t kShelfUnderlinePadHor = 5;
 constexpr lv_coord_t kShelfMultiDotSize = 6;
 constexpr lv_coord_t kShelfCheckSize = 24;     // 封面角勾选
-constexpr int64_t kShelfSuppressRowClickUs = 400000; // 只挡长按行松手假 CLICKED
 constexpr int64_t kFontSuppressRowClickUs = 1200000;  // 设置卡刷行更慢，松手假点击窗更宽
-constexpr uint64_t kShelfCheckPaintDebounceUs = 280000;
 constexpr lv_coord_t kHomeShelfBtnH = 76;  // 「我的书架」按钮
 constexpr lv_coord_t kHomeShelfBtnRadius = 8; // 方框略圆，勿全胶囊
 constexpr lv_coord_t kHomeCardRadius = 14;
@@ -80,11 +77,6 @@ constexpr lv_coord_t kHomeStatsPad = 8;    // 统计区上下内边距
 constexpr lv_coord_t kHomeStatsGap = 8;    // 统计行距
 constexpr lv_coord_t kRecentCoverH = 290;  // 最近阅读封面高度上限（比例适中，勿吃满余高）
 constexpr lv_coord_t kRecentTitleGap = 14; // 最近阅读封面与书名间距
-constexpr lv_coord_t kShelfTitleGap = 6;
-constexpr int kShelfCols = 3;
-constexpr int kShelfRows = 3;             // 每页固定 3×3
-constexpr lv_coord_t kShelfColGap = 12;
-constexpr lv_coord_t kShelfRowGap = 16;    // 上下两排间距
 constexpr lv_coord_t kCoverFrameBorder = 1; // 封面外框；图须缩进，避免 L8 盖住描边
 constexpr lv_coord_t kCoverSpineInset = 6;  // 书脊竖线相对左边框内缩
 constexpr lv_coord_t kTocCoverW = 194;  // 目录页封面（约原 216×0.9）
@@ -151,10 +143,25 @@ using book_screen_detail::ClearTtfWidgetRefs;
 using book_screen_detail::kTtfConvertSizeDefault;
 using book_screen_detail::SetTtfFontsChangedHandler;
 using book_screen_detail::SetTtfEfTemplateHandler;
+using book_screen_detail::kScreenBookshelf;
+using book_screen_detail::CreateBookshelfScreen;
+using book_screen_detail::RenderBookshelfPage;
+using book_screen_detail::RequestRenderBookshelfPage;
+using book_screen_detail::RequestShelfCheckMarksPaint;
+using book_screen_detail::ExitShelfMultiMode;
+using book_screen_detail::ListPageCount;
+using book_screen_detail::ClampListPage;
+using book_screen_detail::CreateBookCoverCell;
+using book_screen_detail::SetBookshelfPrepareEnterHandler;
+using book_screen_detail::SetBookshelfCancelListCoverHandler;
+using book_screen_detail::SetBookshelfScheduleListCoverHandler;
+using book_screen_detail::SetBookshelfEnqueueListCoverHandler;
+using book_screen_detail::SetBookshelfCreateCoverSlotHandler;
+using book_screen_detail::SetBookshelfOpenDetailHandler;
+using book_screen_detail::SetBookshelfTruncateHandler;
+using book_screen_detail::SetBookshelfAttachVkHandler;
 
 ScreenPaintCoalesce s_reader_paint{};
-ScreenPaintCoalesce s_library_paint{};
-ScreenPaintCoalesce s_shelf_check_paint{};
 ScreenPaintCoalesce s_toc_paint{};
 ScreenPaintCoalesce s_settings_sheet_paint{}; // 设置卡：连点只记状态，抬起后一次刷控件
 // 盖板键/长按定时器只累加；真正 Next/Prev 在 LVGL 绘制里做，避免跨章重建 pages_ 时 UAF
@@ -515,26 +522,6 @@ void ShowMessage(lv_obj_t* parent, const char* msg, const lv_font_t* font = null
     DisableScroll(label);
 }
 
-int ListPageCount() {
-    auto& st = State();
-    if (st.books.empty() || st.list_page_size <= 0) {
-        return 1;
-    }
-    return static_cast<int>((st.books.size() + static_cast<size_t>(st.list_page_size) - 1) /
-                            static_cast<size_t>(st.list_page_size));
-}
-
-void ClampListPage() {
-    auto& st = State();
-    const int pages = ListPageCount();
-    if (st.list_page < 0) {
-        st.list_page = 0;
-    }
-    if (st.list_page >= pages) {
-        st.list_page = pages - 1;
-    }
-}
-
 int EnsureBookInLibrary(const reader::BookInfo& info) {
     auto& st = State();
     for (int i = 0; i < static_cast<int>(st.books.size()); ++i) {
@@ -559,21 +546,10 @@ int EnsureBookInLibrary(const reader::BookInfo& info) {
 
 lv_obj_t* CreateReaderScreen(const reader::BookInfo& info);
 lv_obj_t* CreateDetailScreen(int book_index);
-lv_obj_t* CreateBookshelfScreen();
 lv_obj_t* ResumeReaderScreen();   // 返回栈：关 session 后再开，依 .pos 续读
 lv_obj_t* ResumeDetailScreen();   // 返回栈：重建当前书详情
 void ReleaseReaderSessionForLeave();
 void RenderReadingHome();
-void RenderBookshelfPage();
-void RequestRenderBookshelfPage();
-void RequestShelfCheckMarksPaint();
-void RefreshShelfFooterMode();
-void ExitShelfMultiMode(bool rebuild);
-void EnterShelfMultiModeSelect(int idx);
-void PatchShelfVisibleCheckMarks();
-void OnShelfMultiCancel(lv_event_t* e);
-void OnShelfMultiSelectAll(lv_event_t* e);
-void OnShelfMultiRemove(lv_event_t* e);
 void ExitFontMultiMode(bool paint);
 void EnterFontMultiModeSelect(int idx);
 void RefreshFontMultiFooter();
@@ -650,7 +626,6 @@ void OnTocRowClicked(lv_event_t* e);
 void AttachReadBodyInput(lv_obj_t* obj);
 bool BookLvAsync(void (*cb)(void*), void* user_data = nullptr);
 void RequestRenderReaderPage();
-void RequestRenderBookshelfPage();
 void RequestRenderTocList();
 void ApplyReaderPageDelta();
 bool QueueReaderPageTurn(int dir);
@@ -880,12 +855,6 @@ bool BookLvAsync(void (*cb)(void*), void* user_data) {
     return ok;
 }
 
-void PaintBookshelfPage() {
-    ESP_LOGI(TAG, "async RenderBookshelfPage page=%d begin", State().list_page);
-    RenderBookshelfPage();
-    ESP_LOGI(TAG, "async RenderBookshelfPage done");
-}
-
 void PaintReaderPage() {
     ESP_LOGI(TAG, "async RenderReaderPage begin");
     RenderReaderPage();
@@ -899,9 +868,6 @@ void PaintTocList() {
 }
 
 void EnsureBookPaintFns() {
-    if (s_library_paint.paint == nullptr) {
-        s_library_paint.paint = PaintBookshelfPage;
-    }
     if (s_reader_paint.paint == nullptr) {
         s_reader_paint.paint = PaintReaderPage;
     }
@@ -914,18 +880,6 @@ void EnsureBookPaintFns() {
 }
 
 /** 页码已同步改完后调用：序号合并，积压回调跳过已画过的序号。 */
-void RequestRenderBookshelfPage() {
-    EnsureBookPaintFns();
-    ScreenPaintCoalesceRequest(&s_library_paint);
-}
-
-void RequestShelfCheckMarksPaint() {
-    if (s_shelf_check_paint.paint == nullptr) {
-        s_shelf_check_paint.paint = PatchShelfVisibleCheckMarks;
-    }
-    ScreenPaintCoalesceRequestDebounced(&s_shelf_check_paint, kShelfCheckPaintDebounceUs);
-}
-
 void RequestRenderReaderPage() {
     EnsureBookPaintFns();
     ScreenPaintCoalesceRequest(&s_reader_paint);
@@ -1764,303 +1718,6 @@ void OnOpenShelfClicked(lv_event_t* /*e*/) {
         return;
     }
     lv_async_call(OpenBookshelfAsync, nullptr);
-}
-
-void SyncShelfSelectedSize() {
-    auto& st = State();
-    if (st.shelf_selected.size() != st.books.size()) {
-        st.shelf_selected.assign(st.books.size(), 0);
-    }
-}
-
-int ShelfSelectedCount() {
-    SyncShelfSelectedSize();
-    auto& st = State();
-    int n = 0;
-    for (uint8_t v : st.shelf_selected) {
-        if (v != 0) {
-            ++n;
-        }
-    }
-    return n;
-}
-
-bool ShelfItemSelected(int idx) {
-    SyncShelfSelectedSize();
-    auto& st = State();
-    return idx >= 0 && idx < static_cast<int>(st.shelf_selected.size()) &&
-           st.shelf_selected[static_cast<size_t>(idx)] != 0;
-}
-
-void ToggleShelfItemSelected(int idx) {
-    SyncShelfSelectedSize();
-    auto& st = State();
-    if (idx < 0 || idx >= static_cast<int>(st.shelf_selected.size())) {
-        return;
-    }
-    st.shelf_selected[static_cast<size_t>(idx)] =
-        st.shelf_selected[static_cast<size_t>(idx)] ? 0 : 1;
-}
-
-void RefreshShelfFooterMode() {
-    auto& st = State();
-    if (st.shelf_multi) {
-        if (st.multi_bar != nullptr) {
-            lv_obj_set_width(st.multi_bar, lv_pct(100));
-            lv_obj_align(st.multi_bar, LV_ALIGN_CENTER, 0, -3); // 整体居中并上移 6px
-            lv_obj_clear_flag(st.multi_bar, LV_OBJ_FLAG_HIDDEN);
-        }
-        if (st.list_footer != nullptr) {
-            lv_obj_set_width(st.list_footer, LV_SIZE_CONTENT);
-            lv_obj_set_style_text_align(st.list_footer, LV_TEXT_ALIGN_RIGHT, 0);
-            lv_obj_set_style_text_font(st.list_footer, ItemFont(), 0);
-            lv_obj_align(st.list_footer, LV_ALIGN_RIGHT_MID, -10, 0);
-            lv_obj_clear_flag(st.list_footer, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_move_foreground(st.list_footer);
-            char buf[32];
-            std::snprintf(buf, sizeof(buf), Lang::Strings::BOOK_SELECTED_FMT, ShelfSelectedCount());
-            StatusBarManager::GetInstance().SetOngoing("book", buf);
-        }
-    } else {
-        if (st.multi_bar != nullptr) {
-            lv_obj_add_flag(st.multi_bar, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_width(st.multi_bar, lv_pct(100));
-            lv_obj_align(st.multi_bar, LV_ALIGN_CENTER, 0, 0);
-        }
-        if (st.list_footer != nullptr) {
-            lv_obj_set_width(st.list_footer, LV_HOR_RES - 16);
-            lv_obj_set_style_text_align(st.list_footer, LV_TEXT_ALIGN_CENTER, 0);
-            lv_obj_set_style_text_font(st.list_footer, ItemFont(), 0);
-            lv_obj_align(st.list_footer, LV_ALIGN_CENTER, 0, 0);
-            lv_obj_clear_flag(st.list_footer, LV_OBJ_FLAG_HIDDEN);
-        }
-        StatusBarManager::GetInstance().SetOngoing("book", Lang::Strings::BOOK_SHELF_TITLE);
-    }
-}
-
-void ExitShelfMultiMode(bool rebuild) {
-    auto& st = State();
-    st.shelf_multi = false;
-    st.shelf_suppress_click_until_us = 0;
-    st.shelf_suppress_click_idx = -1;
-    st.shelf_selected.assign(st.books.size(), 0);
-    RefreshShelfFooterMode();
-    if (rebuild) {
-        RequestRenderBookshelfPage();
-    }
-}
-
-void EnterShelfMultiModeSelect(int idx) {
-    auto& st = State();
-    st.shelf_multi = true;
-    SyncShelfSelectedSize();
-    st.shelf_selected.assign(st.books.size(), 0);
-    if (idx >= 0 && idx < static_cast<int>(st.shelf_selected.size())) {
-        st.shelf_selected[static_cast<size_t>(idx)] = 1;
-    }
-    RefreshShelfFooterMode();
-    RequestRenderBookshelfPage();
-}
-
-bool DeleteLibraryBookFile(const reader::BookInfo& info, std::string& err_out) {
-    err_out.clear();
-    if (info.path.empty()) {
-        err_out = Lang::Strings::BOOK_PATH_INVALID;
-        return false;
-    }
-    const std::string books_prefix = std::string(SD_PATH_BOOKS) + "/";
-    if (info.path.rfind(books_prefix, 0) != 0) {
-        err_out = Lang::Strings::BOOK_PATH_INVALID;
-        return false;
-    }
-    // 先 Peek/缓存 再删 .pos：供首页聚合扣减（删后无法再读）
-    reader::BookSession::ProgressPeek peek;
-    if (!reader::book_progress_cache::TryGet(info.path.c_str(), peek)) {
-        peek = reader::BookSession::PeekProgress(info.path.c_str());
-    }
-    if (unlink(info.path.c_str()) != 0) {
-        err_out = Lang::Strings::BOOK_DELETE_FAILED;
-        return false;
-    }
-    unlink((info.path + ".tmp").c_str());
-    unlink((info.path + ".pos").c_str());      // 进度+终身累计+当日阅读秒
-    unlink((info.path + ".pos.tmp").c_str());  // 原子写残留
-    reader::DeleteBookCoverSidecar(info.path.c_str());
-    // TXT 分页索引缓存：同目录 <name>.txt.idx
-    if (info.format == reader::BookFormat::kTxt) {
-        unlink((info.path + ".idx").c_str());
-    }
-    ESP_LOGI(TAG, "deleted library book %s", info.path.c_str());
-    reader::book_progress_cache::Erase(info.path.c_str());
-    reader::book_home_snapshot::RemoveBook(info.path.c_str());
-    reader::book_home_snapshot::SubtractAggregateContribution(
-        peek.reading_seconds, peek.progress_x10 >= 1000);
-    return true;
-}
-
-lv_obj_t* FindShelfCell(int index) {
-    auto& st = State();
-    if (st.list_body == nullptr || !lv_obj_is_valid(st.list_body)) {
-        return nullptr;
-    }
-    const uint32_t n = lv_obj_get_child_count(st.list_body);
-    for (uint32_t i = 0; i < n; ++i) {
-        lv_obj_t* cell = lv_obj_get_child(st.list_body, i);
-        if (cell != nullptr &&
-            static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(cell))) == index) {
-            return cell;
-        }
-    }
-    return nullptr;
-}
-
-lv_obj_t* FindShelfCheckBox(lv_obj_t* cell) {
-    if (cell == nullptr) {
-        return nullptr;
-    }
-    // 封面 host 为 cell 首子；勾选框挂在 host 上
-    lv_obj_t* host = lv_obj_get_child(cell, 0);
-    if (host == nullptr) {
-        return nullptr;
-    }
-    const uint32_t n = lv_obj_get_child_count(host);
-    for (uint32_t i = 0; i < n; ++i) {
-        lv_obj_t* c = lv_obj_get_child(host, i);
-        if (c != nullptr && lv_obj_get_width(c) == kShelfCheckSize &&
-            lv_obj_get_height(c) == kShelfCheckSize) {
-            return c;
-        }
-    }
-    return nullptr;
-}
-
-void PatchShelfRowCheckMark(int index) {
-    auto& st = State();
-    if (!st.shelf_multi) {
-        return;
-    }
-    lv_obj_t* check = FindShelfCheckBox(FindShelfCell(index));
-    if (check == nullptr) {
-        RequestRenderBookshelfPage();
-        return;
-    }
-    lv_obj_clean(check);
-    if (!ShelfItemSelected(index)) {
-        return;
-    }
-    lv_obj_t* mark = lv_label_create(check);
-    lv_label_set_text(mark, "√");
-    lv_obj_set_style_text_font(mark, ItemFont(), 0);
-    lv_obj_set_style_text_color(mark, lv_color_black(), 0);
-    lv_obj_center(mark);
-    lv_obj_clear_flag(mark, LV_OBJ_FLAG_CLICKABLE);
-}
-
-void PatchShelfVisibleCheckMarks() {
-    auto& st = State();
-    if (!st.shelf_multi || st.list_body == nullptr || !lv_obj_is_valid(st.list_body)) {
-        return;
-    }
-    const uint32_t n = lv_obj_get_child_count(st.list_body);
-    for (uint32_t i = 0; i < n; ++i) {
-        lv_obj_t* cell = lv_obj_get_child(st.list_body, i);
-        if (cell == nullptr) {
-            continue;
-        }
-        PatchShelfRowCheckMark(
-            static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(cell))));
-    }
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), Lang::Strings::BOOK_SELECTED_FMT, ShelfSelectedCount());
-    StatusBarManager::GetInstance().SetOngoing("book", buf);
-}
-
-void OnShelfMultiCancel(lv_event_t* /*e*/) {
-    ExitShelfMultiMode(true);
-}
-
-void OnShelfMultiSelectAll(lv_event_t* /*e*/) {
-    auto& st = State();
-    if (!st.shelf_multi || st.books.empty()) {
-        return;
-    }
-    SyncShelfSelectedSize();
-    const int n = static_cast<int>(st.books.size());
-    int selected_n = ShelfSelectedCount();
-    const bool clear = (selected_n >= n);
-    st.shelf_selected.assign(static_cast<size_t>(n), clear ? 0 : 1);
-    RequestShelfCheckMarksPaint();
-}
-
-void OnShelfMultiRemove(lv_event_t* /*e*/) {
-    auto& st = State();
-    if (!st.shelf_multi || st.opening.load()) {
-        return;
-    }
-    SyncShelfSelectedSize();
-    if (ShelfSelectedCount() <= 0) {
-        return;
-    }
-    // 自大下标删除，避免下标漂移
-    for (int i = static_cast<int>(st.books.size()) - 1; i >= 0; --i) {
-        if (i >= static_cast<int>(st.shelf_selected.size()) || st.shelf_selected[static_cast<size_t>(i)] == 0) {
-            continue;
-        }
-        std::string err;
-        if (!DeleteLibraryBookFile(st.books[static_cast<size_t>(i)], err)) {
-            ESP_LOGW(TAG, "batch delete fail idx=%d: %s", i, err.c_str());
-            continue;
-        }
-        st.books.erase(st.books.begin() + i);
-        if (st.selected == i) {
-            st.selected = -1;
-        } else if (st.selected > i) {
-            --st.selected;
-        }
-    }
-    // 删除后以内存列表为权威，刷新缓存，避免下次 Load 复用含已删书的开机快照
-    reader::ReplaceBookLibraryCache(st.books);
-    st.shelf_multi = false;
-    st.shelf_suppress_click_until_us = 0;
-    st.shelf_suppress_click_idx = -1;
-    st.shelf_selected.assign(st.books.size(), 0);
-    ClampListPage();
-    RefreshShelfFooterMode();
-    RequestRenderBookshelfPage();
-}
-
-void OnBookRowLongPressed(lv_event_t* e) {
-    auto& st = State();
-    if (st.opening.load()) {
-        return;
-    }
-    const int index = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if (index < 0 || index >= static_cast<int>(st.books.size())) {
-        return;
-    }
-    if (!st.shelf_multi) {
-        st.shelf_suppress_click_idx = index;
-        st.shelf_suppress_click_until_us = esp_timer_get_time() + kShelfSuppressRowClickUs;
-        EnterShelfMultiModeSelect(index);
-        return;
-    }
-    ToggleShelfItemSelected(index);
-    RequestShelfCheckMarksPaint();
-}
-
-void OnBookRowClicked(lv_event_t* e) {
-    auto& st = State();
-    const int index = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if (index == st.shelf_suppress_click_idx &&
-        esp_timer_get_time() < st.shelf_suppress_click_until_us) {
-        return;
-    }
-    if (st.shelf_multi) {
-        ToggleShelfItemSelected(index);
-        RequestShelfCheckMarksPaint();
-        return;
-    }
-    lv_async_call(OpenDetailAsync, reinterpret_cast<void*>(static_cast<intptr_t>(index)));
 }
 
 void OnDetailStartClicked(lv_event_t* /*e*/) {
@@ -4994,76 +4651,72 @@ lv_obj_t* CreateCoverSlot(lv_obj_t* parent, const reader::BookInfo& info, lv_coo
     return host;
 }
 
-/** 书架 / 最近阅读：封面 + 可选书名 */
-lv_obj_t* CreateBookCoverCell(lv_obj_t* parent, const reader::BookInfo& info, int index,
-                              lv_coord_t cell_w, lv_coord_t cover_h,
-                              std::vector<std::unique_ptr<reader::RasterImage>>& cover_store,
-                              bool long_press_delete, lv_coord_t title_gap, bool show_title) {
+
+void BookshelfPrepareEnterFromHost() {
     auto& st = State();
-    lv_obj_t* cell = lv_obj_create(parent);
-    lv_obj_remove_style_all(cell);
-    lv_obj_set_width(cell, cell_w);
-    lv_obj_set_height(cell, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(cell, show_title ? title_gap : 0, 0);
-    lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
-    DisableScroll(cell);
-    lv_obj_set_user_data(cell, reinterpret_cast<void*>(static_cast<intptr_t>(index)));
-    HapticAttachClick(cell);
-    lv_obj_add_event_cb(cell, OnBookRowClicked, LV_EVENT_CLICKED,
-                        reinterpret_cast<void*>(static_cast<intptr_t>(index)));
-    if (long_press_delete) {
-        lv_obj_add_event_cb(cell, OnBookRowLongPressed, LV_EVENT_LONG_PRESSED,
-                            reinterpret_cast<void*>(static_cast<intptr_t>(index)));
-    }
-
-    auto cover = std::make_unique<reader::RasterImage>();
-    bool need_embed_fill = false;
-    lv_obj_t* host =
-        CreateCoverSlot(cell, info, cell_w, cover_h, cover.get(), &need_embed_fill);
-    cover_store.push_back(std::move(cover));
-    if (need_embed_fill) {
-        EnqueueListCoverFill(info, CoverFrameInner(cell_w), CoverFrameInner(cover_h), host,
-                             cover_store.back().get());
-    }
-
-    if (long_press_delete && st.shelf_multi) {
-        lv_obj_t* check = lv_obj_create(host);
-        lv_obj_remove_style_all(check);
-        lv_obj_set_size(check, kShelfCheckSize, kShelfCheckSize);
-        lv_obj_set_style_bg_color(check, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(check, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(check, lv_color_black(), 0);
-        lv_obj_set_style_border_width(check, kRowBorderW, 0);
-        lv_obj_set_style_radius(check, 4, 0);
-        lv_obj_align(check, LV_ALIGN_TOP_RIGHT, -4, 4);
-        DisableScroll(check);
-        lv_obj_clear_flag(check, LV_OBJ_FLAG_CLICKABLE);
-        if (ShelfItemSelected(index)) {
-            lv_obj_t* mark = lv_label_create(check);
-            lv_label_set_text(mark, "√");
-            lv_obj_set_style_text_font(mark, ItemFont(), 0);
-            lv_obj_set_style_text_color(mark, lv_color_black(), 0);
-            lv_obj_center(mark);
-            lv_obj_clear_flag(mark, LV_OBJ_FLAG_CLICKABLE);
+    const bool workers_busy = st.opening.load() || st.layout_busy.load() ||
+                              st.chapter_pages_busy.load() || st.page_image_busy.load();
+    if (workers_busy) {
+        st.open_token.fetch_add(1);
+        st.layout_token.fetch_add(1);
+        st.chapter_pages_token.fetch_add(1);
+        CancelPageImageLoad();
+        if (st.session) {
+            st.session->InvalidateChapterPageTable();
+            st.session->AbortTxtPaginate();
         }
+        StopReadTimeCheckpointTimer();
+        st.deferred_cleanup = true;
+    } else if (st.deferred_cleanup) {
+        FinishDeferredCleanup();
+    } else {
+        EndReadingTimeTracking();
+        st.session.reset();
+        ReleaseBookFont();
     }
 
-    if (show_title) {
-        const lv_font_t* item_font = ItemFont();
-        lv_obj_t* title = lv_label_create(cell);
-        lv_obj_set_width(title, cell_w);
-        lv_obj_set_style_text_font(title, item_font, 0);
-        lv_obj_set_style_text_color(title, lv_color_black(), 0);
-        lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
-        lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-        const std::string clipped = TruncateTextToWidth(info.title, item_font, cell_w);
-        lv_label_set_text(title, clipped.c_str());
-        lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
-    }
-    return cell;
+    st.read_scr = nullptr;
+    st.content = nullptr;
+    st.page_label = nullptr;
+    st.title_label = nullptr;
+    st.status_bar = nullptr;
+    st.status_overlay = nullptr;
+    st.status_h = 0;
+    st.settings_sheet = nullptr;
+    ClearSettingsSheetWidgetRefs();
+    StopTtfPollTimer();
+    ResetReadTouch();
+    CancelLayoutDebounce();
+    StopLayoutHintTimer();
 }
+
+void BookshelfOpenDetailFromHost(int index) {
+    lv_async_call(OpenDetailAsync, reinterpret_cast<void*>(static_cast<intptr_t>(index)));
+}
+
+std::string BookshelfTruncateFromHost(const std::string& text, const lv_font_t* font,
+                                      lv_coord_t max_w) {
+    return TruncateTextToWidth(text, font, max_w);
+}
+
+void BookshelfAttachVkFromHost(lv_obj_t* scr) {
+    VkKey_AttachScreen(scr, kScreenBookshelf, BookAiLongPressDesc(CreateBookshelfScreen));
+}
+
+struct BookshelfHooksInit {
+    BookshelfHooksInit() {
+        SetBookshelfPrepareEnterHandler(&BookshelfPrepareEnterFromHost);
+        SetBookshelfCancelListCoverHandler(&CancelListCoverFill);
+        SetBookshelfScheduleListCoverHandler(&ScheduleListCoverFill);
+        SetBookshelfEnqueueListCoverHandler(&EnqueueListCoverFill);
+        SetBookshelfCreateCoverSlotHandler(&CreateCoverSlot);
+        SetBookshelfOpenDetailHandler(&BookshelfOpenDetailFromHost);
+        SetBookshelfTruncateHandler(&BookshelfTruncateFromHost);
+        SetBookshelfAttachVkHandler(&BookshelfAttachVkFromHost);
+    }
+};
+static BookshelfHooksInit s_bookshelf_hooks_init;
+
 
 void DrawHomeBarChart(lv_obj_t* parent, lv_coord_t area_w, lv_coord_t area_h, int finished,
                       int book_count) {
@@ -5470,59 +5123,6 @@ void RenderReadingHome() {
     ScheduleListCoverFill();
 }
 
-void RenderBookshelfPage() {
-    auto& st = State();
-    if (st.list_body == nullptr) {
-        return;
-    }
-    CancelListCoverFill();
-    lv_obj_set_style_layout(st.list_body, LV_LAYOUT_FLEX, 0);
-    lv_obj_set_flex_flow(st.list_body, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(st.list_body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(st.list_body, kShelfRowGap, 0);
-    lv_obj_set_style_pad_column(st.list_body, kShelfColGap, 0);
-
-    ClampListPage();
-    lv_obj_clean(st.list_body);
-    st.shelf_covers.clear();
-    DisableScroll(st.list_body);
-
-    if (st.books.empty()) {
-        lv_obj_set_flex_flow(st.list_body, LV_FLEX_FLOW_COLUMN);
-        char tip[160];
-        std::snprintf(tip, sizeof(tip), Lang::Strings::BOOK_EMPTY_SHELF_FMT,
-                      SdUserPath(reader::kDefaultBooksDir));
-        ShowMessage(st.list_body, tip, ListFont());
-        if (st.list_footer != nullptr) {
-            lv_label_set_text(st.list_footer, "1/1");
-        }
-        RefreshShelfFooterMode();
-        return;
-    }
-
-    const lv_coord_t content_w = ContentWidth();
-    const lv_coord_t cell_w =
-        (content_w - kShelfColGap * (kShelfCols - 1)) / kShelfCols;
-    const lv_coord_t cover_h =
-        st.shelf_cover_h > 0 ? st.shelf_cover_h : (cell_w * 4 / 3);
-
-    const int start = st.list_page * st.list_page_size;
-    const int end = std::min(start + st.list_page_size, static_cast<int>(st.books.size()));
-    for (int i = start; i < end; ++i) {
-        CreateBookCoverCell(st.list_body, st.books[static_cast<size_t>(i)], i, cell_w, cover_h,
-                            st.shelf_covers, true, kShelfTitleGap, true);
-    }
-
-    if (st.list_footer != nullptr) {
-        char foot[48];
-        std::snprintf(foot, sizeof(foot), "%d/%d", st.list_page + 1, ListPageCount());
-        lv_label_set_text(st.list_footer, foot);
-    }
-    RefreshShelfFooterMode();
-    ScheduleListCoverFill();
-}
-
 void RequestOpenAssistantFromBook() {
     const char* screen = VkKey_ActiveScreen();
     CancelDetailCoverLoad();
@@ -5697,236 +5297,6 @@ lv_obj_t* BookScreen::Create() {
     return scr;
 }
 
-namespace {
-
-lv_obj_t* CreateBookshelfScreen() {
-    auto& st = State();
-    const bool workers_busy = st.opening.load() || st.layout_busy.load() ||
-                              st.chapter_pages_busy.load() || st.page_image_busy.load();
-    if (workers_busy) {
-        st.open_token.fetch_add(1);
-        st.layout_token.fetch_add(1);
-        st.chapter_pages_token.fetch_add(1);
-        CancelPageImageLoad();
-        if (st.session) {
-            st.session->InvalidateChapterPageTable();
-            st.session->AbortTxtPaginate();
-        }
-        StopReadTimeCheckpointTimer();
-        st.deferred_cleanup = true;
-    } else if (st.deferred_cleanup) {
-        FinishDeferredCleanup();
-    } else {
-        EndReadingTimeTracking();
-        st.session.reset();
-        ReleaseBookFont();
-    }
-
-    st.read_scr = nullptr;
-    st.content = nullptr;
-    st.page_label = nullptr;
-    st.title_label = nullptr;
-    st.status_bar = nullptr;
-    st.status_overlay = nullptr;
-    st.status_h = 0;
-    st.settings_sheet = nullptr;
-    ClearSettingsSheetWidgetRefs();
-    StopTtfPollTimer();
-    st.shelf_multi = false;
-    st.shelf_selected.clear();
-    st.shelf_suppress_click_until_us = 0;
-    st.shelf_suppress_click_idx = -1;
-    st.multi_bar = nullptr;
-    st.back_root = BookUiState::NavRoot::kShelf;
-    CancelListCoverFill();
-    st.recent_covers.clear();
-    st.shelf_covers.clear();
-    ResetReadTouch();
-    CancelLayoutDebounce();
-    StopLayoutHintTimer();
-    ScreenPaintCoalesceReset(&s_shelf_check_paint);
-
-    ScreenSetIsHome(false);
-
-    lv_obj_t* scr = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_font(scr, ListFont(), 0);
-    lv_obj_set_style_text_color(scr, lv_color_black(), 0);
-    DisableScroll(scr);
-    st.list_scr = scr;
-    lv_obj_add_event_cb(
-        scr,
-        [](lv_event_t* e) {
-            auto& s = State();
-            const auto* tgt = static_cast<lv_obj_t*>(lv_event_get_target(e));
-            if (s.list_scr == tgt) {
-                CancelListCoverFill();
-                s.list_scr = nullptr;
-                s.list_body = nullptr;
-                s.list_footer = nullptr;
-                s.multi_bar = nullptr;
-                s.shelf_multi = false;
-                s.shelf_selected.clear();
-                ScreenPaintCoalesceReset(&s_shelf_check_paint);
-                s.recent_covers.clear();
-                s.shelf_covers.clear();
-            }
-        },
-        LV_EVENT_DELETE, nullptr);
-
-    EpdStatusBar status = ScreenCreateStatusBar(scr);
-    StatusBarManager::GetInstance().SetOngoing("book", Lang::Strings::BOOK_SHELF_TITLE);
-    lv_obj_add_event_cb(scr, [](lv_event_t*) {
-        StatusBarManager::GetInstance().ClearOngoing("book");
-    }, LV_EVENT_DELETE, nullptr);
-
-    const lv_coord_t body_h = LV_VER_RES - status.height - kFooterH;
-    if (st.list_page < 0) {
-        st.list_page = 0;
-    }
-
-    lv_obj_t* body = lv_obj_create(scr);
-    lv_obj_remove_style_all(body);
-    lv_obj_set_size(body, LV_HOR_RES, body_h);
-    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, status.height);
-    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_pad_all(body, kListPad, 0);
-    DisableScroll(body);
-    lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* list_body = lv_obj_create(body);
-    lv_obj_remove_style_all(list_body);
-    lv_obj_set_size(list_body, ContentWidth(), body_h - kListPad * 2);
-    lv_obj_align(list_body, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_flex_flow(list_body, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(list_body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(list_body, kShelfRowGap, 0);
-    lv_obj_set_style_pad_column(list_body, kShelfColGap, 0);
-    DisableScroll(list_body);
-    st.list_body = list_body;
-
-    // 底栏槽：页码与多选共用，不改书籍区高度
-    lv_obj_t* foot = lv_obj_create(scr);
-    lv_obj_remove_style_all(foot);
-    lv_obj_set_size(foot, LV_HOR_RES, kFooterH);
-    lv_obj_align(foot, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_opa(foot, LV_OPA_TRANSP, 0);
-    DisableScroll(foot);
-    lv_obj_clear_flag(foot, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* page_lbl = lv_label_create(foot);
-    lv_obj_set_width(page_lbl, LV_HOR_RES - 16);
-    lv_obj_set_style_text_align(page_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(page_lbl, ItemFont(), 0);
-    lv_obj_set_style_text_color(page_lbl, lv_color_black(), 0);
-    lv_label_set_text(page_lbl, "1/1");
-    lv_obj_align(page_lbl, LV_ALIGN_CENTER, 0, 0);
-    DisableScroll(page_lbl);
-    st.list_footer = page_lbl;
-
-    st.multi_bar = lv_obj_create(foot);
-    lv_obj_remove_style_all(st.multi_bar);
-    lv_obj_set_width(st.multi_bar, lv_pct(100));
-    lv_obj_set_height(st.multi_bar, kShelfMultiBtnH);
-    lv_obj_set_style_bg_opa(st.multi_bar, LV_OPA_TRANSP, 0);
-    lv_obj_set_flex_flow(st.multi_bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(st.multi_bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(st.multi_bar, 10, 0);
-    lv_obj_align(st.multi_bar, LV_ALIGN_CENTER, 0, 0);
-    DisableScroll(st.multi_bar);
-    lv_obj_clear_flag(st.multi_bar, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(st.multi_bar, LV_OBJ_FLAG_HIDDEN);
-
-    auto make_multi_action = [](lv_obj_t* parent, const char* text, lv_event_cb_t cb) {
-        lv_obj_t* btn = lv_obj_create(parent);
-        lv_obj_remove_style_all(btn);
-        lv_obj_set_height(btn, kShelfMultiBtnH);
-        lv_obj_set_width(btn, LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_pad_hor(btn, 4, 0);
-        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        DisableScroll(btn);
-        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-        HapticAttachClick(btn);
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
-
-        lv_obj_t* text_wrap = lv_obj_create(btn);
-        lv_obj_remove_style_all(text_wrap);
-        lv_obj_set_size(text_wrap, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-        lv_obj_set_style_border_side(text_wrap, LV_BORDER_SIDE_BOTTOM, 0);
-        lv_obj_set_style_border_width(text_wrap, kShelfUnderlineH, 0);
-        lv_obj_set_style_border_color(text_wrap, lv_color_black(), 0);
-        lv_obj_set_style_pad_bottom(text_wrap, 2, 0);
-        lv_obj_set_style_pad_hor(text_wrap, kShelfUnderlinePadHor, 0);
-        lv_obj_set_style_bg_opa(text_wrap, LV_OPA_TRANSP, 0);
-        DisableScroll(text_wrap);
-        lv_obj_clear_flag(text_wrap, LV_OBJ_FLAG_CLICKABLE);
-
-        lv_obj_t* lbl = lv_label_create(text_wrap);
-        lv_label_set_text(lbl, text);
-        lv_obj_set_style_text_font(lbl, ItemFont(), 0);
-        lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
-        lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-        return btn;
-    };
-    auto make_multi_dot = [](lv_obj_t* parent) {
-        lv_obj_t* dot = lv_obj_create(parent);
-        lv_obj_remove_style_all(dot);
-        lv_obj_set_size(dot, kShelfMultiDotSize, kShelfMultiDotSize);
-        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(dot, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-        DisableScroll(dot);
-        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
-        return dot;
-    };
-    make_multi_action(st.multi_bar, Lang::Strings::COMMON_CANCEL, OnShelfMultiCancel);
-    make_multi_dot(st.multi_bar);
-    make_multi_action(st.multi_bar, Lang::Strings::COMMON_SELECT_ALL, OnShelfMultiSelectAll);
-    make_multi_dot(st.multi_bar);
-    make_multi_action(st.multi_bar, Lang::Strings::COMMON_REMOVE, OnShelfMultiRemove);
-
-    // 固定 3×3：按可用高度反推封面高，保证一页九本
-    st.list_page_size = kShelfCols * kShelfRows;
-    const lv_coord_t cell_w =
-        (ContentWidth() - kShelfColGap * (kShelfCols - 1)) / kShelfCols;
-    const lv_coord_t title_h =
-        (ItemFont() != nullptr && ItemFont()->line_height > 0)
-            ? ItemFont()->line_height + kShelfTitleGap + 2
-            : 34;
-    const lv_coord_t usable = body_h - kListPad * 2;
-    const lv_coord_t cell_budget =
-        (usable - kShelfRowGap * (kShelfRows - 1)) / kShelfRows;
-    lv_coord_t cover_h = cell_budget - title_h;
-    const lv_coord_t cover_max = cell_w * 4 / 3;
-    if (cover_h > cover_max) {
-        cover_h = cover_max;
-    }
-    if (cover_h < 72) {
-        cover_h = 72;
-    }
-    st.shelf_cover_h = cover_h;
-
-    auto& sd = SdCardManager::GetInstance();
-    if (!sd.IsMounted() && !sd.Mount()) {
-        ShowMessage(list_body, Lang::Strings::BOOK_NO_SD, ListFont());
-        VkKey_AttachScreen(scr, kScreenBookshelf, BookAiLongPressDesc(CreateBookshelfScreen));
-        return scr;
-    }
-
-    // 与首页一致走 Load：缓存命中只拷贝；USB/云端 Invalidate 后在此重扫
-    (void)reader::LoadBookLibrary(reader::kDefaultBooksDir, st.books);
-    RenderBookshelfPage();
-
-    VkKey_AttachScreen(scr, kScreenBookshelf, BookAiLongPressDesc(CreateBookshelfScreen));
-    return scr;
-}
-
-}  // namespace
 
 bool BookScreen::IsReadingActive() {
     // 仅正文沉浸翻页；目录/设置浮层仍走音量。编排中仍算阅读中，以便音量键走翻页提示。
