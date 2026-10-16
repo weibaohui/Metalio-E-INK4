@@ -99,33 +99,10 @@ Application::~Application() {
     vEventGroupDelete(event_group_);
 }
 
-bool Application::ShouldAllowBootAudio() const {
-    switch (device_state_) {
-        case kDeviceStateStarting:
-        case kDeviceStateWifiConfiguring:
-        case kDeviceStateAudioTesting:
-        case kDeviceStateActivating:
-        case kDeviceStateUpgrading:
-            return true;
-        default:
-            return false;
-    }
-}
-
 void Application::EnsureAudioServiceRunning() {
     if (!audio_initialized_) {
         auto codec = Board::GetInstance().GetAudioCodec();
         audio_service_.Initialize(codec);
-
-        AudioServiceCallbacks callbacks;
-        callbacks.on_send_queue_available = [this]() {
-            xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);
-        };
-        callbacks.on_vad_change = [this](bool speaking) {
-            (void)speaking;
-            xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
-        };
-        audio_service_.SetCallbacks(callbacks);
         audio_initialized_ = true;
     }
 
@@ -203,7 +180,6 @@ void Application::EnsureProtocolReady() {
             auto state = cJSON_GetObjectItem(root, "state");
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
-                    aborted_ = false;
                     if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
                         SetDeviceState(kDeviceStateSpeaking);
                     }
@@ -302,33 +278,6 @@ void Application::TeardownProtocol() {
     }
     protocol_.reset();
     protocol_ready_ = false;
-}
-
-void Application::EnsureAssistantNetworkReadyAsync(std::function<void(bool)> callback) {
-    callback(false);
-}
-
-void Application::StartAssistantNetworkWorker() {
-}
-
-void Application::CompleteAssistantNetworkReady(bool ready, bool cancelled) {
-    (void)ready;
-    (void)cancelled;
-}
-
-void Application::CancelAssistantNetworkWait() {
-}
-
-void Application::StartXiaozhiVoice(bool enter_listening) {
-    (void)enter_listening;
-}
-
-void Application::StartXiaozhiVoiceImpl(bool enter_listening, int network_result) {
-    (void)enter_listening;
-    (void)network_result;
-}
-
-void Application::StopXiaozhiVoice() {
 }
 
 void Application::CheckAssetsVersion() {
@@ -592,83 +541,6 @@ void Application::DismissAlert() {
     }
 }
 
-void Application::StartListening() {
-    if (device_state_ == kDeviceStateActivating) {
-        SetDeviceState(kDeviceStateIdle);
-        return;
-    } else if (device_state_ == kDeviceStateWifiConfiguring) {
-        // 原工程配网态长按 BOOT 会进本地录音环回；产品不要此行为
-        ESP_LOGI(TAG, "StartListening ignored in wifi configuring (no audio testing)");
-        return;
-    }
-
-    if (!boot_ready_.load(std::memory_order_acquire)) {
-        pending_xiaozhi_voice_.store(true, std::memory_order_release);
-        pending_xiaozhi_listen_.store(true, std::memory_order_release);
-        ESP_LOGI(TAG, "StartListening deferred until boot ready");
-        Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::PLEASE_WAIT);
-        return;
-    }
-
-    if (!xiaozhi_voice_active_ || !protocol_) {
-        ESP_LOGW(TAG, "StartListening ignored: Xiaozhi voice session not active");
-        return;
-    }
-    const uint32_t generation = voice_session_generation_;
-    Schedule([this, generation]() { StartListeningImpl(generation); });
-}
-
-void Application::StartListeningImpl(uint32_t session_generation, int network_result) {
-    (void)session_generation;
-    (void)network_result;
-}
-
-void Application::StopListening() {
-    if (device_state_ == kDeviceStateAudioTesting) {
-        audio_service_.EnableAudioTesting(false);
-        SetDeviceState(kDeviceStateWifiConfiguring);
-        return;
-    }
-
-    const std::array<int, 3> valid_states = {
-        kDeviceStateListening,
-        kDeviceStateSpeaking,
-        kDeviceStateIdle,
-    };
-    // If not valid, do nothing
-    if (std::find(valid_states.begin(), valid_states.end(), device_state_) == valid_states.end()) {
-        return;
-    }
-
-    Schedule([this]() {
-        if (device_state_ == kDeviceStateListening && protocol_) {
-            protocol_->SendStopListening();
-            SetDeviceState(kDeviceStateIdle);
-        }
-    });
-}
-
-void Application::AbortSpeakingToIdle() {
-    // 仅百问会话 + Speaking：短按打断 → 待命。不 StartListening，避免闪「聆听中」。
-    if (!xiaozhi_voice_active_ || device_state_ != kDeviceStateSpeaking) {
-        return;
-    }
-
-    Schedule([this]() {
-        if (!xiaozhi_voice_active_ || device_state_ != kDeviceStateSpeaking) {
-            return;
-        }
-        AbortSpeaking(kAbortReasonNone);
-        if (audio_running_) {
-            audio_service_.ResetDecoder();
-        }
-        SetDeviceState(kDeviceStateIdle);
-    });
-}
-
-void Application::FlushPendingXiaozhiVoice() {
-}
-
 void Application::Start() {
     // §2.8 boot 表驱动:开机流程拆 BootStep 表,每步打耗时日志——以后排查
     // "开机慢/某步崩"直接看日志表,不用顺着 150 行顺序调用猜。步骤顺序即
@@ -843,8 +715,6 @@ void Application::Schedule(std::function<void()> callback) {
 void Application::MainEventLoop() {
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, MAIN_EVENT_SCHEDULE |
-            MAIN_EVENT_SEND_AUDIO |
-            MAIN_EVENT_VAD_CHANGE |
             MAIN_EVENT_CLOCK_TICK |
             MAIN_EVENT_ERROR, pdTRUE, pdFALSE, portMAX_DELAY);
 
@@ -853,21 +723,6 @@ void Application::MainEventLoop() {
             // 状态用错误文案本身，勿套「错误」前缀
             Alert(last_error_message_.c_str(), last_error_message_.c_str(), "cloud_slash",
                   Lang::Sounds::OGG_EXCLAMATION);
-        }
-
-        if (bits & MAIN_EVENT_SEND_AUDIO) {
-            while (auto packet = audio_service_.PopPacketFromSendQueue()) {
-                if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
-                    break;
-                }
-            }
-        }
-
-        if (bits & MAIN_EVENT_VAD_CHANGE) {
-            if (device_state_ == kDeviceStateListening) {
-                auto led = Board::GetInstance().GetLed();
-                led->OnStateChanged();
-            }
         }
 
         if (bits & MAIN_EVENT_SCHEDULE) {
@@ -883,28 +738,8 @@ void Application::MainEventLoop() {
             clock_ticks_++;
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
-        
-            // Print the debug info every 10 seconds
-            if (clock_ticks_ % 10 == 0) {
-                // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
-                // SystemInfo::PrintTaskList();
-                // SystemInfo::PrintHeapStats();
-            }
         }
     }
-}
-
-void Application::AbortSpeaking(AbortReason reason) {
-    ESP_LOGI(TAG, "Abort speaking");
-    aborted_ = true;
-    if (protocol_) {
-        protocol_->SendAbortSpeaking(reason);
-    }
-}
-
-void Application::SetListeningMode(ListeningMode mode) {
-    listening_mode_ = mode;
-    SetDeviceState(kDeviceStateListening);
 }
 
 void Application::SetDeviceState(DeviceState state) {
@@ -929,10 +764,6 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateIdle:
             ApplyIdleStatusBar();
             display->SetEmotion("neutral");
-            // 屏级会话：Idle 回落只停语音处理
-            if (xiaozhi_voice_active_ && audio_running_) {
-                audio_service_.EnableVoiceProcessing(false);
-            }
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
@@ -942,24 +773,9 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
-
-            // Make sure the audio processor is running
-            if (xiaozhi_voice_active_ && audio_running_ && protocol_ &&
-                !audio_service_.IsAudioProcessorRunning()) {
-                // Send the start listening command
-                protocol_->SendStartListening(listening_mode_);
-                audio_service_.EnableVoiceProcessing(true);
-            }
             break;
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
-
-            if (xiaozhi_voice_active_ && audio_running_) {
-                if (listening_mode_ != kListeningModeRealtime) {
-                    audio_service_.EnableVoiceProcessing(false);
-                }
-                audio_service_.ResetDecoder();
-            }
             break;
         default:
             // Do nothing
@@ -977,7 +793,6 @@ void Application::Reboot() {
     }
     protocol_.reset();
     protocol_ready_ = false;
-    xiaozhi_voice_active_ = false;
     StopAudioServiceIfRunning();
 
     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -1033,9 +848,6 @@ bool Application::UpgradeFirmwareUrl(const std::string& url, const std::string& 
         PowerPolicy::GetInstance().Release(PowerNeed::OtaDownload);
         ESP_LOGE(TAG, "Firmware upgrade aborted: network not ready");
         OtaUpgradeScreen::Dismiss();
-        if (xiaozhi_voice_active_) {
-            EnsureAudioServiceRunning();
-        }
         Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
         vTaskDelay(pdMS_TO_TICKS(3000));
         return false;
@@ -1051,9 +863,6 @@ bool Application::UpgradeFirmwareUrl(const std::string& url, const std::string& 
     if (!upgrade_success) {
         ESP_LOGE(TAG, "Firmware upgrade failed, continuing operation...");
         OtaUpgradeScreen::Dismiss();
-        if (xiaozhi_voice_active_) {
-            EnsureAudioServiceRunning();
-        }
         Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
         vTaskDelay(pdMS_TO_TICKS(3000));
         return false;
@@ -1089,7 +898,7 @@ void Application::SendMcpMessage(const std::string& payload) {
 void Application::SetAecMode(AecMode mode) {
     aec_mode_ = mode;
     Schedule([this]() {
-        if (!xiaozhi_voice_active_ || !audio_running_) {
+        if (!audio_running_) {
             return;
         }
         auto& board = Board::GetInstance();
@@ -1120,14 +929,8 @@ void Application::PlaySound(const std::string_view& sound) {
     if (sound.empty()) {
         return;
     }
-    // AI 聊天会话内，或开机 OTA/配网阶段允许拉起音频播提示音
     if (!audio_running_) {
-        if (xiaozhi_voice_active_ || ShouldAllowBootAudio()) {
-            EnsureAudioServiceRunning();
-        } else {
-            ESP_LOGD(TAG, "PlaySound skipped: audio not running outside Xiaozhi session");
-            return;
-        }
+        EnsureAudioServiceRunning();
     }
     audio_service_.PlaySound(sound);
 }
