@@ -713,9 +713,6 @@ void PipelineTask(void*) {
                     int underflow_stalls = 0;
 
                     while (a->running->load() && !s_cancel.load() && !s_interrupt_tts.load() && !a->tts->IsCanceled()) {
-                        // 持续对 AudioService 保活, 防止 15s 省电定时器将 I2S 输出通道静默关闭
-                        Application::GetInstance().GetAudioService().KeepOutputAlive();
-
                         // 1. 预缓冲检查: 只有蓄足音频或服务端已完成时才起播, 兼顾连贯输出与极低首音延迟
                         if (!prebuffered) {
                             const size_t queued = a->tts->GetQueuedSamples();

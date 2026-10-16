@@ -326,8 +326,6 @@ void RadioPlayTask(void*) {
     int underflow_stalls = 0;
 
     while (s_radio_play_active.load() && !s_quit.load()) {
-        Application::GetInstance().GetAudioService().KeepOutputAlive();
-
         // 1. 预缓冲检查: 只有蓄足 0.6s 音频或流已结束时才起播, 彻底杜绝起播毛刺与断流
         if (!prebuffered) {
             std::unique_lock<std::mutex> lk(s_radio_pcm_mutex);
@@ -677,9 +675,6 @@ void RadioTask(void*) {
             ESP_LOGI(TAG, "使能 i2s 输出(首次播放,投递到 main 任务)...");
             s_audio_boot_done.store(false);
             Application::GetInstance().Schedule([]() {
-                // 若语音管线在跑(用户刚用过语音页),先停掉释放内存。
-                // StopAudioServiceIfRunning 内部 Deinitialize AFE 也在 main 栈执行,flash 安全。
-                Application::GetInstance().StopAudioServiceIfRunning();
                 // 确保外设总电源 MAIN_PWR 处于通电状态（为 BT 音频芯片供电以输出 I2S 时钟）
                 if (!power_hw_main_rail_is_on()) {
                     power_hw_main_rail_set(true);

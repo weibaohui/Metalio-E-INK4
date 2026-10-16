@@ -675,10 +675,9 @@ lv_obj_t* AiVoiceChatScreen::Create() {
     lv_obj_t* body = scaffold->GetContentContainer();
     lv_obj_add_event_cb(s_ui.screen, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
 
-    // 进屏:停掉语音管线(避免与采麦争抢),并确保 codec i2s 输入使能。
-    // 两者都含 flash/NVS,须走 main 任务(内部栈);本回调在 LVGL worker(PSRAM 栈)。
+    // 进屏:确保 codec i2s 输入使能。
+    // 含 flash/NVS,须走 main 任务(内部栈);本回调在 LVGL worker(PSRAM 栈)。
     Application::GetInstance().Schedule([]() {
-        Application::GetInstance().StopAudioServiceIfRunning();
         auto* codec = Board::GetInstance().GetAudioCodec();
         if (codec != nullptr) codec->Start();
     });

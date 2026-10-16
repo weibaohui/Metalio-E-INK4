@@ -519,9 +519,6 @@ lv_obj_t* RadioScreen::Create() {
 
     SyncStateLabels();
     s_timer = lv_timer_create(OnTimer, 1000, nullptr);
-    Application::GetInstance().Schedule([]() {
-        Application::GetInstance().StopAudioServiceIfRunning();
-    });
     VkKey_AttachScreen(s_ui.screen, kScreenId, VkKeyScreenDesc{RadioScreen::Create, OnVkKey});
     return s_ui.screen;
 }

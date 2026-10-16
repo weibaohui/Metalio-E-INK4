@@ -107,7 +107,6 @@ void BootOrchestrator::Run(Application& app) {
         {"boot_ready",
          [&] {
              app.SetBootReady(true);
-             app.StopAudioServiceIfRunning();
              app.SetDeviceState(kDeviceStateIdle);
              ESP_LOGI(TAG, "Boot complete");
          }},
