@@ -13,7 +13,6 @@
 #include <atomic>
 #include <vector>
 
-#include "protocol.h"
 #include "ota.h"
 #include "audio_service.h"
 #include "device_state_event.h"
@@ -55,7 +54,6 @@ public:
     bool UpgradeFirmware(Ota& ota, const std::string& url = "");
     bool UpgradeFirmwareUrl(const std::string& url, const std::string& current_version,
                             const std::string& new_version);
-    void SendMcpMessage(const std::string& payload);
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
@@ -81,11 +79,9 @@ private:
 
     std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
-    std::unique_ptr<Protocol> protocol_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     volatile DeviceState device_state_ = kDeviceStateUnknown;
-    ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
     AudioService audio_service_;
@@ -94,7 +90,6 @@ private:
     std::string current_version_;
     bool audio_initialized_ = false;
     bool audio_running_ = false;
-    bool protocol_ready_ = false;
     std::atomic<bool> boot_ready_{false}; // Start() 跑完后置 true
     int clock_ticks_ = 0;
     std::string activation_code_;
@@ -109,9 +104,6 @@ private:
     void ApplyIdleStatusBar();
     // 可中断延迟；Idle 时返回 false，activation_kick 时返回 true。
     bool DelayMsInterruptible(int ms);
-
-    void EnsureProtocolReady();
-    void TeardownProtocol();
 };
 
 
