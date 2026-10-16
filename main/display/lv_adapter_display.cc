@@ -1894,11 +1894,24 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
         strftime(time_str, sizeof(time_str), "%H:%M", &tm_info);
     }
 
-    int battery_level = 0;
-    bool charging = false;
-    bool discharging = false;
+    static int seconds_counter = 0;
+    static int s_battery_level = 0;
+    static bool s_charging = false;
+    static bool s_discharging = false;
+    static bool s_battery_ok = false;
+
+    ++seconds_counter;
+
+    // 节流电量读取（常态约 10s 一次或首次未成功时立即查），避免 1Hz 频繁打扰 I2C 与唤醒总线
+    if (update_all || !s_battery_ok || (seconds_counter % 10 == 0)) {
+        s_battery_ok = board.GetBatteryLevel(s_battery_level, s_charging, s_discharging);
+    }
+    const int battery_level = s_battery_level;
+    const bool charging = s_charging;
+    const bool discharging = s_discharging;
+    const bool battery_ok = s_battery_ok;
+
     const char* new_battery_icon = nullptr;
-    const bool battery_ok = board.GetBatteryLevel(battery_level, charging, discharging);
     if (battery_ok) {
         if (charging) {
             new_battery_icon = FONT_AWESOME_BATTERY_BOLT;
@@ -1912,11 +1925,10 @@ void LVAdapterDisplay::UpdateStatusBar(bool update_all) {
     }
 
     const char* new_network_icon = nullptr;
-    static int seconds_counter = 0;
     const bool wifi_busy = WifiStation::GetInstance().IsLinkInProgress();
     const auto device_state = app.GetDeviceState();
     // 常态约 10s；WiFi 扫描/连接中每秒刷，配合弱→中→强梯度
-    if (update_all || wifi_busy || (++seconds_counter % 10 == 0)) {
+    if (update_all || wifi_busy || (seconds_counter % 10 == 0)) {
         static const std::vector<DeviceState> allowed_states = {
             kDeviceStateIdle,       kDeviceStateStarting,   kDeviceStateWifiConfiguring,
             kDeviceStateConnecting, kDeviceStateListening,  kDeviceStateSpeaking,
