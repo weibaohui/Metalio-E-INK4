@@ -149,8 +149,6 @@ void SetSnapState(radio_state_t st, const char* err) {
         station_name = s_snap.station;
     }
     if (st == RADIO_PLAYING) {
-        std::string msg = "电台: " + (station_name.empty() ? std::string("播放中") : station_name);
-        StatusBarManager::GetInstance().SetOngoing("radio", msg);
         SystemEventBus::GetInstance().Publish(SystemEvent::AudioPlayback(SystemAudioPlaybackState::kPlaying, "radio"));
     } else if (st == RADIO_STOPPED || st == RADIO_ERROR) {
         StatusBarManager::GetInstance().ClearOngoing("radio");
@@ -165,16 +163,8 @@ void SetSnapState(radio_state_t st, const char* err) {
 void SetSnapStation(const char* text) {
     char buf[sizeof(s_snap.station)] = {};
     snprintf(buf, sizeof(buf), "%s", text != nullptr ? text : "");
-    bool is_playing = false;
-    {
-        std::lock_guard<std::mutex> lock(s_snap_mutex);
-        memcpy(s_snap.station, buf, sizeof(s_snap.station));
-        is_playing = (s_snap.state == RADIO_PLAYING);
-    }
-    if (is_playing) {
-        std::string msg = std::string("电台: ") + buf;
-        StatusBarManager::GetInstance().SetOngoing("radio", msg);
-    }
+    std::lock_guard<std::mutex> lock(s_snap_mutex);
+    memcpy(s_snap.station, buf, sizeof(s_snap.station));
 }
 
 void SetSnapTitle(const char* text) {
