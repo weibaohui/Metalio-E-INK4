@@ -19,8 +19,6 @@
 
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
-#define MAIN_EVENT_SEND_AUDIO (1 << 1)
-#define MAIN_EVENT_VAD_CHANGE (1 << 3)
 #define MAIN_EVENT_ERROR (1 << 4)
 #define MAIN_EVENT_CLOCK_TICK (1 << 6)
 
@@ -44,7 +42,6 @@ public:
     void Start();
     void MainEventLoop();
     DeviceState GetDeviceState() const { return device_state_; }
-    bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
     void Schedule(std::function<void()> callback);
     void SetDeviceState(DeviceState state);
     void Alert(const char* status, const char* message, const char* emotion = "", const std::string_view& sound = "");

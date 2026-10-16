@@ -57,15 +57,8 @@ void AudioService::Initialize(AudioCodec* codec) {
     audio_processor_ = std::make_unique<NoAudioProcessor>();
 #endif
 
-    audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
-        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
-    });
-
     audio_processor_->OnVadStateChange([this](bool speaking) {
         voice_detected_ = speaking;
-        if (callbacks_.on_vad_change) {
-            callbacks_.on_vad_change(speaking);
-        }
     });
 
     esp_timer_create_args_t audio_power_timer_args = {
@@ -232,8 +225,6 @@ void AudioService::Stop() {
         audio_decode_queue_.clear();
         audio_playback_queue_.clear();
         audio_testing_queue_.clear();
-        audio_send_queue_.clear();
-        timestamp_queue_.clear();
         audio_queue_cv_.notify_all();
     }
 
@@ -325,15 +316,6 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
     /* Update the last input time */
     last_input_time_ = std::chrono::steady_clock::now();
     debug_statistics_.input_count++;
-
-#if CONFIG_USE_AUDIO_DEBUGGER
-    // 音频调试：发送原始音频数据
-    if (audio_debugger_ == nullptr) {
-        audio_debugger_ = std::make_unique<AudioDebugger>();
-    }
-    audio_debugger_->Feed(data);
-#endif
-
     return true;
 }
 
@@ -416,14 +398,6 @@ void AudioService::AudioOutputTask() {
         /* Update the last output time */
         last_output_time_ = std::chrono::steady_clock::now();
         debug_statistics_.playback_count++;
-
-#if CONFIG_USE_SERVER_AEC
-        /* Record the timestamp for server AEC */
-        if (task->timestamp > 0) {
-            lock.lock();
-            timestamp_queue_.push_back(task->timestamp);
-        }
-#endif
     }
 
     ESP_LOGW(TAG, "Audio output task stopped");
@@ -434,7 +408,7 @@ void AudioService::OpusCodecTask() {
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
         audio_queue_cv_.wait(lock, [this]() {
             return service_stopped_ ||
-                (!audio_encode_queue_.empty() && audio_send_queue_.size() < MAX_SEND_PACKETS_IN_QUEUE) ||
+                (!audio_encode_queue_.empty() && audio_testing_queue_.size() < (AUDIO_TESTING_MAX_DURATION_MS / OPUS_FRAME_DURATION_MS)) ||
                 (!audio_decode_queue_.empty() && audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE);
         });
         if (service_stopped_) {
@@ -472,8 +446,8 @@ void AudioService::OpusCodecTask() {
             debug_statistics_.decode_count++;
         }
         
-        /* Encode the audio to send queue */
-        if (!audio_encode_queue_.empty() && audio_send_queue_.size() < MAX_SEND_PACKETS_IN_QUEUE) {
+        /* Encode the audio to testing queue */
+        if (!audio_encode_queue_.empty() && audio_testing_queue_.size() < (AUDIO_TESTING_MAX_DURATION_MS / OPUS_FRAME_DURATION_MS)) {
             auto task = std::move(audio_encode_queue_.front());
             audio_encode_queue_.pop_front();
             audio_queue_cv_.notify_all();
@@ -489,16 +463,8 @@ void AudioService::OpusCodecTask() {
                 continue;
             }
 
-            if (task->type == kAudioTaskTypeEncodeToSendQueue) {
-                {
-                    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-                    audio_send_queue_.push_back(std::move(packet));
-                }
-                if (callbacks_.on_send_queue_available) {
-                    callbacks_.on_send_queue_available();
-                }
-            } else if (task->type == kAudioTaskTypeEncodeToTestingQueue) {
-                std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+            if (task->type == kAudioTaskTypeEncodeToTestingQueue) {
+                std::lock_guard<std::mutex> qlock(audio_queue_mutex_);
                 audio_testing_queue_.push_back(std::move(packet));
             }
             debug_statistics_.encode_count++;
@@ -538,16 +504,6 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
     /* Push the task to the encode queue */
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
 
-    /* If the task is to send queue, we need to set the timestamp */
-    if (type == kAudioTaskTypeEncodeToSendQueue && !timestamp_queue_.empty()) {
-        if (timestamp_queue_.size() <= MAX_TIMESTAMPS_IN_QUEUE) {
-            task->timestamp = timestamp_queue_.front();
-        } else {
-            ESP_LOGW(TAG, "Timestamp queue (%u) is full, dropping timestamp", timestamp_queue_.size());
-        }
-        timestamp_queue_.pop_front();
-    }
-
     audio_queue_cv_.wait(lock, [this]() {
         return service_stopped_ || audio_encode_queue_.size() < MAX_ENCODE_TASKS_IN_QUEUE;
     });
@@ -570,17 +526,6 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
     audio_decode_queue_.push_back(std::move(packet));
     audio_queue_cv_.notify_all();
     return true;
-}
-
-std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
-    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-    if (audio_send_queue_.empty()) {
-        return nullptr;
-    }
-    auto packet = std::move(audio_send_queue_.front());
-    audio_send_queue_.pop_front();
-    audio_queue_cv_.notify_all();
-    return packet;
 }
 
 void AudioService::EnableVoiceProcessing(bool enable) {
@@ -623,10 +568,6 @@ void AudioService::EnableDeviceAec(bool enable) {
     }
 
     audio_processor_->EnableDeviceAec(enable);
-}
-
-void AudioService::SetCallbacks(AudioServiceCallbacks& callbacks) {
-    callbacks_ = callbacks;
 }
 
 void AudioService::PlaySound(const std::string_view& ogg) {
@@ -738,7 +679,6 @@ void AudioService::ResetDecoder() {
     if (opus_decoder_) {
         opus_decoder_->ResetState();
     }
-    timestamp_queue_.clear();
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
     audio_testing_queue_.clear();
@@ -748,11 +688,9 @@ void AudioService::ResetDecoder() {
 void AudioService::FlushQueues() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     audio_encode_queue_.clear();
-    audio_send_queue_.clear();
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
     audio_testing_queue_.clear();
-    timestamp_queue_.clear();
     audio_queue_cv_.notify_all();
 }
 
@@ -768,20 +706,6 @@ void AudioService::CheckAndUpdateAudioPowerState() {
     }
     if (!codec_->input_enabled() && !codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);
-    }
-}
-
-void AudioService::KeepOutputAlive() {
-    if (service_stopped_ || codec_ == nullptr) {
-        return;
-    }
-    // 只更新时间戳与使能位。这里由收音任务以 ~16 次/秒调用,绝不能每次去
-    // stop/start_periodic 音频电源计时器:那会和计时器自身的回调在 esp_timer
-    // 任务上抢同一句柄,实测把 esp_timer/HTTP 栈整个卡死(串口监控还在打,
-    // 但网络与 MCP 全无响应)。计时器常驻周期运行,由它自己按时间戳判断即可。
-    last_output_time_ = std::chrono::steady_clock::now();
-    if (!codec_->output_enabled()) {
-        codec_->EnableOutput(true);
     }
 }
 
