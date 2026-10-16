@@ -472,7 +472,6 @@ static void send_mode_command(BtMode mode) {
 }
 
 static void call_mode_task(void* /*param*/) {
-    auto& board = Board::GetInstance();
     PowerPolicy::GetInstance().Release(PowerNeed::BtAudio);
     PowerPolicy::GetInstance().Acquire(PowerNeed::BtAudio);
     SimpleUart& uart = SimpleUart::getInstance();

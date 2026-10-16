@@ -122,46 +122,6 @@ static void EpdRstReleaseAfterLightSleep(void)
     gpio_hold_dis(EPD_PIN_RST);
 }
 
-// /** 关机脉冲前：MOSI/SCLK/CS/DC 置低，BUSY 输入高阻，RST 不动 */
-static void EpdPinsParkBeforePowerOff(void)
-{
-    gpio_intr_disable(EPD_PIN_BUSY);
-
-    const gpio_num_t low_pins[] = {
-        EPD_PIN_MOSI,
-        EPD_PIN_SCLK,
-        EPD_PIN_CS,
-        EPD_PIN_DC,
-    };
-    uint64_t low_mask = 0;
-    for (size_t i = 0; i < sizeof(low_pins) / sizeof(low_pins[0]); ++i) {
-        low_mask |= 1ULL << low_pins[i];
-    }
-    gpio_config_t low_cfg = {
-        .pin_bit_mask = low_mask,
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&low_cfg);
-    for (size_t i = 0; i < sizeof(low_pins) / sizeof(low_pins[0]); ++i) {
-        gpio_set_level(low_pins[i], 0);
-    }
-
-    // BUSY：输入高阻（无上下拉、不开输出）
-    gpio_config_t busy_cfg = {
-        .pin_bit_mask = 1ULL << EPD_PIN_BUSY,
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&busy_cfg);
-
-    ESP_LOGI(TAG, "EPD pins park: MOSI/SCLK/CS/DC=L BUSY=HiZ RST untouched");
-}
-
 esp_err_t power_hw_pa_set(bool on)
 {
     static bool known = false;
@@ -366,14 +326,6 @@ static void PwrOffTask(void* /*arg*/)
     if (auto* disp = LVAdapterDisplay::Instance()) {
         disp->ShowPoweredOffScreen();
     }
-
-    // 暂关：关机画面后的 settle / Deep Sleep / 脚位 park，直接发脉冲便于联调
-    // if (auto* disp = LVAdapterDisplay::Instance()) {
-    //     disp->SleepEpdForPowerOff();
-    // }
-    // vTaskDelay(pdMS_TO_TICKS(100)) ;
-    // EpdPinsParkBeforePowerOff();
-    // vTaskDelay(pdMS_TO_TICKS(kPostEpdParkSettleMs));
 
     auto& io = IOExpander::getInstance();
     ESP_LOGW(TAG, "PWR_KEY_PULSE");
