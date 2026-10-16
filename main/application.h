@@ -63,6 +63,8 @@ public:
 
     // 开机主流程是否已结束（联网/OTA 等）。
     bool IsBootReady() const { return boot_ready_.load(std::memory_order_acquire); }
+    void SetBootReady(bool ready) { boot_ready_.store(ready, std::memory_order_release); }
+    void StartMainEventLoop();
 
     // 按需启动音频服务
     void EnsureAudioServiceRunning();
