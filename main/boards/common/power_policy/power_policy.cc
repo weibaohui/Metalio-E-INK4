@@ -253,8 +253,6 @@ void RestoreProvisioningUiAsync(void* /*arg*/)
     const DeviceState st = Application::GetInstance().GetDeviceState();
     if (st == kDeviceStateWifiConfiguring) {
         RestoreWifiConfigUiAsync(nullptr);
-    } else if (st == kDeviceStateActivating) {
-        Application::GetInstance().ResumeActivationAfterStandby();
     }
 }
 
