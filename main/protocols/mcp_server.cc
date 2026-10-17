@@ -74,6 +74,28 @@ void McpServer::AddCommonTools() {
             });
     }
 
+    // 文件直传签路工具：内容不经模型——AI 按说明用 curl 直接 POST 二进制到设备。
+    AddTool("self.fs.save_file",
+        "Push a file to the device SD card. Binary HTTP upload, NO base64, content must "
+        "NOT pass through the LLM - the AI should run it via shell (curl), not as tool args:\n"
+        "curl -X POST 'http://<device-ip>:8080/fs/upload?path=<relative-dir>' \\\n"
+        "  -H 'X-Filename: <filename>' --data-binary @<local-file>\n"
+        "Add '-H \"Authorization: Bearer <pin>\"' when the device has an MCP PIN set "
+        "(same PIN as this MCP endpoint).\n"
+        "<relative-dir> is under /sdcard/metalio/e-ink and is auto-created (e.g. "
+        "apps/hello, books). A dynamic-app package (manifest.json + app.so + icon.png) "
+        "uploaded under apps/<name>/ is auto-registered as a desktop app without reboot.\n"
+        "Delete: curl -X POST 'http://<device-ip>:8080/fs/delete?path=<relative path or "
+        "dir>' -H 'Authorization: Bearer <pin>' - deleting apps/<dir> also removes the "
+        "desktop app.",
+        PropertyList(),
+        [](const PropertyList& properties) -> ReturnValue {
+            return std::string(
+                "POST the file binary directly: curl -X POST "
+                "'http://<device-ip>:8080/fs/upload?path=<relative-dir>' "
+                "-H 'X-Filename: <filename>' --data-binary @<local-file>");
+        });
+
 
     // Restore the original tools list to the end of the tools list
     tools_.insert(tools_.end(), original_tools.begin(), original_tools.end());

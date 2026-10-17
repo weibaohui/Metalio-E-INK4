@@ -123,6 +123,22 @@ void AppManager::RegisterApp(std::shared_ptr<AppModule> module) {
     }
 }
 
+bool AppManager::UnregisterApp(const char* id) {
+    if (id == nullptr) {
+        return false;
+    }
+    const int index = FindIndexById(id);
+    if (index < 0) {
+        return false;
+    }
+    if (active_app_ && std::strcmp(active_app_->GetId(), id) == 0) {
+        active_app_.reset();
+    }
+    modules_.erase(modules_.begin() + index);
+    ESP_LOGI(TAG, "unregistered app module: %s", id);
+    return true;
+}
+
 void AppManager::Init() {
     LoadToggles();
 }

@@ -33,6 +33,9 @@ dependencies:
   # TTF/OTF → .ef 设备端字体转换（已被 esp_lvgl_adapter 传递依赖，此处显式声明）
   espressif/freetype: 2.14.3~1
 
+  # 动态应用试点：运行时加载 SD 卡上的 .so（官方 ELF Loader，S3 支持 PSRAM 运行）
+  espressif/elf_loader: ==1.3.5
+
   # 设置页模拟 U 盘（TinyUSB MSC）；S3 内置 USB 与 USJ 互斥切换
   espressif/esp_tinyusb:
     version: ^2.0.0

@@ -27,6 +27,7 @@
 #include "power_policy.h"
 #include "esp_lv_adapter.h"
 #include "esp_lv_fs.h"
+#include "esp_lv_decoder.h"
 #include "book_screen/book_reader_prefs.h"
 #include "haptic_feedback.h"
 #include "home_screen/home_screen.h"
@@ -1411,6 +1412,17 @@ LVAdapterDisplay::LVAdapterDisplay(const esp_lcd_panel_handle_t panel,
         .fs_assets = resources_assets_,
     };
     ESP_ERROR_CHECK(esp_lv_adapter_fs_mount(&fs_cfg, &fs_handle));
+
+    // SD 图片经 S: 盘符（LVGL POSIX FS → /sdcard，sdkconfig LV_FS_POSIX）解码 PNG/JPG：
+    // 解码器此前从未注册，lv_image_set_src("S:/...png") 全部失败（动态应用图标即此病因）。
+    // A: 内置资产走 mmap spng，与本解码器互补。
+    {
+        static esp_lv_decoder_handle_t s_ext_decoder = nullptr;
+        if (s_ext_decoder == nullptr &&
+            esp_lv_decoder_init(&s_ext_decoder) == ESP_OK) {
+            ESP_LOGI(TAG, "esp_lv_decoder registered (S: PNG/JPG decode)");
+        }
+    }
 
     // 在内部 RAM 栈的初始化线程预读 NVS，避免首次进首页/设置时在 LVGL(PSRAM 栈)里碰 flash。
     (void)HomeScreen::LoadCardStyle();
