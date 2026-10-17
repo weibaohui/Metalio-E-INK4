@@ -1,10 +1,10 @@
 // main/display/screen/tetris_screen/tetris_screen.cc —— 俄罗斯方块界面（480×800 竖屏 1-bit 墨水屏）。
 // 布局:左盘右栏——棋盘 10×20(30px 格) + 右栏(下一个/暂存/得分/行数/等级/最高),
 // 底部 暂停/重开/退出 + 速降(黑底反白)。
-// 操作支持全方位控制:
-// 1. 盖板虚拟键: vk_home=旋转, vk_next=左移, vk_prev=右移;
-// 2. 机身物理按键: 音量+=左移, 音量-=右移, BOOT=旋转;
-// 3. 屏幕触控: 点击棋盘左半=左移, 右半=右移, 上半=旋转; 点暂存框=暂存; 底部按键=速降/暂停/重开/退出。
+// 操作方式:
+// 1. 盖板虚拟键(触摸条): vk_home=旋转, vk_next=左移, vk_prev=右移;
+// 2. 屏幕触控: 点击棋盘左半=左移, 右半=右移, 上半=旋转; 点暂存框=暂存; 底部按键=速降/暂停/重开/退出。
+// （音量键与 BOOT 键不参与游戏，保持系统原生功能）
 // 刷新纪律:差量重绘——占格只在变化时改样式、文本只在变化时 set,墨水屏走局部刷新;
 // 每 10 块落定请求一次全刷清残影。
 #include "tetris_screen/tetris_screen.h"
@@ -355,21 +355,13 @@ bool PostInput(int input) {
     return true;
 }
 
-// 盖板三键: vk_home=旋转, vk_next=左移, vk_prev=右移
-// 实体按键: 音量+=左移(tetris_left), 音量-=右移(tetris_right)
+// 盖板三键(y=900 触摸条,物理从左到右): vk_home=旋转, vk_next=左移, vk_prev=右移
 bool OnVkKey(const char* key) {
     if (key == nullptr) return false;
     if (strcmp(key, "vk_home") == 0) return PostInput(kInRotate);
     if (strcmp(key, "vk_next") == 0) return PostInput(kInLeft);
     if (strcmp(key, "vk_prev") == 0) return PostInput(kInRight);
-    if (strcmp(key, "tetris_left") == 0) return PostInput(kInLeft);
-    if (strcmp(key, "tetris_right") == 0) return PostInput(kInRight);
     return false;
-}
-
-// 实体按键: BOOT=旋转
-bool OnBootClick() {
-    return PostInput(kInRotate);
 }
 
 // ---- 触控(事件回调,已在 LVGL 线程) ----
@@ -687,7 +679,6 @@ lv_obj_t* TetrisScreen::Create() {
     VkKey_AttachScreen(s_scr, kScreenId, VkKeyScreenDesc{
         .factory = TetrisScreen::Create,
         .on_key = OnVkKey,
-        .on_boot_click = OnBootClick,
     });
     return s_scr;
 }
