@@ -18,9 +18,17 @@
 
 `book_screen.cc`：约 6954 → 6196（TTF）→ 约 5566（书架 UI）→ 约 5310（目录 UI）→ 约 4755（阅读页 UI）行。
 
+## 已完成（续）
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| Session 按格式 | `reader/book_session_*.cc` | 进度 / TXT / EPUB·EBOOK 分文件；共享 helpers 在 `book_session_internal.*`；核心 Open/Close/导航/块分页仍在 `book_session.cc` |
+
+`reader/book_session.cc`：约 3223 → 约 980（core）+ progress/txt/epub/internal。
+
 ## 建议顺序（未做）
 
-1. **`book_session.cc` 按格式拆** — TXT / EPUB / 进度持久化分文件（含 `CreateReaderScreen` / 打开 worker 若继续外移）
+1. （可选）`CreateReaderScreen` / 打开 worker 从 `book_screen.cc` 外移到阅读编排模块
 2. （可选）设置卡「字体列表」与 TTF 面板对称再拆一层
 
 ## 纪律

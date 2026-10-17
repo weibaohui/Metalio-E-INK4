@@ -18,6 +18,10 @@ set(EBOOK_INCLUDES
 
 set(EBOOK_READER_SRC
     ${ESP_MAIN}/reader/book_session.cc
+    ${ESP_MAIN}/reader/book_session_internal.cc
+    ${ESP_MAIN}/reader/book_session_progress.cc
+    ${ESP_MAIN}/reader/book_session_txt.cc
+    ${ESP_MAIN}/reader/book_session_epub.cc
     ${ESP_MAIN}/reader/ebook_document.cc
     ${ESP_MAIN}/reader/epub_document.cc
     ${ESP_MAIN}/reader/html_content.cc
