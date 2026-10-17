@@ -37,6 +37,7 @@
 #include "sd_paths.h"
 #include "SdCardManager.hpp"
 #include "reader/book_home_snapshot.h"
+#include "services/wallpaper/wallpaper_active.h"
 #include "utils/psr_worker.h"
 
 #include "esp_lcd_panel_ssd1677.h"
@@ -100,12 +101,58 @@ bool TryLoadShutdownA2i1FromSd(uint8_t** out_buf, size_t* out_len) {
     *out_len = 0;
 
     if (!SdCardManager::GetInstance().IsMounted()) {
-        ESP_LOGI(TAG, "shutdown img: SD not mounted → built-in");
+        ESP_LOGI(TAG, "shutdown img: SD not mounted -> built-in");
         return false;
     }
 
-    // 壁纸功能已移除，恒定使用内置默认关机画面
-    return false;
+    char path[192] = {};
+    if (!wallpaper::TryResolveActiveWallpaperPath(path, sizeof(path))) {
+        ESP_LOGI(TAG, "shutdown img: no NVS shutdown file -> built-in");
+        return false;
+    }
+
+    struct stat st {};
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) {
+        ESP_LOGI(TAG, "shutdown img: missing %s -> built-in", path);
+        return false;
+    }
+    constexpr off_t kMinBytes = 20;
+    constexpr off_t kMaxBytes = 256 * 1024;
+    if (st.st_size < kMinBytes || st.st_size > kMaxBytes) {
+        ESP_LOGW(TAG, "shutdown img: bad size %ld -> built-in", static_cast<long>(st.st_size));
+        return false;
+    }
+
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) {
+        ESP_LOGW(TAG, "shutdown img: fopen %s fail errno=%d -> built-in", path, errno);
+        return false;
+    }
+
+    const size_t need = static_cast<size_t>(st.st_size);
+    uint8_t* buf = static_cast<uint8_t*>(
+        heap_caps_malloc(need, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (buf == nullptr) {
+        buf = static_cast<uint8_t*>(malloc(need));
+    }
+    if (buf == nullptr) {
+        fclose(f);
+        ESP_LOGE(TAG, "shutdown img: OOM for %zu bytes -> built-in", need);
+        return false;
+    }
+
+    const size_t rd = fread(buf, 1, need, f);
+    fclose(f);
+    if (rd != need) {
+        ESP_LOGW(TAG, "shutdown img: partial read %zu/%zu -> built-in", rd, need);
+        heap_caps_free(buf);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "shutdown img: loaded %zu bytes from %s", need, path);
+    *out_buf = buf;
+    *out_len = need;
+    return true;
 }
 
 constexpr size_t kMaxTouchVirtualKeys = 8;

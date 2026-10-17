@@ -14,6 +14,7 @@
 #include "radio_screen/radio_screen.h"
 #include "settings_screen/settings_screen.h"
 #include "system_info_screen/system_info_screen.h"
+#include "tetris_screen/tetris_screen.h"
 #include "time_sync_screen/time_sync_screen.h"
 
 #include "services/ai_chat/ai_chat_service.h"
@@ -23,6 +24,9 @@
 #include "wifi_transfer_screen/wifi_transfer_screen.h"
 #include "services/wifi_transfer/wifi_transfer_service.h"
 #include "system_upgrade_screen/system_upgrade_screen.h"
+#include "wallpaper_screen/wallpaper_screen.h"
+#include "wifi_file_screen/wifi_file_screen.h"
+#include "services/wifi_file/wifi_file_service.h"
 
 #include <esp_log.h>
 #include <cstring>
@@ -34,6 +38,11 @@ constexpr const char *TAG = "AppManager";
 void OnTransferPause() {
     ESP_LOGI(TAG, "OnTransferPause: stopping wifi transfer service");
     wifi_transfer::WifiTransferService::GetInstance().Stop();
+}
+
+void OnWifiFilePause() {
+    ESP_LOGI(TAG, "OnWifiFilePause: stopping wifi file service");
+    wifi_file::WifiFileService::GetInstance().Stop();
 }
 
 const char *AppNameGlm() { return "GLM 用量"; }
@@ -48,6 +57,9 @@ const char *AppNameAiChat() { return "AI 对话"; }
 const char *AppNameBackup() { return "备份恢复"; }
 const char *AppNameTransfer() { return "WiFi 传书"; }
 const char *AppNameUpgrade() { return "系统升级"; }
+const char *AppNameWallpaper() { return "壁纸"; }
+const char *AppNameWifiFile() { return "WiFi 文件"; }
+const char *AppNameTetris() { return "俄罗斯方块"; }
 
 } // namespace
 
@@ -84,6 +96,12 @@ void AppManager::RegisterDefaultApps() {
         "backup", "A:ic_app_home_cloud.spng", AppNameBackup, BackupScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
         "transfer", "A:ic_app_home_cloud.spng", AppNameTransfer, WifiTransferScreen::Create, BookRegisterMcpTools, false, nullptr, OnTransferPause, OnTransferPause));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "wallpaper", "A:ic_app_home_wallpaper.spng", AppNameWallpaper, WallpaperScreen::Create, nullptr, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "tetris", "A:ic_app_home_clock.spng", AppNameTetris, TetrisScreen::Create, nullptr, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "wififile", "A:ic_app_home_cloud.spng", AppNameWifiFile, WifiFileScreen::Create, nullptr, false, nullptr, OnWifiFilePause, OnWifiFilePause));
     RegisterApp(std::make_shared<StandardAppModule>(
         "upgrade", "A:ic_app_home_setting.spng", AppNameUpgrade, SystemUpgradeScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(

@@ -1,6 +1,8 @@
 #include "standby_screen/standby_screen.h"
 
 #include "standby_screen/standby_classic.h"
+#include "standby_screen/standby_wallpaper.h"
+#include "services/wallpaper/wallpaper_active.h"
 
 #include "application.h"
 #include "core/app_manager.h"
@@ -16,10 +18,18 @@ namespace {
 constexpr const char* TAG = "StandbyScreen";
 constexpr const char* kScreenId = "standby";
 
+enum class Variant : uint8_t { Classic, Wallpaper };
+Variant s_variant = Variant::Classic;
+
 bool s_host_alive = false;
 bool s_as_overlay = false;
 lv_obj_t* s_overlay_root = nullptr;
 lv_obj_t* s_underlying_scr = nullptr;
+
+bool PreferWallpaperVariant() {
+    char path[192] = {};
+    return wallpaper::TryResolveStandbyWallpaperPath(path, sizeof(path));
+}
 
 void ClearStatusBindings() {
     if (auto* disp = LVAdapterDisplay::Instance()) {
@@ -28,13 +38,25 @@ void ClearStatusBindings() {
 }
 
 void TeardownVariant() {
-    standby_classic::Teardown();
+    if (s_variant == Variant::Wallpaper) {
+        standby_wallpaper::Teardown();
+    } else {
+        standby_classic::Teardown();
+    }
 }
 
 void MountVariant(lv_obj_t* root, bool as_overlay) {
-    ESP_LOGI(TAG, "variant=classic");
-    standby_classic::Build(root, as_overlay);
-    standby_classic::StartRuntime();
+    if (PreferWallpaperVariant()) {
+        s_variant = Variant::Wallpaper;
+        ESP_LOGI(TAG, "variant=wallpaper");
+        standby_wallpaper::Build(root);
+        standby_wallpaper::StartLoad();
+    } else {
+        s_variant = Variant::Classic;
+        ESP_LOGI(TAG, "variant=classic");
+        standby_classic::Build(root, as_overlay);
+        standby_classic::StartRuntime();
+    }
 }
 
 void TeardownHostState() {
@@ -133,7 +155,9 @@ void StandbyScreen::Dismiss() {
     ExitEpdSleep();
     ESP_LOGI(TAG, "dismiss overlay (under=%p)", static_cast<void*>(s_underlying_scr));
 
-    standby_classic::StopRuntime();
+    if (s_variant == Variant::Classic) {
+        standby_classic::StopRuntime();
+    }
 
     lv_obj_t* overlay = s_overlay_root;
     s_overlay_root = nullptr;
@@ -161,7 +185,13 @@ bool StandbyScreen::IsActive() {
 }
 
 bool StandbyScreen::IsPaintReady() {
-    return s_host_alive;
+    if (!s_host_alive) {
+        return false;
+    }
+    if (s_variant == Variant::Wallpaper) {
+        return standby_wallpaper::IsContentReady();
+    }
+    return true;
 }
 
 void StandbyScreen::EnterEpdSleep()
