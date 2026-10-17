@@ -34,6 +34,7 @@
 #include "book_screen/book_reader.h"
 #include "book_screen/book_settings_sheet.h"
 #include "book_screen/book_detail_screen.h"
+#include "book_screen/book_reader_orchestrator.h"
 #include "book_screen/book_ui_state.h"
 #include "book_screen/book_reader_prefs.h"
 #include "reader/book_cover_sidecar.h"
@@ -236,22 +237,49 @@ using book_screen_detail::SetDetailReleaseSessionHandler;
 using book_screen_detail::IsCoverEmbedMiss;
 using book_screen_detail::RememberCoverEmbedMiss;
 using book_screen_detail::PostCoverEmbedMiss;
+using book_screen_detail::ReaderGeomMode;
+using book_screen_detail::CreateReaderScreen;
+using book_screen_detail::ResumeReaderScreen;
+using book_screen_detail::StartReadAsync;
+using book_screen_detail::StartOpenWorker;
+using book_screen_detail::ShowOpenProgress;
+using book_screen_detail::ReaderWorkersBusy;
+using book_screen_detail::ReleaseReaderSessionForLeave;
+using book_screen_detail::FinishDeferredCleanup;
+using book_screen_detail::ApplyReaderLayoutLive;
+using book_screen_detail::ScheduleLayoutApply;
+using book_screen_detail::FlushLayoutDebounce;
+using book_screen_detail::CancelLayoutDebounce;
+using book_screen_detail::StartLayoutWorker;
+using book_screen_detail::StartChapterPageWorker;
+using book_screen_detail::ReopenReaderAfterPrefsChange;
+using book_screen_detail::IsLayoutHintBusy;
+using book_screen_detail::EnsureLayoutHintTimer;
+using book_screen_detail::StopLayoutHintTimer;
+using book_screen_detail::MarkLayoutHintBusy;
+using book_screen_detail::MarkLayoutHintDone;
+using book_screen_detail::BindSessionLayoutPrefs;
+using book_screen_detail::ApplyReaderPageGeometry;
+using book_screen_detail::IsReadOverlayChrome;
+using book_screen_detail::ReadContentWidth;
+using book_screen_detail::ReaderPageImagesHint;
+using book_screen_detail::ApplyOverlayListContentPads;
+using book_screen_detail::StopReadTimeCheckpointTimer;
+using book_screen_detail::StartReadTimeCheckpointTimer;
+using book_screen_detail::BeginReadingTimeTracking;
+using book_screen_detail::EndReadingTimeTracking;
+using book_screen_detail::PauseReadingTimeForStandby;
+using book_screen_detail::ResumeReadingTimeAfterStandby;
+using book_screen_detail::HideReadChrome;
+using book_screen_detail::SetReadStatusVisible;
+using book_screen_detail::SetReadStatusCenterTitle;
+using book_screen_detail::ShowMessage;
+using book_screen_detail::SetReaderOrchestratorCreateHomeScrHandler;
+using book_screen_detail::SetReaderOrchestratorCreateDetailScrHandler;
+using book_screen_detail::SetReaderOrchestratorAttachVkHandler;
+using book_screen_detail::SetReaderOrchestratorCancelListCoverHandler;
 // 盖板键/长按定时器只累加；真正 Next/Prev 在 LVGL 绘制里做，避免跨章重建 pages_ 时 UAF
 
-struct OpenProgressMsg {
-    uint32_t token = 0;
-    int percent = 0;
-};
-
-struct OpenDoneMsg {
-    uint32_t token = 0;
-    bool ok = false;
-};
-
-struct OpenWorkerArg {
-    uint32_t token = 0;
-    reader::BookInfo info;  // 拷贝，避免 Create 重建书库时 vector 失效
-};
 
 struct ListCoverDoneMsg {
     uint32_t token = 0;
@@ -267,206 +295,7 @@ struct ListCoverFillWork {
     std::vector<BookUiState::ListCoverPending> items;
 };
 
-bool IsReadOverlayChrome(BookUiState::ReadChrome c) {
-    using C = BookUiState::ReadChrome;
-    return c == C::kToc || c == C::kSettings;
-}
 
-void BindSessionLayoutPrefs(reader::BookSession& session) {
-    BookReaderPrefsEnsureLoaded();
-    session.SetFont(BookFont());
-    session.SetGaps(static_cast<lv_coord_t>(BookReaderPrefsLineGap()),
-                    static_cast<lv_coord_t>(BookReaderPrefsParaGap()));
-}
-
-/**
- * 正文内容区宽度（阅读页边距）；与沉浸态居中栏宽一致。
- * 书库/详情继续用 ContentWidth()（kListPad），互不影响。
- */
-lv_coord_t ReadContentWidth() {
-    BookReaderPrefsEnsureLoaded();
-    const int ml = BookReaderPrefsMarginLeft();
-    const int mr = BookReaderPrefsMarginRight();
-    lv_coord_t w = LV_HOR_RES - static_cast<lv_coord_t>(ml + mr);
-    return w > 40 ? w : 40;
-}
-
-/** 目录/设置等列表：固定用书库边距，避免阅读页边距档位挤乱菜单行宽 */
-void ApplyOverlayListContentPads(lv_coord_t top_pad) {
-    auto& st = State();
-    if (st.content == nullptr) {
-        return;
-    }
-    lv_obj_set_style_pad_top(st.content, top_pad, 0);
-    lv_obj_set_style_pad_bottom(st.content, 0, 0);
-    lv_obj_set_style_pad_left(st.content, kListPad, 0);
-    lv_obj_set_style_pad_right(st.content, kListPad, 0);
-}
-
-/**
- * 阅读区几何模式（与 read_chrome 解耦，避免「浮层态算出的 viewport 写进 session」）：
- * - kImmersive：正文分页/渲染唯一真源；hide_prog 时不占底栏高度
- * - kOverlayList：目录/设置等临时 UI，始终留底栏文案区；不得用其结果 SetViewport
- */
-enum class ReaderGeomMode : uint8_t { kImmersive = 0, kOverlayList };
-
-/** 是否整页图模式（未 Open 时用 Peek，便于建屏设 viewport） */
-bool ReaderPageImagesHint() {
-    auto& st = State();
-    if (st.session && st.session->IsOpen()) {
-        return st.session->IsPageImagesMode();
-    }
-    if (st.selected < 0 || st.selected >= static_cast<int>(st.books.size())) {
-        return false;
-    }
-    const reader::BookInfo& info = st.books[static_cast<size_t>(st.selected)];
-    return info.format == reader::BookFormat::kEbook &&
-           reader::EbookDocument::PeekPageImages(info.path.c_str());
-}
-
-/**
- * @brief 按偏好刷新正文 body 尺寸/边距/底栏（须在 LVGL 任务）
- * @param mode 仅 kImmersive 更新 st.viewport_*（供 SetViewport/重开）；浮层保留上次沉浸值
- */
-void ApplyReaderPageGeometry(ReaderGeomMode mode) {
-    auto& st = State();
-    if (st.read_scr == nullptr || st.content == nullptr || !lv_obj_is_valid(st.content)) {
-        return;
-    }
-    BookReaderPrefsEnsureLoaded();
-    const bool show_footer =
-        (mode == ReaderGeomMode::kOverlayList) || (BookReaderPrefsHideProgress() == 0);
-    const lv_coord_t footer_h = show_footer ? kFooterH : 0;
-    const lv_coord_t body_h = LV_VER_RES - footer_h;
-
-    if (st.page_label != nullptr && lv_obj_is_valid(st.page_label)) {
-        if (show_footer) {
-            lv_obj_clear_flag(st.page_label, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(st.page_label, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-
-    lv_obj_set_size(st.content, LV_HOR_RES, body_h);
-    lv_obj_align(st.content, LV_ALIGN_TOP_MID, 0, 0);
-    // 子控件画出 body 时勿盖住底栏
-    lv_obj_remove_flag(st.content, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
-
-    // 浮层列表：只调 body/底栏；pad 由 ApplyOverlayListContentPads 设置，且禁止改 viewport_*
-    if (mode == ReaderGeomMode::kOverlayList) {
-        return;
-    }
-
-    const bool page_images = ReaderPageImagesHint();
-    const int mt = BookReaderPrefsMarginTop();
-    const int mb = BookReaderPrefsMarginBottom();
-    if (page_images) {
-        lv_obj_set_style_pad_top(st.content, 0, 0);
-        lv_obj_set_style_pad_bottom(st.content, 0, 0);
-        lv_obj_set_style_pad_left(st.content, 0, 0);
-        lv_obj_set_style_pad_right(st.content, 0, 0);
-        st.viewport_w = LV_HOR_RES;
-        st.viewport_h = body_h;
-    } else {
-        // 左右 pad=0：水平居中由 RenderReaderPage 显式算 x，避免 align/flex 失效时贴左
-        lv_obj_set_style_pad_top(st.content, static_cast<lv_coord_t>(mt), 0);
-        lv_obj_set_style_pad_bottom(st.content, static_cast<lv_coord_t>(mb), 0);
-        lv_obj_set_style_pad_left(st.content, 0, 0);
-        lv_obj_set_style_pad_right(st.content, 0, 0);
-        st.viewport_w = ReadContentWidth();
-        lv_coord_t vh =
-            body_h - static_cast<lv_coord_t>(mt + mb) - kReadViewportBottomSlack;
-        st.viewport_h = vh > 40 ? vh : 40;
-    }
-}
-
-void StopReadTimeCheckpointTimer() {
-    auto& st = State();
-    if (st.read_time_ckpt_timer == nullptr) {
-        return;
-    }
-    lv_timer_del(st.read_time_ckpt_timer);
-    st.read_time_ckpt_timer = nullptr;
-}
-
-void OnReadTimeCheckpoint(lv_timer_t* /*t*/) {
-    auto& st = State();
-    // 打开中 / session 已关：跳过；不删 timer（AsyncOpenDone 会重建）
-    if (st.opening.load() || !st.session || !st.session->IsOpen()) {
-        return;
-    }
-    const bool ok = st.session->SaveProgress();
-    const uint32_t sec = st.session->ReadingSeconds();
-    const uint32_t daily = st.session->ReadingDailySeconds();
-    const uint32_t min = sec / 60u;
-    const uint32_t rem = sec % 60u;
-    ESP_LOGI(TAG, "read-time checkpoint (%us): %s total=%u sec (%u min %u sec) daily=%u sec title=%s",
-             static_cast<unsigned>(kReadTimeCheckpointMs / 1000u), ok ? "saved" : "FAIL",
-             static_cast<unsigned>(sec), static_cast<unsigned>(min), static_cast<unsigned>(rem),
-             static_cast<unsigned>(daily), st.session->Title().c_str());
-}
-
-void StartReadTimeCheckpointTimer() {
-    auto& st = State();
-    StopReadTimeCheckpointTimer();
-    st.read_time_ckpt_timer =
-        lv_timer_create(OnReadTimeCheckpoint, kReadTimeCheckpointMs, nullptr);
-    if (st.read_time_ckpt_timer == nullptr) {
-        ESP_LOGW(TAG, "read time checkpoint timer create failed");
-    }
-}
-
-/** 正文可读后开始累计；须在 LVGL 任务调用 */
-void BeginReadingTimeTracking() {
-    auto& st = State();
-    if (!st.session || !st.session->IsOpen()) {
-        return;
-    }
-    const uint32_t sec = st.session->ReadingSeconds();
-    const uint32_t daily = st.session->ReadingDailySeconds();
-    const uint32_t min = sec / 60u;
-    const uint32_t rem = sec % 60u;
-    ESP_LOGI(TAG, "read-time open: total=%u sec (%u min %u sec) daily=%u sec title=%s path=%s",
-             static_cast<unsigned>(sec), static_cast<unsigned>(min), static_cast<unsigned>(rem),
-             static_cast<unsigned>(daily), st.session->Title().c_str(),
-             st.session->Info().path.c_str());
-    st.session->StartReadingClock();
-    StartReadTimeCheckpointTimer();
-}
-
-/**
- * 离开正文前停 checkpoint + 停墙钟（秒数进内存）。
- * session.reset()/Close 会再 SaveProgress 落盘；本函数不写盘，避免双写路径分叉。
- */
-void EndReadingTimeTracking() {
-    StopReadTimeCheckpointTimer();
-    auto& st = State();
-    st.reading_paused_by_standby = false;
-    if (st.session && st.session->IsOpen()) {
-        st.session->StopReadingClock();
-    }
-}
-
-/** 进待机：停累计；退出待机由 ResumeReadingTimeAfterStandby 恢复 */
-void PauseReadingTimeForStandby() {
-    auto& st = State();
-    if (!st.session || !st.session->IsReadingClockActive()) {
-        return;
-    }
-    EndReadingTimeTracking();
-    st.reading_paused_by_standby = true;
-    ESP_LOGI(TAG, "read-time paused for standby");
-}
-
-void ResumeReadingTimeAfterStandby() {
-    auto& st = State();
-    if (!st.reading_paused_by_standby) {
-        return;
-    }
-    st.reading_paused_by_standby = false;
-    BeginReadingTimeTracking();
-    ESP_LOGI(TAG, "read-time resumed after standby");
-}
 
 using reader::HomeStats;
 using reader::BookStatsService;
@@ -529,26 +358,6 @@ void DisableScroll(lv_obj_t* obj) {
     lv_obj_set_scroll_dir(obj, LV_DIR_NONE);
 }
 
-void ShowMessage(lv_obj_t* parent, const char* msg, const lv_font_t* font = nullptr) {
-    auto& st = State();
-    if (parent == st.content) {
-        st.open_bar = nullptr;
-        st.open_pct_lbl = nullptr;
-    }
-    lv_obj_clean(parent);
-    // 提示页需屏幕居中；关掉 flex，避免 START 把文案顶到上方
-    lv_obj_set_style_layout(parent, LV_LAYOUT_NONE, 0);
-    lv_obj_t* label = lv_label_create(parent);
-    lv_label_set_text(label, msg != nullptr ? msg : "");
-    lv_obj_set_style_text_font(label, font != nullptr ? font : ListFont(), 0);
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(label, ContentWidth());
-    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-    lv_obj_center(label);
-    DisableScroll(label);
-}
-
 int EnsureBookInLibrary(const reader::BookInfo& info) {
     auto& st = State();
     for (int i = 0; i < static_cast<int>(st.books.size()); ++i) {
@@ -571,34 +380,11 @@ int EnsureBookInLibrary(const reader::BookInfo& info) {
     return 0;
 }
 
-lv_obj_t* CreateReaderScreen(const reader::BookInfo& info);
-lv_obj_t* ResumeReaderScreen();   // 返回栈：关 session 后再开，依 .pos 续读
-void ReleaseReaderSessionForLeave();
 void RenderReadingHome();
-void ShowOpenProgress(int percent);
-void StartOpenWorker(int book_index);
 void CancelListCoverFill();
 void EnqueueListCoverFill(const reader::BookInfo& info, int max_w, int max_h, lv_obj_t* host,
                           reader::RasterImage* slot);
 void ScheduleListCoverFill();
-void FinishDeferredCleanup();
-void HideReadChrome();
-void ReopenReaderAfterPrefsChange();
-void ApplyReaderLayoutLive(bool reload_font);
-void ScheduleLayoutApply(bool reload_font);
-void FlushLayoutDebounce();
-void CancelLayoutDebounce();
-void StartLayoutWorker();
-void StartChapterPageWorker();
-void BindSessionLayoutPrefs(reader::BookSession& session);
-void ApplyReaderPageGeometry(ReaderGeomMode mode);
-bool IsReadOverlayChrome(BookUiState::ReadChrome c);
-lv_coord_t ReadContentWidth();
-void EnsureLayoutHintTimer();
-void StopLayoutHintTimer();
-void MarkLayoutHintBusy();
-void MarkLayoutHintDone();
-bool IsLayoutHintBusy();
 bool BookLvAsync(void (*cb)(void*), void* user_data = nullptr);
 
 // 书库/详情/正文共用：仅 BOOT 长按进百问；盖板 prev/next 长按连翻（vk_home 长按不进百问）
@@ -623,111 +409,7 @@ void RequestBackHome() {
     BookLvAsync(GoHomeFromBookAsync);
 }
 
-void FinishDeferredCleanup() {
-    auto& st = State();
-    if (!st.deferred_cleanup) {
-        return;
-    }
-    // worker 仍可能握着 session/font_ 计宽：busy 未清不得释字体
-    if (st.opening.load() || st.layout_busy.load() || st.chapter_pages_busy.load() ||
-        st.page_image_busy.load()) {
-        return;
-    }
-    st.deferred_cleanup = false;
-    EndReadingTimeTracking();
-    st.session.reset();
-    ReleaseBookFont();
-}
 
-bool ReaderWorkersBusy() {
-    auto& st = State();
-    return st.opening.load() || st.layout_busy.load() || st.chapter_pages_busy.load() ||
-           st.page_image_busy.load();
-}
-
-// 离开正文（进百问等）：落盘 .pos、释放 session/字库；打开中则延后清。
-void ReleaseReaderSessionForLeave() {
-    auto& st = State();
-    st.open_token.fetch_add(1);
-    st.read_scr = nullptr;
-    st.content = nullptr;
-    st.page_label = nullptr;
-    st.title_label = nullptr;
-    st.open_bar = nullptr;
-    st.open_pct_lbl = nullptr;
-    st.status_bar = nullptr;
-    st.status_overlay = nullptr;
-    st.status_h = 0;
-    st.settings_sheet = nullptr;
-    ClearSettingsSheetWidgetRefs();
-    StopTtfPollTimer();
-    st.ttf_mode = BookUiState::TtfMode::kNone;
-    st.ttf_pick.clear();
-    st.ttf_page = 0;
-    st.ttf_size_px = kTtfConvertSizeDefault;
-    st.viewport_w = 0;
-    st.viewport_h = 0;
-    st.font_entries.clear();
-    st.font_list_page = 0;
-    st.font_multi = false;
-    st.font_selected.clear();
-    st.font_suppress_click_until_us = 0;
-    st.font_suppress_click_idx = -1;
-    st.font_suppress_next_click = false;
-    st.read_chrome = BookUiState::ReadChrome::kReading;
-    st.settings_resume_after_open = false;
-    st.toc_list_page = 0;
-    const bool layout_running = st.layout_busy.load();
-    const bool chapter_pages_running = st.chapter_pages_busy.load();
-    const bool page_image_running = st.page_image_busy.load();
-    st.layout_token.fetch_add(1);
-    st.layout_again = false;
-    st.layout_reload_font = false;
-    st.layout_anchor = {};
-    st.chapter_pages_token.fetch_add(1);
-    st.chapter_pages_again = false;
-    CancelPageImageLoad();
-    if (st.session) {
-        st.session->InvalidateChapterPageTable();
-        st.session->AbortTxtPaginate();
-    }
-    CancelLayoutDebounce();
-    StopLayoutHintTimer();
-    st.layout_hint_done_until_us = 0;
-    ResetReaderPaint();
-    ResetTocPaint();
-    ResetSettingsSheetPaint();
-    ClearReaderPageDelta();
-    ResetReadTouch();
-    if (st.opening.load() || layout_running || chapter_pages_running || page_image_running) {
-        // 勿把 *_busy 置 false，否则其它路径会误 ReleaseBookFont 与计页抢字体
-        StopReadTimeCheckpointTimer();
-        st.deferred_cleanup = true;
-    } else {
-        EndReadingTimeTracking();
-        st.session.reset();
-        ReleaseBookFont();
-    }
-}
-
-lv_obj_t* ResumeReaderScreen() {
-    auto& st = State();
-    // 解析尚未结束 / 后台计页未结束：退回书库，避免与 worker 抢 session/font
-    if (ReaderWorkersBusy()) {
-        return BookScreen::Create();
-    }
-    if (st.deferred_cleanup) {
-        FinishDeferredCleanup();
-    } else if (st.session) {
-        EndReadingTimeTracking();
-        st.session.reset();
-        ReleaseBookFont();
-    }
-    if (st.selected < 0 || st.selected >= static_cast<int>(st.books.size())) {
-        return BookScreen::Create();
-    }
-    return CreateReaderScreen(st.books[static_cast<size_t>(st.selected)]);
-}
 
 /** 盖板键在 touch_feed：须 ScreenLvAsync，禁止同步 lv_obj_clean/create（否则 tlsf 双释放）。 */
 bool BookLvAsync(void (*cb)(void*), void* user_data) {
@@ -867,267 +549,7 @@ void ScheduleListCoverFill() {
 
 
 
-void ShowOpenProgress(int percent) {
-    auto& st = State();
-    if (st.content == nullptr) {
-        return;
-    }
-    if (percent < 0) {
-        percent = 0;
-    }
-    if (percent > 100) {
-        percent = 100;
-    }
 
-    const bool need_build =
-        st.open_bar == nullptr || lv_obj_get_parent(st.open_bar) != st.content ||
-        st.open_pct_lbl == nullptr || lv_obj_get_parent(st.open_pct_lbl) != st.content;
-
-    if (need_build) {
-        st.open_bar = nullptr;
-        st.open_pct_lbl = nullptr;
-        lv_obj_clean(st.content);
-        // 打开进度 UI 用书库边距；避免阅读页边距档位导致 ContentWidth 溢出
-        ApplyOverlayListContentPads(0);
-        lv_obj_set_style_layout(st.content, LV_LAYOUT_NONE, 0);
-        DisableScroll(st.content);
-
-        lv_obj_t* panel = lv_obj_create(st.content);
-        lv_obj_remove_style_all(panel);
-        lv_obj_set_size(panel, ContentWidth(), LV_SIZE_CONTENT);
-        lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_row(panel, 18, 0);
-        lv_obj_clear_flag(panel, LV_OBJ_FLAG_CLICKABLE);
-        DisableScroll(panel);
-        lv_obj_center(panel);
-
-        lv_obj_t* title = lv_label_create(panel);
-        lv_label_set_text(title, Lang::Strings::BOOK_OPENING);
-        lv_obj_set_style_text_font(title, ListFont(), 0);
-        lv_obj_set_style_text_color(title, lv_color_black(), 0);
-        lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
-
-        // 轨道：白底黑框；指示器：实心黑块（墨水屏清晰）
-        lv_coord_t bar_w = kOpenBarW;
-        if (bar_w > ContentWidth() - 8) {
-            bar_w = ContentWidth() - 8;
-        }
-        lv_obj_t* bar = lv_bar_create(panel);
-        lv_obj_set_size(bar, bar_w, kOpenBarH);
-        lv_bar_set_range(bar, 0, 100);
-        lv_bar_set_mode(bar, LV_BAR_MODE_NORMAL);
-        lv_obj_set_style_radius(bar, 6, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(bar, lv_color_white(), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_border_width(bar, 2, LV_PART_MAIN);
-        lv_obj_set_style_border_color(bar, lv_color_black(), LV_PART_MAIN);
-        lv_obj_set_style_pad_all(bar, 3, LV_PART_MAIN);
-        lv_obj_set_style_radius(bar, 3, LV_PART_INDICATOR);
-        lv_obj_set_style_bg_color(bar, lv_color_black(), LV_PART_INDICATOR);
-        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
-        lv_obj_clear_flag(bar, LV_OBJ_FLAG_CLICKABLE);
-        st.open_bar = bar;
-
-        lv_obj_t* pct = lv_label_create(panel);
-        lv_obj_set_style_text_font(pct, ListFont(), 0);
-        lv_obj_set_style_text_color(pct, lv_color_black(), 0);
-        lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_clear_flag(pct, LV_OBJ_FLAG_CLICKABLE);
-        st.open_pct_lbl = pct;
-    }
-
-    lv_bar_set_value(st.open_bar, percent, LV_ANIM_OFF);
-    char buf[16];
-    std::snprintf(buf, sizeof(buf), "%d%%", percent);
-    lv_label_set_text(st.open_pct_lbl, buf);
-}
-
-void AsyncOpenProgress(void* user_data) {
-    auto* msg = static_cast<OpenProgressMsg*>(user_data);
-    auto& st = State();
-    if (msg->token == st.open_token.load() && st.content != nullptr && st.opening.load()) {
-        ShowOpenProgress(msg->percent);
-    }
-    delete msg;
-}
-
-void AsyncOpenDone(void* user_data) {
-    auto* msg = static_cast<OpenDoneMsg*>(user_data);
-    auto& st = State();
-    st.opening.store(false);
-
-    if (msg->token != st.open_token.load() || st.deferred_cleanup || st.content == nullptr) {
-        FinishDeferredCleanup();
-        delete msg;
-        return;
-    }
-
-    if (!msg->ok || !st.session || !st.session->IsOpen()) {
-        EndReadingTimeTracking();
-        ReleaseBookFont();
-        if (st.opening_format == reader::BookFormat::kTxt) {
-            ShowMessage(st.content, Lang::Strings::BOOK_OPEN_FAILED_TXT);
-        } else if (st.opening_format == reader::BookFormat::kEbook) {
-            ShowMessage(st.content, Lang::Strings::BOOK_OPEN_FAILED_CHAPTER);
-        } else {
-            ShowMessage(st.content, Lang::Strings::BOOK_OPEN_FAILED_EPUB);
-        }
-        delete msg;
-        return;
-    }
-
-    // 文档元数据回写书库，下次详情秒开可见 OPF 书名/作者
-    if (st.selected >= 0 && st.selected < static_cast<int>(st.books.size()) &&
-        st.books[static_cast<size_t>(st.selected)].path == st.session->Info().path) {
-        auto& bi = st.books[static_cast<size_t>(st.selected)];
-        if (!st.session->Title().empty()) {
-            bi.title = st.session->Title();
-        }
-        if (!st.session->Author().empty()) {
-            bi.author = st.session->Author();
-        }
-    }
-
-    if (st.settings_resume_after_open) {
-        st.settings_resume_after_open = false;
-        st.read_chrome = BookUiState::ReadChrome::kReading;
-        RenderReaderPage();
-        ShowReadSettingsSheet();
-        BeginReadingTimeTracking();
-        if (st.session->NeedsChapterPageRebuild()) {
-            StartChapterPageWorker();
-        }
-        delete msg;
-        return;
-    }
-
-    RenderReaderPage();
-    BeginReadingTimeTracking();
-    if (st.session->NeedsChapterPageRebuild()) {
-        StartChapterPageWorker();
-    }
-    delete msg;
-}
-
-void OnOpenProgress(int percent, void* user) {
-    auto* msg = new OpenProgressMsg{};
-    msg->token = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(user));
-    msg->percent = percent;
-    // OpenBookWorker 非 LVGL：须 ScreenLvAsync，裸 lv_async_call 会搞坏链表 → Cache/MMU
-    if (!ScreenLvAsync(AsyncOpenProgress, msg)) {
-        delete msg;
-    }
-}
-
-void OpenBookWorker(void* arg) {
-    auto* ctx = static_cast<OpenWorkerArg*>(arg);
-    auto& st = State();
-    bool ok = false;
-
-    const uint32_t token_now = st.open_token.load();
-    ESP_LOGI(TAG, "book_open worker start token=%u cur=%u fmt=%d int=%u spiram=%u path=%s",
-             static_cast<unsigned>(ctx->token), static_cast<unsigned>(token_now),
-             static_cast<int>(ctx->info.format),
-             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
-             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
-             ctx->info.path.c_str());
-
-    if (st.session == nullptr) {
-        ESP_LOGE(TAG, "book_open skip: session null");
-    } else if (ctx->token != token_now) {
-        ESP_LOGW(TAG, "book_open skip: token stale %u!=%u", static_cast<unsigned>(ctx->token),
-                 static_cast<unsigned>(token_now));
-    } else {
-        st.session->SetOpenProgress(OnOpenProgress,
-                                    reinterpret_cast<void*>(static_cast<uintptr_t>(ctx->token)));
-        ok = st.session->Open(ctx->info);
-        st.session->SetOpenProgress(nullptr, nullptr);
-        // 打开路径统一补旁路封面，供书架/详情/目录取用（失败不阻断阅读）
-        if (ok && ctx->token == st.open_token.load() &&
-            (ctx->info.format == reader::BookFormat::kEbook ||
-             ctx->info.format == reader::BookFormat::kEpub)) {
-            char sidecar[192];
-            if (reader::BookCoverSidecarPath(ctx->info.path.c_str(), sidecar, sizeof(sidecar)) &&
-                access(sidecar, R_OK) != 0) {
-                reader::SaveBookCoverSidecar(ctx->info.path.c_str());
-            }
-        }
-    }
-
-    ESP_LOGI(TAG, "book_open worker done ok=%d int=%u spiram=%u", ok ? 1 : 0,
-             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
-             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
-
-    auto* done = new OpenDoneMsg{};
-    done->token = ctx->token;
-    done->ok = ok;
-    if (!ScreenLvAsync(AsyncOpenDone, done)) {
-        delete done;
-        st.opening.store(false);
-        // 禁止在 worker 里直接 reset session；标记延后清理
-        st.deferred_cleanup = true;
-        ESP_LOGW(TAG, "book_open done: ScreenLvAsync fail, deferred_cleanup");
-    }
-    delete ctx;
-}
-
-void StartOpenWorker(int book_index) {
-    auto& st = State();
-    if (st.opening.load()) {
-        ESP_LOGW(TAG, "StartOpenWorker ignored: already opening");
-        return;
-    }
-    if (book_index < 0 || book_index >= static_cast<int>(st.books.size()) || !st.session) {
-        ESP_LOGE(TAG, "StartOpenWorker bad state idx=%d books=%u session=%d", book_index,
-                 static_cast<unsigned>(st.books.size()), st.session ? 1 : 0);
-        ShowMessage(st.content, Lang::Strings::BOOK_OPEN_FAILED);
-        return;
-    }
-
-    const uint32_t token = st.open_token.fetch_add(1) + 1;
-    st.opening.store(true);
-    st.deferred_cleanup = false;
-    st.opening_format = st.books[static_cast<size_t>(book_index)].format;
-    ShowOpenProgress(0);
-
-    auto* ctx = new OpenWorkerArg{};
-    ctx->token = token;
-    ctx->info = st.books[static_cast<size_t>(book_index)];
-    ESP_LOGI(TAG, "StartOpenWorker token=%u fmt=%d int=%u spiram=%u path=%s",
-             static_cast<unsigned>(token), static_cast<int>(ctx->info.format),
-             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
-             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
-             ctx->info.path.c_str());
-    if (!SpawnPsrWorker("book_open", kOpenWorkerStack, tskIDLE_PRIORITY + 2, OpenBookWorker, ctx,
-                        nullptr, 0)) {
-        const size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-        const size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-        ESP_LOGE(TAG, "book_open task failed: int free=%u spiram=%u stack=%u",
-                 static_cast<unsigned>(free_int), static_cast<unsigned>(free_spiram),
-                 static_cast<unsigned>(kOpenWorkerStack));
-        delete ctx;
-        st.opening.store(false);
-        ShowMessage(st.content, Lang::Strings::BOOK_OPEN_FAILED_TASK);
-    }
-}
-
-void StartReadAsync(void* user_data) {
-    const int index = static_cast<int>(reinterpret_cast<intptr_t>(user_data));
-    auto& st = State();
-    if (index < 0 || index >= static_cast<int>(st.books.size())) {
-        return;
-    }
-    // 编排/打开 worker 仍握旧 session：勿 CreateReaderScreen 拆掉
-    if (ReaderWorkersBusy()) {
-        ESP_LOGW(TAG, "start read ignored: worker busy");
-        return;
-    }
-    st.selected = index;
-    CancelDetailCoverLoad();
-    // 勿在此 Reset detail_cover：旧详情屏异步删除前仍引用封面缓冲
-    ScreenLoadReplace(CreateReaderScreen(st.books[static_cast<size_t>(index)]));
-}
 
 void BackToLibraryAsync(void* /*user_data*/) {
     // 详情 vk_home / vk_prev → 书架或阅读首页。
@@ -1176,469 +598,11 @@ void OnOpenShelfClicked(lv_event_t* /*e*/) {
 
 
 
-void SetReadStatusVisible(bool visible) {
-    auto& st = State();
-    if (st.status_bar != nullptr && lv_obj_is_valid(st.status_bar)) {
-        if (visible) {
-            // 盖在正文上时需白底，否则字迹透出
-            lv_obj_set_style_bg_color(st.status_bar, lv_color_white(), 0);
-            lv_obj_set_style_bg_opa(st.status_bar, LV_OPA_COVER, 0);
-            lv_obj_clear_flag(st.status_bar, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_move_foreground(st.status_bar);
-        } else {
-            lv_obj_add_flag(st.status_bar, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_style_bg_opa(st.status_bar, LV_OPA_TRANSP, 0);
-        }
-    }
-    if (st.status_overlay != nullptr && lv_obj_is_valid(st.status_overlay)) {
-        // overlay 叠在图标行上，保持透明以免盖住电量/网络
-        if (visible) {
-            lv_obj_set_style_bg_opa(st.status_overlay, LV_OPA_TRANSP, 0);
-            lv_obj_clear_flag(st.status_overlay, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_move_foreground(st.status_overlay);
-        } else {
-            lv_obj_add_flag(st.status_overlay, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-}
-
-/** @brief 状态栏中央（时钟位）：有文案则显示，nullptr/空则清除业务持续状态 */
-void SetReadStatusCenterTitle(const char* title) {
-    if (title != nullptr && title[0] != '\0') {
-        StatusBarManager::GetInstance().SetOngoing("book", title);
-    } else {
-        StatusBarManager::GetInstance().ClearOngoing("book");
-    }
-}
-
-void HideReadChrome() {
-    auto& st = State();
-    CloseReadSettingsSheet();
-    SetReadStatusCenterTitle(nullptr);
-    SetReadStatusVisible(false);
-    const bool was_overlay = IsReadOverlayChrome(st.read_chrome);
-    const bool was_settings = (st.read_chrome == BookUiState::ReadChrome::kSettings);
-    st.settings_resume_after_open = false;
-    st.read_chrome = BookUiState::ReadChrome::kReading;
-    // 设置卡片盖在正文上：关掉即可，不必重绘；目录整页需恢复正文
-    if (was_overlay && !was_settings && st.session && st.session->IsOpen() &&
-        st.content != nullptr) {
-        CancelListCoverFill();  // 目录封面槽将随 content 重建销毁
-        ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
-        RenderReaderPage();
-    } else if (was_settings) {
-        // 关卡：落盘未完成的 ± 排版；StartChapterPageWorker 自检 Needs（卡上曾推迟）
-        FlushLayoutDebounce();
-        ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
-        StartChapterPageWorker();
-    }
-}
 
 
-void ApplyReaderLayoutLive(bool reload_font) {
-    auto& st = State();
-    if (st.opening.load() || !st.session || !st.session->IsOpen()) {
-        return;
-    }
-    if (st.viewport_w <= 0 || st.viewport_h <= 0) {
-        return;
-    }
-    const bool layout_running = st.layout_busy.load();
-    // 换字库与 worker 抢 font_：只记 again；边距/行距仍即时刷预览
-    if (layout_running && reload_font) {
-        st.layout_again = true;
-        st.layout_reload_font = true;
-        return;
-    }
-    if (layout_running) {
-        st.layout_again = true;
-    }
-    // 章节页表后台正用 font_ 计宽：禁止 ReleaseBookFont，否则 InstrFetchProhibited
-    if (reload_font && st.chapter_pages_busy.load()) {
-        st.layout_again = true;
-        st.layout_reload_font = true;
-        st.chapter_pages_again = true;
-        st.session->InvalidateChapterPageTable();
-        return;
-    }
 
-    ClearReaderPageDelta();
-    if (reload_font) {
-        ReleaseBookFont();
-        EnsureBookFont();
-    }
-    BindSessionLayoutPrefs(*st.session);
-    ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
-    st.session->SetViewport(st.viewport_w, st.viewport_h);
 
-    reader::BookSession::LayoutAnchor anchor = st.session->CaptureLayoutAnchor();
-    if (!st.session->BeginLiveRelayout(&anchor)) {
-        ESP_LOGW(TAG, "live relayout failed, fallback reopen");
-        st.settings_resume_after_open = (st.read_chrome == BookUiState::ReadChrome::kSettings);
-        ReopenReaderAfterPrefsChange();
-        return;
-    }
 
-    const bool keep_sheet = (st.read_chrome == BookUiState::ReadChrome::kSettings);
-    RenderReaderPage();
-    if (keep_sheet) {
-        EnsureSettingsSheetAfterLayout();
-    } else {
-        UpdateReadFooter();
-    }
-
-    if (st.session->NeedsTxtIndexRebuild() && st.session->LiveRelayoutPending()) {
-        st.layout_anchor = anchor;
-        if (layout_running) {
-            // worker 结束后用最新锚点/参数再全量扫
-            st.layout_again = true;
-        } else {
-            st.layout_again = false;
-            st.layout_reload_font = false;
-            StartLayoutWorker();
-        }
-    } else if (st.session->NeedsChapterPageRebuild()) {
-        StartChapterPageWorker();
-    }
-}
-
-void CancelLayoutDebounce() {
-    auto& st = State();
-    if (st.layout_debounce_timer != nullptr) {
-        lv_timer_del(st.layout_debounce_timer);
-        st.layout_debounce_timer = nullptr;
-    }
-    st.layout_debounce_reload_font = false;
-}
-
-bool IsLayoutHintBusy() {
-    auto& st = State();
-    if (st.chapter_pages_busy.load() || st.layout_busy.load()) {
-        return true;
-    }
-    return st.session && st.session->IsOpen() && st.session->LiveRelayoutPending();
-}
-
-void StopLayoutHintTimer() {
-    auto& st = State();
-    if (st.layout_hint_timer != nullptr) {
-        lv_timer_del(st.layout_hint_timer);
-        st.layout_hint_timer = nullptr;
-    }
-}
-
-void OnLayoutHintTick(lv_timer_t* /*t*/) {
-    auto& st = State();
-    if (st.page_label == nullptr || !lv_obj_is_valid(st.page_label)) {
-        StopLayoutHintTimer();
-        return;
-    }
-    if (IsLayoutHintBusy()) {
-        UpdateReadFooter();
-        return;
-    }
-    if (esp_timer_get_time() < st.layout_hint_done_until_us) {
-        UpdateReadFooter();
-        return;
-    }
-    st.layout_hint_done_until_us = 0;
-    StopLayoutHintTimer();
-    UpdateReadFooter();
-}
-
-void EnsureLayoutHintTimer() {
-    auto& st = State();
-    if (st.layout_hint_timer != nullptr) {
-        return;
-    }
-    st.layout_hint_timer = lv_timer_create(OnLayoutHintTick, kLayoutHintTickMs, nullptr);
-}
-
-void MarkLayoutHintBusy() {
-    auto& st = State();
-    st.layout_hint_done_until_us = 0;
-    StopLayoutHintTimer();
-    UpdateReadFooter();
-}
-
-void MarkLayoutHintDone() {
-    auto& st = State();
-    st.layout_hint_done_until_us = esp_timer_get_time() + kLayoutHintDoneUs;
-    EnsureLayoutHintTimer();
-    UpdateReadFooter();
-}
-
-void OnLayoutDebounceTimer(lv_timer_t* t) {
-    auto& st = State();
-    if (st.layout_debounce_timer == t) {
-        st.layout_debounce_timer = nullptr;
-    }
-    // 与 ScreenPaintCoalesce 同形：手指未抬 / 边沿未交完则再等一拍，避免连点中途开排版
-    if (TouchUiFingerIsDown() || TouchUiHasPendingEdges()) {
-        st.layout_debounce_timer =
-            lv_timer_create(OnLayoutDebounceTimer, kLayoutDebounceMs, nullptr);
-        if (st.layout_debounce_timer != nullptr) {
-            lv_timer_set_repeat_count(st.layout_debounce_timer, 1);
-        }
-        return;
-    }
-    const bool reload = st.layout_debounce_reload_font;
-    st.layout_debounce_reload_font = false;
-    ApplyReaderLayoutLive(reload);
-}
-
-void ScheduleLayoutApply(bool reload_font) {
-    auto& st = State();
-    if (st.opening.load() || !st.session || !st.session->IsOpen()) {
-        return;
-    }
-    // prefs/卡文案已由调用方写好；抬起且停顿后再排版（合并为最后一档）
-    st.layout_debounce_reload_font = st.layout_debounce_reload_font || reload_font;
-    if (st.layout_debounce_timer != nullptr) {
-        lv_timer_reset(st.layout_debounce_timer);
-        return;
-    }
-    st.layout_debounce_timer = lv_timer_create(OnLayoutDebounceTimer, kLayoutDebounceMs, nullptr);
-    if (st.layout_debounce_timer != nullptr) {
-        lv_timer_set_repeat_count(st.layout_debounce_timer, 1);
-    }
-}
-
-void FlushLayoutDebounce() {
-    auto& st = State();
-    if (st.layout_debounce_timer == nullptr) {
-        return;
-    }
-    const bool reload = st.layout_debounce_reload_font;
-    CancelLayoutDebounce();
-    ApplyReaderLayoutLive(reload);
-}
-
-struct LayoutDoneMsg {
-    uint32_t token = 0;
-    bool ok = false;
-};
-
-struct LayoutWorkerArg {
-    uint32_t token = 0;
-    reader::BookSession::LayoutAnchor anchor{};
-};
-
-void AsyncLayoutDone(void* user_data) {
-    auto* msg = static_cast<LayoutDoneMsg*>(user_data);
-    auto& st = State();
-    const uint32_t token = msg->token;
-    const bool ok = msg->ok;
-    delete msg;
-
-    const bool mine = (token == st.layout_token.load());
-    // 无论 token 是否作废，本 worker 已结束，必须清 busy（离开时不再提前清）
-    st.layout_busy.store(false);
-    // 离开正文时 layout worker 仍在跑：结束后再关 session
-    if (st.deferred_cleanup && !st.opening.load() && !st.layout_busy.load() &&
-        !st.chapter_pages_busy.load() && !st.page_image_busy.load()) {
-        FinishDeferredCleanup();
-        return;
-    }
-    if (!mine || st.content == nullptr || !st.session) {
-        return;
-    }
-    if (!ok) {
-        ESP_LOGW(TAG, "layout worker failed");
-        if (st.session &&
-            (st.session->LiveRelayoutPending() || st.session->NeedsTxtIndexRebuild())) {
-            st.session->ClearLivePreview();
-            st.settings_resume_after_open = (st.read_chrome == BookUiState::ReadChrome::kSettings);
-            ReopenReaderAfterPrefsChange();
-        } else if (st.session) {
-            UpdateReadFooter();
-        }
-        return;
-    }
-
-    const bool keep_sheet = (st.read_chrome == BookUiState::ReadChrome::kSettings);
-    RenderReaderPage();
-    if (keep_sheet) {
-        EnsureSettingsSheetAfterLayout();
-    } else {
-        UpdateReadFooter();
-    }
-
-    if (st.layout_again) {
-        const bool reload = st.layout_reload_font;
-        st.layout_again = false;
-        st.layout_reload_font = false;
-        ApplyReaderLayoutLive(reload);
-        return;
-    }
-    if (!IsLayoutHintBusy()) {
-        MarkLayoutHintDone();
-    }
-}
-
-void LayoutWorker(void* arg) {
-    auto* ctx = static_cast<LayoutWorkerArg*>(arg);
-    auto& st = State();
-    bool ok = false;
-    if (st.session && ctx->token == st.layout_token.load()) {
-        ok = st.session->FinishTxtRelayout(ctx->anchor);
-    }
-    auto* done = new LayoutDoneMsg{};
-    done->token = ctx->token;
-    done->ok = ok;
-    if (!ScreenLvAsync(AsyncLayoutDone, done)) {
-        delete done;
-        st.layout_busy.store(false);
-    }
-    delete ctx;
-}
-
-struct ChapterPagesDoneMsg {
-    uint32_t token = 0;
-    bool ok = false;
-};
-
-void AsyncChapterPagesDone(void* user_data) {
-    auto* msg = static_cast<ChapterPagesDoneMsg*>(user_data);
-    auto& st = State();
-    const uint32_t token = msg->token;
-    delete msg;
-
-    const bool mine = (token == st.chapter_pages_token.load());
-    st.chapter_pages_busy.store(false);
-
-    if (st.deferred_cleanup && !st.opening.load() && !st.layout_busy.load() &&
-        !st.chapter_pages_busy.load() && !st.page_image_busy.load()) {
-        FinishDeferredCleanup();
-        return;
-    }
-    if (!mine || st.content == nullptr || !st.session) {
-        return;
-    }
-    if (st.read_chrome == BookUiState::ReadChrome::kSettings) {
-        EnsureSettingsSheetAfterLayout();
-    } else {
-        UpdateReadFooter();
-    }
-    // 换字号曾因页表 worker 占用 font 而 defer：worker 结束后再落地
-    if (st.layout_again) {
-        const bool reload = st.layout_reload_font;
-        st.layout_again = false;
-        st.layout_reload_font = false;
-        st.chapter_pages_again = false;
-        ApplyReaderLayoutLive(reload);
-        return;
-    }
-    if (st.chapter_pages_again || st.session->NeedsChapterPageRebuild()) {
-        st.chapter_pages_again = false;
-        StartChapterPageWorker(); // 设置卡内会直接 return，关卡后再建
-        return;
-    }
-    MarkLayoutHintDone();
-}
-
-void ChapterPageWorker(void* arg) {
-    auto* ctx = static_cast<uint32_t*>(arg);
-    const uint32_t token = *ctx;
-    delete ctx;
-    auto& st = State();
-    bool ok = false;
-    if (st.session && token == st.chapter_pages_token.load()) {
-        ok = st.session->FinishChapterPageTable();
-    }
-    auto* done = new ChapterPagesDoneMsg{};
-    done->token = token;
-    done->ok = ok;
-    if (!ScreenLvAsync(AsyncChapterPagesDone, done)) {
-        delete done;
-        st.chapter_pages_busy.store(false);
-    }
-}
-
-void StartChapterPageWorker() {
-    auto& st = State();
-    if (!st.session || !st.session->NeedsChapterPageRebuild()) {
-        return;
-    }
-    // 设置浮层只预览当前章；Needs 仍真，关卡 HideReadChrome 再调本函数
-    if (st.read_chrome == BookUiState::ReadChrome::kSettings) {
-        return;
-    }
-    if (st.chapter_pages_busy.load()) {
-        st.chapter_pages_again = true;
-        return;
-    }
-    const uint32_t token = st.chapter_pages_token.fetch_add(1) + 1;
-    st.chapter_pages_busy.store(true);
-    st.chapter_pages_again = false;
-    MarkLayoutHintBusy();
-    auto* ctx = new uint32_t(token);
-    if (!SpawnPsrWorker("book_cpages", kOpenWorkerStack, tskIDLE_PRIORITY + 1, ChapterPageWorker, ctx,
-                        nullptr, 0)) {
-        ESP_LOGE(TAG, "book_cpages task failed");
-        delete ctx;
-        st.chapter_pages_busy.store(false);
-        MarkLayoutHintDone();
-    }
-}
-
-void StartLayoutWorker() {
-    auto& st = State();
-    if (st.layout_busy.load() || !st.session) {
-        return;
-    }
-    const uint32_t token = st.layout_token.fetch_add(1) + 1;
-    st.layout_busy.store(true);
-    MarkLayoutHintBusy();
-    auto* ctx = new LayoutWorkerArg{};
-    ctx->token = token;
-    ctx->anchor = st.layout_anchor;
-    if (!SpawnPsrWorker("book_layout", kOpenWorkerStack, tskIDLE_PRIORITY + 1, LayoutWorker, ctx,
-                        nullptr, 0)) {
-        ESP_LOGE(TAG, "book_layout task failed");
-        delete ctx;
-        st.layout_busy.store(false);
-        st.session->ClearLivePreview();
-        st.settings_resume_after_open = (st.read_chrome == BookUiState::ReadChrome::kSettings);
-        ReopenReaderAfterPrefsChange();
-    }
-}
-
-void ReopenReaderAfterPrefsChange() {
-    auto& st = State();
-    if (st.opening.load()) {
-        return;
-    }
-    if (st.selected < 0 || st.selected >= static_cast<int>(st.books.size())) {
-        return;
-    }
-    st.layout_token.fetch_add(1);
-    st.layout_busy.store(false);
-    st.layout_again = false;
-    st.layout_reload_font = false;
-    st.read_chrome = BookUiState::ReadChrome::kReading;
-    SetReadStatusVisible(false);
-    SetReadSettingsSheetVisible(false);
-    ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
-    if (st.viewport_w <= 0 || st.viewport_h <= 0) {
-        ESP_LOGE(TAG, "reopen prefs: invalid viewport %d×%d", static_cast<int>(st.viewport_w),
-                 static_cast<int>(st.viewport_h));
-        st.settings_resume_after_open = false;
-        return;
-    }
-    const lv_coord_t vw = st.viewport_w;
-    const lv_coord_t vh = st.viewport_h;
-
-    ClearReaderPageDelta();
-    EndReadingTimeTracking();
-    st.session.reset();
-    ReleaseBookFont();
-    EnsureBookFont();
-    st.session = std::make_unique<reader::BookSession>();
-    BindSessionLayoutPrefs(*st.session);
-    st.session->SetViewport(vw, vh);
-    StartOpenWorker(st.selected);
-}
 
 struct SettingsSheetHooksInit {
     SettingsSheetHooksInit() {
@@ -1669,94 +633,18 @@ struct DetailScreenHooksInit {
 };
 static DetailScreenHooksInit s_detail_screen_hooks_init;
 
-
-
-
-
-
-
-
-
-lv_obj_t* CreateReaderScreen(const reader::BookInfo& info) {
-    auto& st = State();
-    // 硬护栏：layout/open worker 仍用旧 session 时禁止 make_unique 拆掉（UAF）
-    if (ReaderWorkersBusy()) {
-        ESP_LOGW(TAG, "CreateReaderScreen blocked: worker busy");
-        if (st.selected >= 0 && st.selected < static_cast<int>(st.books.size())) {
-            return CreateDetailScreen(st.selected);
-        }
-        return BookScreen::Create();
+struct ReaderOrchestratorHooksInit {
+    ReaderOrchestratorHooksInit() {
+        SetReaderOrchestratorCreateHomeScrHandler(&BookScreen::Create);
+        SetReaderOrchestratorCreateDetailScrHandler(&CreateDetailScreen);
+        SetReaderOrchestratorAttachVkHandler([](lv_obj_t* scr) {
+            VkKey_AttachScreen(scr, kScreenRead, BookAiLongPressDesc(ResumeReaderScreen));
+        });
+        SetReaderOrchestratorCancelListCoverHandler(&CancelListCoverFill);
     }
-    if (st.deferred_cleanup) {
-        FinishDeferredCleanup();
-    }
-    // 仅打开正文时加载 SD 字体；界面控件用固件字
-    EnsureBookFont();
-    // 预扫 SD 字库列表，长按设置卡时不必再等「加载中」
-    ScanReadFonts();
-    EnsureFontListPageShowsSelection();
-    // 换新 session 前停旧 timer/墙钟，避免回调 UAF 或漏写本段秒数
-    EndReadingTimeTracking();
-    st.session = std::make_unique<reader::BookSession>();
-    BindSessionLayoutPrefs(*st.session);
-    st.opening_format = info.format;
+};
+static ReaderOrchestratorHooksInit s_reader_orchestrator_hooks_init;
 
-    lv_obj_t* scr = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_font(scr, ListFont(), 0);
-    lv_obj_set_style_text_color(scr, lv_color_black(), 0);
-    DisableScroll(scr);
-
-    EpdStatusBar status = ScreenCreateStatusBar(scr);
-    st.status_bar = status.bar;
-    st.status_overlay = status.overlay;
-    st.status_h = status.height;
-    lv_obj_add_event_cb(scr, [](lv_event_t*) {
-        StatusBarManager::GetInstance().ClearOngoing("book");
-    }, LV_EVENT_DELETE, nullptr);
-    // 沉浸阅读：默认藏顶栏，正文占满状态栏区域
-    SetReadStatusVisible(false);
-
-    st.title_label = nullptr;
-
-    lv_obj_t* body = lv_obj_create(scr);
-    lv_obj_remove_style_all(body);
-    lv_obj_set_size(body, LV_HOR_RES, LV_VER_RES - kFooterH);
-    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
-    DisableScroll(body);
-    ResetReadTouch();
-    AttachReadBodyInput(body);
-    st.content = body;
-    st.read_chrome = BookUiState::ReadChrome::kReading;
-    st.toc_list_page = 0;
-
-    // 顶部悬浮设置卡片（默认隐藏；页内长按唤出，盖在正文上）
-    st.settings_sheet = CreateSettingsSheet(scr);
-
-    lv_obj_t* footer = lv_label_create(scr);
-    lv_obj_set_width(footer, LV_HOR_RES - 16);
-    lv_obj_set_style_text_align(footer, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(footer, ListFont(), 0);
-    lv_obj_set_style_text_color(footer, lv_color_black(), 0);
-    lv_label_set_long_mode(footer, LV_LABEL_LONG_CLIP);
-    lv_label_set_text(footer, "");
-    lv_obj_align(footer, LV_ALIGN_BOTTOM_MID, 0, 0);
-    DisableScroll(footer);
-    st.page_label = footer;
-
-    // 先展示加载页，再后台解析；避免点「开始阅读」后长时间无响应
-    ShowOpenProgress(0);
-    st.read_scr = scr;
-    ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
-    st.session->SetViewport(st.viewport_w, st.viewport_h);
-    ScreenSetIsHome(false);
-    // factory=ResumeReader：进百问压栈后返回依 .pos 续读；短按 HOME 回详情
-    VkKey_AttachScreen(scr, kScreenRead, BookAiLongPressDesc(ResumeReaderScreen));
-    StartOpenWorker(st.selected);
-    return scr;
-}
 
 
 
