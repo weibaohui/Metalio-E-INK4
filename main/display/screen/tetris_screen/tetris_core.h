@@ -53,7 +53,7 @@ private:
     int type_ = 0, rot_ = 0, px_ = 0, py_ = 0;
     int next_ = 0, hold_ = -1;
     bool can_hold_ = true;
-    State state_ = State::Running;
+    State state_ = State::Over;
     int score_ = 0, lines_ = 0, level_ = 1, pieces_ = 0;
     int drop_ms_ = 800;
 };

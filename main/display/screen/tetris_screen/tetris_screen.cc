@@ -1,7 +1,10 @@
 // main/display/screen/tetris_screen/tetris_screen.cc —— 俄罗斯方块界面（480×800 竖屏 1-bit 墨水屏）。
-// 布局(定稿):左盘右栏——棋盘 10×20(30px 格) + 右栏(下一个/暂存/得分/行数/等级/最高),
-// 底部 暂停/重开/退出 + 速降(黑底反白)。设备底部三物理键:BOOT=旋转、VOL-=左移、VOL+=右移;
-// 盖板 vk_prev/vk_next 亦映射左/右移。暂存块点暂存框交换。
+// 布局:左盘右栏——棋盘 10×20(30px 格) + 右栏(下一个/暂存/得分/行数/等级/最高),
+// 底部 暂停/重开/退出 + 速降(黑底反白)。
+// 操作支持全方位控制:
+// 1. 盖板虚拟键: vk_home=旋转, vk_next=左移, vk_prev=右移;
+// 2. 机身物理按键: 音量+=左移, 音量-=右移, BOOT=旋转;
+// 3. 屏幕触控: 点击棋盘左半=左移, 右半=右移, 上半=旋转; 点暂存框=暂存; 底部按键=速降/暂停/重开/退出。
 // 刷新纪律:差量重绘——占格只在变化时改样式、文本只在变化时 set,墨水屏走局部刷新;
 // 每 10 块落定请求一次全刷清残影。
 #include "tetris_screen/tetris_screen.h"
@@ -301,6 +304,9 @@ void ShowGameOver() {
     if (s_overlay.mask != nullptr) {
         lv_obj_add_event_cb(s_overlay.mask, OnOverlayClicked, LV_EVENT_CLICKED, nullptr);
     }
+    if (s_overlay.card != nullptr) {
+        lv_obj_add_event_cb(s_overlay.card, OnOverlayClicked, LV_EVENT_CLICKED, nullptr);
+    }
     if (s_timer != nullptr) lv_timer_pause(s_timer);
 }
 
@@ -349,23 +355,43 @@ bool PostInput(int input) {
     return true;
 }
 
+// 盖板三键: vk_home=旋转, vk_next=左移, vk_prev=右移
+// 实体按键: 音量+=左移(tetris_left), 音量-=右移(tetris_right)
 bool OnVkKey(const char* key) {
     if (key == nullptr) return false;
-    if (strcmp(key, "tetris_left") == 0 || strcmp(key, "vk_prev") == 0) return PostInput(kInLeft);
-    if (strcmp(key, "tetris_right") == 0 || strcmp(key, "vk_next") == 0) return PostInput(kInRight);
-    if (strcmp(key, "tetris_rotate") == 0) return PostInput(kInRotate);
+    if (strcmp(key, "vk_home") == 0) return PostInput(kInRotate);
+    if (strcmp(key, "vk_next") == 0) return PostInput(kInLeft);
+    if (strcmp(key, "vk_prev") == 0) return PostInput(kInRight);
+    if (strcmp(key, "tetris_left") == 0) return PostInput(kInLeft);
+    if (strcmp(key, "tetris_right") == 0) return PostInput(kInRight);
     return false;
 }
 
-bool OnBootClick() { return PostInput(kInRotate); }
-
-bool OnBootLongPress() {
-    if (!s_alive) return false;
-    ScreenLvAsync([](void*) { ScreenRequestHome(); }, nullptr);
-    return true;
+// 实体按键: BOOT=旋转
+bool OnBootClick() {
+    return PostInput(kInRotate);
 }
 
 // ---- 触控(事件回调,已在 LVGL 线程) ----
+
+void OnBoardClicked(lv_event_t*) {
+    if (!s_alive || s_core.state() != tetris::State::Running) return;
+    lv_point_t point;
+    lv_indev_get_point(lv_indev_active(), &point);
+    lv_area_t area;
+    lv_obj_get_coords(s_board, &area);
+    const lv_coord_t rel_x = point.x - area.x1;
+    const lv_coord_t rel_y = point.y - area.y1;
+    const lv_coord_t board_w = lv_area_get_width(&area);
+    const lv_coord_t board_h = lv_area_get_height(&area);
+    if (rel_y < board_h / 3) {
+        ApplyInput(kInRotate);
+    } else if (rel_x < board_w / 2) {
+        ApplyInput(kInLeft);
+    } else {
+        ApplyInput(kInRight);
+    }
+}
 
 void OnBtnClicked(lv_event_t* e) {
     const uintptr_t kind = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
@@ -384,6 +410,7 @@ void OnBtnClicked(lv_event_t* e) {
             DoRestart();
             break;
         case 2:  // 退出
+            SaveBestIfNeeded();
             // 事件回调里删屏不安全,延后一拍
             lv_async_call([](void*) { ScreenRequestHome(); }, nullptr);
             break;
@@ -411,11 +438,16 @@ void OnGameTick(lv_timer_t*) {
     RedrawBoard();
     DrawCurrent();
     DrawGhost();
+    DrawPreviews();
+    UpdateLabels();
+    SyncTimerPeriod();
     MaybeFullRefresh();
 }
 
 void OnScreenUnloaded(lv_event_t*) {
+    if (!s_alive) return;
     s_alive = false;
+    SaveBestIfNeeded();
     if (s_timer != nullptr) {
         lv_timer_delete(s_timer);
         s_timer = nullptr;
@@ -523,14 +555,17 @@ lv_obj_t* TetrisScreen::Create() {
     });
     s_scr = scaffold->GetScreen();
     lv_obj_t* body = scaffold->GetBody();
+    ScreenSetIsHome(false);
     lv_obj_add_event_cb(s_scr, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
+    lv_obj_add_event_cb(s_scr, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOAD_START, nullptr);
+    lv_obj_add_event_cb(s_scr, OnScreenUnloaded, LV_EVENT_DELETE, nullptr);
 
     // 上局结束:新局;暂停态回来自续
     if (s_core.state() == tetris::State::Over) {
         s_core.Reset();
     }
 
-    // 棋盘框
+    // 棋盘框 (支持点击左/右/上控制移动与旋转)
     s_board = lv_obj_create(body);
     lv_obj_remove_style_all(s_board);
     lv_obj_set_pos(s_board, kBoardX, kBoardY);
@@ -541,7 +576,9 @@ lv_obj_t* TetrisScreen::Create() {
     lv_obj_set_style_border_width(s_board, 3, 0);
     lv_obj_set_style_radius(s_board, 0, 0);
     DisableScroll(s_board);
-    lv_obj_clear_flag(s_board, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_board, LV_OBJ_FLAG_CLICKABLE);
+    HapticAttachClick(s_board);
+    lv_obj_add_event_cb(s_board, OnBoardClicked, LV_EVENT_CLICKED, nullptr);
 
     // 200 占格(差量重绘)
     memset(s_render, 0xFF, sizeof(s_render));
@@ -580,6 +617,7 @@ lv_obj_t* TetrisScreen::Create() {
     lv_obj_clear_flag(next_box, LV_OBJ_FLAG_CLICKABLE);
     for (int i = 0; i < 4; ++i) {
         s_next_pv[i] = MakeBlock(next_box);
+        lv_obj_set_size(s_next_pv[i], 20, 20);
         lv_obj_add_flag(s_next_pv[i], LV_OBJ_FLAG_HIDDEN);
     }
 
@@ -600,6 +638,7 @@ lv_obj_t* TetrisScreen::Create() {
     lv_obj_add_event_cb(hold_box, OnHoldBoxClicked, LV_EVENT_CLICKED, nullptr);
     for (int i = 0; i < 4; ++i) {
         s_hold_pv[i] = MakeBlock(hold_box);
+        lv_obj_set_size(s_hold_pv[i], 20, 20);
         lv_obj_add_flag(s_hold_pv[i], LV_OBJ_FLAG_HIDDEN);
     }
 
@@ -645,7 +684,10 @@ lv_obj_t* TetrisScreen::Create() {
     if (s_core.state() == tetris::State::Paused) lv_timer_pause(s_timer);
 
     s_alive = true;
-    VkKey_AttachScreen(s_scr, kScreenId,
-                       VkKeyScreenDesc{TetrisScreen::Create, OnVkKey, OnBootClick, OnBootLongPress});
+    VkKey_AttachScreen(s_scr, kScreenId, VkKeyScreenDesc{
+        .factory = TetrisScreen::Create,
+        .on_key = OnVkKey,
+        .on_boot_click = OnBootClick,
+    });
     return s_scr;
 }
