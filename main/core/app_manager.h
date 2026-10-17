@@ -25,6 +25,10 @@ public:
     // 动态注册应用模块
     void RegisterApp(std::shared_ptr<AppModule> module);
 
+    // 注销动态应用（按 id）；存在返回 true。仅用于动态应用（位于 modules_ 尾部，
+    // 注销不影响内置应用的开关位映射）。
+    bool UnregisterApp(const char* id);
+
     // 获取所有应用模块
     const std::vector<std::shared_ptr<AppModule>>& GetAllApps() const { return modules_; }
     int GetAppCount() const { return static_cast<int>(modules_.size()); }

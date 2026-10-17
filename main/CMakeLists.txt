@@ -22,6 +22,7 @@ set(SOURCES "audio/audio_codec.cc"
             "services/glm_usage/glm_usage.cc"
             "services/glm_usage/glm_usage_service.cc"
             "services/local_mcp/local_mcp_server.cc"
+            "services/dynamic_apps/dynamic_app_loader.cc"
             "services/syslog_sender.cc"
             "services/time_service.cc"
             "services/mem_report/mem_report.cc"
@@ -58,6 +59,8 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/radio_screen/radio_screen.cc"
             "display/screen/tetris_screen/tetris_screen.cc"
             "display/screen/tetris_screen/tetris_core.cc"
+            "display/screen/game_2048_screen/game_2048_screen.cc"
+            "display/screen/game_2048_screen/game_2048_core.cc"
             "display/screen/standby_screen/standby_screen.cc"
             "display/screen/standby_screen/standby_classic.cc"
             "display/screen/ota_upgrade_screen/ota_upgrade_screen.cc"
@@ -349,6 +352,10 @@ set_source_files_properties(
 # esp-ml307 / esp-wifi-connect：本地 vendored 组件（components/），不再走 Component Manager
 # esp_tinyusb：设置页模拟 U 盘（MSC）；仅 S3 拉取，链接 usb PHY
 target_link_libraries(${COMPONENT_LIB} PRIVATE idf::fatfs idf::sdmmc idf::esp_driver_sdmmc idf::espressif__zlib idf::esp_partition idf::espcoredump idf::esp-ml307 idf::esp-wifi-connect idf::esp_http_server idf::espressif__freetype idf::reader_core)
+# ELF Loader：动态应用 .so 运行期加载（dlopen 模式）
+if(TARGET idf::espressif__elf_loader)
+    target_link_libraries(${COMPONENT_LIB} PRIVATE idf::espressif__elf_loader)
+endif()
 if(TARGET idf::espressif__esp_tinyusb)
     target_link_libraries(${COMPONENT_LIB} PRIVATE idf::espressif__esp_tinyusb idf::usb)
 endif()

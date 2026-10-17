@@ -1,6 +1,7 @@
 #include "dual_network_board.h"
 #include "bt_audio_codec.h"
 #include "bq27220_gauge.h"
+#include "core/system_event_bus.h"
 #include "display/lv_adapter_display.h"
 #include "display/screen/boot_key_handler.h"
 #include "display/screen/screen_common.h"
@@ -761,6 +762,9 @@ private:
             ESP_LOGW(TAG, "SD card not mounted at boot (card may be absent)");
         } else {
             SdEnsureUploadReadme();
+            // SD 事件工厂已存在但此前无人发布（book_library 订阅为死代码）；
+            // 补发布后，动态应用加载器等订阅方得以在显示初始化前感知挂载
+            SystemEventBus::GetInstance().Publish(SystemEvent::SdCard(true));
         }
         // 虚拟 U 盘 worker：默认保持 USB Serial/JTAG，设置页启用时再切 MSC。
         UsbVirtualDisk::GetInstance().Init();

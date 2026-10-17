@@ -511,6 +511,21 @@ Product root: `/sdcard/metalio/e-ink/` (`sd_paths.h`)
 | `.../a2ui_cache` | A2UI image cache (cleared on boot) |
 | `.../recordings` | Opus recordings (Recording app) |
 
+### 11.7 Dynamic apps (.so) — install without reflashing
+
+Apps are directories on the SD card (`manifest.json` + `app.so` + optional `icon.png`), pushed over
+WiFi and loaded at runtime (`dlopen` into PSRAM on tap, unloaded on exit). They appear on the home
+screen and in Settings toggles exactly like built-in apps.
+
+```bash
+# push an app package (no reboot, no base64, binary straight from curl)
+curl -X POST "http://<device-ip>:8080/fs/upload?path=apps/hello" \
+  -H "X-Filename: app.so" [-H "Authorization: Bearer <pin>"] --data-binary @app.so
+```
+
+Full spec — package format, `manifest.json` schema, app development workflow
+(`tools/hello_app/`), symbol-table extension and boundaries: see `docs/dynamic-apps.md`.
+
 ---
 
 ## 12. Protocols

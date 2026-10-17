@@ -10,6 +10,7 @@
 #include "display.h"
 #include "core/app_manager.h"
 #include "core/settings.h"
+#include "core/system_event_bus.h"
 #include "core/system_info.h"
 #include "display/font/fontpack_lvgl.h"
 #include "assets/lang_config.h"
@@ -17,6 +18,7 @@
 #include "reader/book_home_snapshot.h"
 #include "reader/book_library_warmup.h"
 #include "services/calendar/calendar_ics.h"
+#include "services/dynamic_apps/dynamic_app_loader.h"
 #include "services/glm_usage/glm_usage_service.h"
 #include "services/local_mcp/local_mcp_server.h"
 #include "services/mem_report/mem_report.h"
@@ -30,6 +32,18 @@ constexpr const char* TAG = "BootOrchestrator";
 
 void BootOrchestrator::Run(Application& app) {
     auto& board = Board::GetInstance();
+
+    // 动态应用：先注册符号表，再订阅 SD 挂载事件。挂载发生在 board.Initialize() 内，
+    // 事件总线同步分发，回调落在 SD 挂载与显示初始化（HomeScreen 构建）之间，
+    // 动态应用得以进入第一次桌面；卡后插则下次回桌面时出现。
+    dynamic_apps::RegisterElfSymbols();
+    SystemEventBus::GetInstance().Subscribe(SystemEventType::kSdCardState,
+        [](const SystemEvent& ev) {
+            if (ev.sd_card.mounted) {
+                dynamic_apps::ScanAndRegister();
+            }
+        });
+
     ESP_LOGI(TAG, "board initialization begin");
     board.Initialize();
     ESP_LOGI(TAG, "board initialization complete");
