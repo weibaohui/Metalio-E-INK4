@@ -23,8 +23,10 @@
 | 模块 | 文件 | 说明 |
 |------|------|------|
 | Session 按格式 | `reader/book_session_*.cc` | 进度 / TXT / EPUB·EBOOK 分文件；共享 helpers 在 `book_session_internal.*`；核心 Open/Close/导航/块分页仍在 `book_session.cc` |
+| 阅读设置卡片 | `book_settings_sheet.h` / `.cc` | `CreateSettingsSheet` / `ShowReadSettingsSheet` / 字体选择多选删除 / 间距 / 页进度 / 目录按钮；hooks 接排版生效与状态栏 |
 
 `reader/book_session.cc`：约 3223 → 约 980（core）+ progress/txt/epub/internal。
+`book_screen.cc`：约 6954 → ... → 约 4755（阅读页 UI）→ 约 3378（设置卡片）。
 
 ## 建议顺序（未做）
 
