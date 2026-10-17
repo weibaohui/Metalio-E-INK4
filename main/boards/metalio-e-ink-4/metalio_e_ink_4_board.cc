@@ -602,17 +602,12 @@ private:
                 std::make_unique<Button>(CreateIoExpanderButton(IOExpander::Pin::VOLUME_UP));
 
             // 正文阅读：音量+ = 上一页，音量- = 下一页（含长按连翻）；其它页仍调音量
-            // 俄罗斯方块：音量+ = 左移，音量- = 右移（BOOT=旋转）
             volume_up_button_->OnClick([this]() {
                 if (ScreenIsCriticalModalActive()) {
                     ESP_LOGI(TAG, "VOLUME_UP blocked (critical modal active)");
                     return;
                 }
                 PowerPolicy::GetInstance().NotifyUserActivity();
-                if (std::strcmp(VkKey_ActiveScreen(), "tetris") == 0) {
-                    VkKey_Dispatch("tetris_left");
-                    return;
-                }
                 if (ScreenIsReadingActive()) {
                     VkKey_Dispatch("vk_prev");
                     return;
@@ -631,9 +626,6 @@ private:
                     return;
                 }
                 PowerPolicy::GetInstance().NotifyUserActivity();
-                if (std::strcmp(VkKey_ActiveScreen(), "tetris") == 0) {
-                    return;  // 游戏中长按不调音量
-                }
                 if (ScreenIsReadingActive()) {
                     VkKey_OnLongPress("vk_prev");
                     return;
@@ -642,11 +634,8 @@ private:
                 ESP_LOGI(TAG, "VOLUME_UP long: volume=100");
                 GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
             });
-            volume_up_button_->OnPressUp([this]() {
+            volume_up_button_->OnPressUp([]() {
                 if (ScreenIsCriticalModalActive()) {
-                    return;
-                }
-                if (std::strcmp(VkKey_ActiveScreen(), "tetris") == 0) {
                     return;
                 }
                 if (ScreenIsReadingActive()) {
@@ -660,10 +649,6 @@ private:
                     return;
                 }
                 PowerPolicy::GetInstance().NotifyUserActivity();
-                if (std::strcmp(VkKey_ActiveScreen(), "tetris") == 0) {
-                    VkKey_Dispatch("tetris_right");
-                    return;
-                }
                 if (ScreenIsReadingActive()) {
                     VkKey_Dispatch("vk_next");
                     return;
@@ -682,9 +667,6 @@ private:
                     return;
                 }
                 PowerPolicy::GetInstance().NotifyUserActivity();
-                if (std::strcmp(VkKey_ActiveScreen(), "tetris") == 0) {
-                    return;  // 游戏中长按不调音量
-                }
                 if (ScreenIsReadingActive()) {
                     VkKey_OnLongPress("vk_next");
                     return;
@@ -693,11 +675,8 @@ private:
                 ESP_LOGI(TAG, "VOLUME_DOWN long: volume=0 (muted)");
                 GetDisplay()->ShowNotification(Lang::Strings::MUTED);
             });
-            volume_down_button_->OnPressUp([this]() {
+            volume_down_button_->OnPressUp([]() {
                 if (ScreenIsCriticalModalActive()) {
-                    return;
-                }
-                if (std::strcmp(VkKey_ActiveScreen(), "tetris") == 0) {
                     return;
                 }
                 if (ScreenIsReadingActive()) {
