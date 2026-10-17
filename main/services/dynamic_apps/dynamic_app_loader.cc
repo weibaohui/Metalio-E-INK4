@@ -121,6 +121,12 @@ const struct esp_elfsym g_metalio_dynapp_syms[] = {
 
 using DynAppEntryFn = void (*)(metalio_app_desc_t *);
 
+// dlopen 路径换算：组件按 FS_PATH("/sdcard"，sdkconfig ELF_FILE_SYSTEM_BASE_PATH)
+// + "/" + name 拼接打开，因此必须传卡内相对路径（剥掉挂载点前缀）。
+std::string DlopenPath(const std::string &abs_path) {
+    return SdUserPath(abs_path.c_str());
+}
+
 // 包内路径安全性：拒绝 ".."、绝对路径与反斜杠，防 manifest 图标字段穿越。
 bool IconRelPathSafe(const char *rel) {
     if (rel == nullptr || rel[0] == '\0') return false;
@@ -187,7 +193,7 @@ void OnDynScreenDelete(lv_event_t *e) {
     lv_async_call([](void *p) {
         auto *pth = static_cast<std::string *>(p);
         // dlopen 已加载的 .so 返回同句柄；dlclose 即真实卸载（esp_elf_deinit 释放代码段）。
-        void *h = dlopen(pth->c_str(), RTLD_NOW);
+        void *h = dlopen(DlopenPath(*pth).c_str(), RTLD_NOW);
         if (h != nullptr) {
             dlclose(h);
             ESP_LOGI(TAG, "dynamic app unloaded: %s", pth->c_str());
@@ -210,7 +216,7 @@ public:
     lv_obj_t *CreateUI(lv_obj_t * /*parent*/ = nullptr) override {
         void *handle = nullptr;
         metalio_app_desc_t desc = {};
-        if (!ReadDesc(so_path_.c_str(), &handle, &desc)) {
+        if (!ReadDesc(DlopenPath(so_path_).c_str(), &handle, &desc)) {
             return MakeFailScreen();
         }
         lv_obj_t *scr = static_cast<lv_obj_t *>(desc.create());
