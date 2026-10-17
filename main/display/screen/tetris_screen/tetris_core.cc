@@ -106,6 +106,13 @@ void TetrisCore::next_cells(int out[4][2]) const {
 }
 
 void TetrisCore::hold_cells(int out[4][2]) const {
+    if (hold_ < 0 || hold_ >= kTypes) {
+        for (int i = 0; i < 4; ++i) {
+            out[i][0] = 0;
+            out[i][1] = 0;
+        }
+        return;
+    }
     for (int i = 0; i < 4; ++i) {
         out[i][0] = kShapes[hold_][0][i][0];
         out[i][1] = kShapes[hold_][0][i][1];
