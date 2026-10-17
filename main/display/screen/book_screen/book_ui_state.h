@@ -191,4 +191,8 @@ struct BookUiState {
 
 BookUiState& State();
 
+bool IsCoverEmbedMiss(const std::string& path);
+void RememberCoverEmbedMiss(const std::string& path);
+void PostCoverEmbedMiss(const std::string& path);
+
 }  // namespace book_screen_detail
