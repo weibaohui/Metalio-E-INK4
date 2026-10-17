@@ -3,8 +3,8 @@
 // 底部 暂停/重开/退出 + 速降(黑底反白)。
 // 操作方式:
 // 1. 盖板虚拟键(触摸条): vk_home=旋转, vk_next=左移, vk_prev=右移;
-// 2. 屏幕触控: 点击棋盘左半=左移, 右半=右移, 上半=旋转; 点暂存框=暂存; 底部按键=速降/暂停/重开/退出。
-// （音量键与 BOOT 键不参与游戏，保持系统原生功能）
+// 2. 屏幕触控: 点暂存框=暂存; 底部按键=速降/暂停/重开/退出。
+// （音量键与 BOOT 键不参与游戏，保持系统原生功能；棋盘不响应点按）
 // 刷新纪律:差量重绘——占格只在变化时改样式、文本只在变化时 set,墨水屏走局部刷新;
 // 每 10 块落定请求一次全刷清残影。
 #include "tetris_screen/tetris_screen.h"
@@ -366,25 +366,6 @@ bool OnVkKey(const char* key) {
 
 // ---- 触控(事件回调,已在 LVGL 线程) ----
 
-void OnBoardClicked(lv_event_t*) {
-    if (!s_alive || s_core.state() != tetris::State::Running) return;
-    lv_point_t point;
-    lv_indev_get_point(lv_indev_active(), &point);
-    lv_area_t area;
-    lv_obj_get_coords(s_board, &area);
-    const lv_coord_t rel_x = point.x - area.x1;
-    const lv_coord_t rel_y = point.y - area.y1;
-    const lv_coord_t board_w = lv_area_get_width(&area);
-    const lv_coord_t board_h = lv_area_get_height(&area);
-    if (rel_y < board_h / 3) {
-        ApplyInput(kInRotate);
-    } else if (rel_x < board_w / 2) {
-        ApplyInput(kInLeft);
-    } else {
-        ApplyInput(kInRight);
-    }
-}
-
 void OnBtnClicked(lv_event_t* e) {
     const uintptr_t kind = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
     if (!s_alive) return;
@@ -557,7 +538,7 @@ lv_obj_t* TetrisScreen::Create() {
         s_core.Reset();
     }
 
-    // 棋盘框 (支持点击左/右/上控制移动与旋转)
+    // 棋盘框
     s_board = lv_obj_create(body);
     lv_obj_remove_style_all(s_board);
     lv_obj_set_pos(s_board, kBoardX, kBoardY);
@@ -568,9 +549,7 @@ lv_obj_t* TetrisScreen::Create() {
     lv_obj_set_style_border_width(s_board, 3, 0);
     lv_obj_set_style_radius(s_board, 0, 0);
     DisableScroll(s_board);
-    lv_obj_add_flag(s_board, LV_OBJ_FLAG_CLICKABLE);
-    HapticAttachClick(s_board);
-    lv_obj_add_event_cb(s_board, OnBoardClicked, LV_EVENT_CLICKED, nullptr);
+    lv_obj_clear_flag(s_board, LV_OBJ_FLAG_CLICKABLE);
 
     // 200 占格(差量重绘)
     memset(s_render, 0xFF, sizeof(s_render));
