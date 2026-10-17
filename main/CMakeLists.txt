@@ -23,6 +23,7 @@ set(SOURCES "audio/audio_codec.cc"
             "services/glm_usage/glm_usage_service.cc"
             "services/local_mcp/local_mcp_server.cc"
             "services/dynamic_apps/dynamic_app_loader.cc"
+            "services/dynamic_apps/dynamic_app_shims.cc"
             "services/syslog_sender.cc"
             "services/time_service.cc"
             "services/mem_report/mem_report.cc"
@@ -52,6 +53,7 @@ set(SOURCES "audio/audio_codec.cc"
             "services/wallpaper/wallpaper_active.cc"
             "display/screen/standby_screen/standby_wallpaper.cc"
             "display/screen/wallpaper_screen/wallpaper_screen.cc"
+            "display/screen/app_store_screen/app_store_screen.cc"
             "services/wifi_file/wifi_file_service.cc"
             "display/screen/wifi_file_screen/wifi_file_screen.cc"
             "services/system_upgrade/system_upgrade_service.cc"
@@ -142,7 +144,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/book_screen" "display/screen/backup_screen" "display/screen/system_upgrade_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/screen/wallpaper_screen" "display/screen/wifi_file_screen" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services" "services/backup" "services/system_upgrade" "services/wallpaper" "services/wifi_file")
+set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/book_screen" "display/screen/backup_screen" "display/screen/system_upgrade_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/screen/wallpaper_screen" "display/screen/app_store_screen" "display/screen/wifi_file_screen" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services" "services/backup" "services/system_upgrade" "services/wallpaper" "services/wifi_file")
 
 # Add board common files explicitly (replaces GLOB to avoid cache issues and unwanted sources)
 list(APPEND SOURCES

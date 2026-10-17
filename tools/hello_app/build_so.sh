@@ -1,19 +1,27 @@
 #!/bin/bash
-# tools/hello_app/build_so.sh —— Hello 动态应用 .so 构建
+# tools/hello_app/build_so.sh —— 动态应用 .so 构建（通用）
+#
+# 用法：bash build_so.sh [源文件.c] [输出名]
+#   缺省：tools/hello_app/main/hello_main.c → hello.so
+#   例：  bash build_so.sh tools/fangfang_app/main/fangfang_main.c fangfang
 #
 # 从固件 build/compile_commands.json 提取 main 组件的真实编译参数
-# （-I 头路径 + -D 定义与固件完全一致，保证 ABI 一致），编译 tools/hello_app/main/hello_main.c，
-# 再按官方 elf_loader 的 .so 链接参数出 hello.so（-shared -fPIC -nostdlib，
+# （-I 头路径 + -D 定义与固件完全一致，保证 ABI 一致），按官方 elf_loader 的
+# .so 链接参数出 <输出名>.so（-shared -fPIC -nostdlib，
 # 未定义符号运行期由固件符号表解析）。
 #
 # 前提：固件已 idf.py build（build/compile_commands.json 存在）。
-# 产物：build/hello.so → 拷入 SD 卡 /sdcard/metalio/e-ink/apps/
+# 产物：build/<输出名>.so → 推入 SD 卡 /sdcard/metalio/e-ink/apps/<应用名>/
 set -e
 
 FW_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD="$FW_ROOT/build"
 CC_JSON="$BUILD/compile_commands.json"
 
+SRC="${1:-$FW_ROOT/tools/hello_app/main/hello_main.c}"
+OUT_NAME="${2:-hello}"
+
+[ -f "$SRC" ] || { echo "ERROR: 源文件不存在: $SRC"; exit 1; }
 [ -f "$CC_JSON" ] || { echo "ERROR: $CC_JSON 不存在，先 idf.py build 固件"; exit 1; }
 
 TOOLCHAIN_BIN="$(dirname "$(python3 -c "
@@ -61,14 +69,14 @@ SO_STRIP="--strip-unneeded --remove-section=.comment --remove-section=.got.loc \
 CC="${TOOLCHAIN_BIN}/xtensa-esp32s3-elf-gcc"
 STRIP="${TOOLCHAIN_BIN}/xtensa-esp32s3-elf-strip"
 
-echo "[1/3] compile hello_main.c"
-"$CC" -c -fPIC -std=gnu17 $SO_CFLAGS "$FW_ROOT/tools/hello_app/main/hello_main.c" -o "$BUILD/hello.o"
+echo "[1/3] compile $(basename "$SRC")"
+"$CC" -c -fPIC -std=gnu17 $SO_CFLAGS "$SRC" -o "$BUILD/${OUT_NAME}.o"
 
-echo "[2/3] link hello.so"
-"$CC" $SO_LINK -o "$BUILD/hello.so" "$BUILD/hello.o"
+echo "[2/3] link ${OUT_NAME}.so"
+"$CC" $SO_LINK -o "$BUILD/${OUT_NAME}.so" "$BUILD/${OUT_NAME}.o"
 
 echo "[3/3] strip"
-"$STRIP" $SO_STRIP "$BUILD/hello.so"
+"$STRIP" $SO_STRIP "$BUILD/${OUT_NAME}.so"
 
-ls -la "$BUILD/hello.so"
-echo "OK: $BUILD/hello.so → 拷入 SD 卡 /sdcard/metalio/e-ink/apps/"
+ls -la "$BUILD/${OUT_NAME}.so"
+echo "OK: $BUILD/${OUT_NAME}.so → 推入 SD 卡 /sdcard/metalio/e-ink/apps/${OUT_NAME}/"

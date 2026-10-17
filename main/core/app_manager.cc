@@ -6,6 +6,7 @@
 #include "screen_common.h"
 
 #include "ai_voice_chat_screen/ai_voice_chat_screen.h"
+#include "app_store_screen/app_store_screen.h"
 #include "backup_screen/backup_screen.h"
 #include "book_screen/book_screen.h"
 #include "calendar_screen/calendar_screen.h"
@@ -59,6 +60,7 @@ const char *AppNameTransfer() { return "WiFi 传书"; }
 const char *AppNameUpgrade() { return "系统升级"; }
 const char *AppNameWallpaper() { return "壁纸"; }
 const char *AppNameWifiFile() { return "WiFi 文件"; }
+const char *AppNameStore() { return "应用商店"; }
 const char *AppNameTetris() { return "俄罗斯方块"; }
 
 } // namespace
@@ -103,6 +105,8 @@ void AppManager::RegisterDefaultApps() {
     RegisterApp(std::make_shared<StandardAppModule>(
         "wififile", "A:ic_app_home_cloud.spng", AppNameWifiFile, WifiFileScreen::Create, nullptr, false, nullptr, OnWifiFilePause, OnWifiFilePause));
     RegisterApp(std::make_shared<StandardAppModule>(
+        "store", "A:ic_app_home_cloud.spng", AppNameStore, AppStoreScreen::Create, nullptr, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
         "upgrade", "A:ic_app_home_setting.spng", AppNameUpgrade, SystemUpgradeScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
         "set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create, nullptr, true));
@@ -119,6 +123,9 @@ void AppManager::RegisterApp(std::shared_ptr<AppModule> module) {
         ESP_LOGI(TAG, "updated app module: %s", module->GetId());
     } else {
         modules_.push_back(module);
+        // 运行时注册的新应用（如 SD 推送）默认开启：否则 boot 后构建的
+        // enabled_mask_ 没有它的位，GetEnabledApps 会把它过滤出桌面
+        enabled_mask_ |= (1u << (modules_.size() - 1));
         ESP_LOGI(TAG, "registered app module: %s", module->GetId());
     }
 }

@@ -523,8 +523,12 @@ curl -X POST "http://<device-ip>:8080/fs/upload?path=apps/hello" \
   -H "X-Filename: app.so" [-H "Authorization: Bearer <pin>"] --data-binary @app.so
 ```
 
+The built-in **App Store** app lists every valid package on the SD card with
+install / uninstall buttons (uninstall keeps the files for later reinstall).
+
 Full spec — package format, `manifest.json` schema, app development workflow
-(`tools/hello_app/`), symbol-table extension and boundaries: see `docs/dynamic-apps.md`.
+(`tools/hello_app/`, `tools/fangfang_app/`), symbol-table extension and
+boundaries: see `docs/dynamic-apps.md`.
 
 ---
 
