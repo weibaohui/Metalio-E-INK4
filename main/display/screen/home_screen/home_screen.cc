@@ -620,3 +620,11 @@ lv_obj_t *HomeScreen::Create()
                                        nullptr, nullptr, OnVkKeyLongPress, OnVkKeyPressUp});
     return scr;
 }
+
+void HomeScreenRequestAppsRefresh() {
+    if (s_apps == nullptr) {
+        return;  // 首页未存活（不在首页或尚未创建）
+    }
+    // 线程安全投递：调用方可能在主循环（SD 推送重扫上下文）
+    ScreenLvAsync([](void*) { RequestFillAppsPage(); }, nullptr);
+}

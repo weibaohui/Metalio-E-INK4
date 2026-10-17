@@ -31,3 +31,6 @@ public:
     // (关掉的 APP 连 MCP 工具都不注册)。须晚于 InitAppToggles。
     static void RegisterEnabledAppMcpTools();
 };
+
+// 首页存活时请求重刷应用宫格（动态应用注册/注销后调用；不在首页则 no-op）。
+void HomeScreenRequestAppsRefresh();

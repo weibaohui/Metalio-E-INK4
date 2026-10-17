@@ -33,10 +33,15 @@
 #include <esp_log.h>
 #include <esp_elf.h>
 #include <esp_dlfcn.h>
+#include <esp_random.h>
 #include <lvgl.h>
 
+#include "core/async_settings_store.h"
 #include "core/app_manager.h"
+#include "display/screen/home_screen/home_screen.h"
+#include "display/screen/vk_key_handler.h"
 #include "display/font/fontpack_lvgl.h"
+#include "dynamic_app_shims.h"
 #include "sd_paths.h"
 
 #include "dynamic_app_abi.h"
@@ -48,9 +53,10 @@ constexpr const char *TAG = "DynApp";
 constexpr const char *kManifestName = "manifest.json";
 constexpr const char *kSoName = "app.so";
 
-// 供 .so 解析的固件符号表（试点：hello 屏所需 + 大字体桥）。
-// 扩展方式：xtensa-esp32s3-elf-nm 新 .so | grep ' U '，把 lv_* 补进来重编固件。
+// 供 .so 解析的固件符号表。扩展方式：xtensa-esp32s3-elf-nm 新 .so | grep ' U '，
+// 把缺失符号加进来重编固件（表外符号 dlopen 时由 dlerror 点名）。
 const struct esp_elfsym g_metalio_dynapp_syms[] = {
+    // LVGL 核心（hello 起步集）
     ESP_ELFSYM_EXPORT(lv_obj_create),
     ESP_ELFSYM_EXPORT(lv_label_create),
     ESP_ELFSYM_EXPORT(lv_label_set_text),
@@ -62,7 +68,54 @@ const struct esp_elfsym g_metalio_dynapp_syms[] = {
     ESP_ELFSYM_EXPORT(lv_obj_set_style_bg_opa),
     ESP_ELFSYM_EXPORT(lv_color_white),
     ESP_ELFSYM_EXPORT(lv_color_black),
+    // LVGL 布局/样式/事件（真实应用面）
+    ESP_ELFSYM_EXPORT(lv_obj_remove_style_all),
+    ESP_ELFSYM_EXPORT(lv_obj_set_pos),
+    ESP_ELFSYM_EXPORT(lv_obj_set_size),
+    ESP_ELFSYM_EXPORT(lv_obj_set_width),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_radius),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_border_width),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_border_color),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_text_align),
+    ESP_ELFSYM_EXPORT(lv_obj_set_flex_flow),
+    ESP_ELFSYM_EXPORT(lv_obj_set_flex_align),
+    ESP_ELFSYM_EXPORT(lv_obj_add_flag),
+    ESP_ELFSYM_EXPORT(lv_obj_remove_flag),
+    ESP_ELFSYM_EXPORT(lv_obj_clear_flag),
+    ESP_ELFSYM_EXPORT(lv_obj_add_event_cb),
+    ESP_ELFSYM_EXPORT(lv_event_get_user_data),
+    ESP_ELFSYM_EXPORT(lv_label_set_long_mode),
+    ESP_ELFSYM_EXPORT(lv_palette_darken),
+    ESP_ELFSYM_EXPORT(lv_color_hex),
+    ESP_ELFSYM_EXPORT(lv_pct),
+    ESP_ELFSYM_EXPORT(lv_obj_delete),
+    // libc 补充（组件 libc 表之外：SD 文件读写、snprintf/strncmp/strncpy、随机数）
+    ESP_ELFSYM_EXPORT(snprintf),
+    ESP_ELFSYM_EXPORT(strncmp),
+    ESP_ELFSYM_EXPORT(strncpy),
+    // 定时器与异步
+    ESP_ELFSYM_EXPORT(lv_timer_create),
+    ESP_ELFSYM_EXPORT(lv_timer_delete),
+    ESP_ELFSYM_EXPORT(lv_timer_pause),
+    ESP_ELFSYM_EXPORT(lv_timer_resume),
+    ESP_ELFSYM_EXPORT(lv_timer_set_period),
+    ESP_ELFSYM_EXPORT(lv_async_call),
+    // 字体
     ESP_ELFSYM_EXPORT(fontpack_lv_font_get),
+    ESP_ELFSYM_EXPORT(fontpack_lv_font_ui),
+    // libc 补充（组件 libc 表之外：SD 文件读写与随机数）
+    ESP_ELFSYM_EXPORT(fopen),
+    ESP_ELFSYM_EXPORT(fclose),
+    ESP_ELFSYM_EXPORT(fread),
+    ESP_ELFSYM_EXPORT(fgets),
+    ESP_ELFSYM_EXPORT(fseek),
+    ESP_ELFSYM_EXPORT(esp_random),
+    // C ABI 垫片：C++ 固件设施的最小导出面
+    ESP_ELFSYM_EXPORT(dynapp_screen_status_bar),
+    ESP_ELFSYM_EXPORT(dynapp_vk_attach),
+    ESP_ELFSYM_EXPORT(dynapp_lv_async),
+    ESP_ELFSYM_EXPORT(dynapp_screen_go_home),
+    ESP_ELFSYM_EXPORT(dynapp_epd_full_refresh),
     ESP_ELFSYM_END
 };
 
@@ -77,6 +130,7 @@ bool IconRelPathSafe(const char *rel) {
 }
 
 // 加载失败占位屏：绝不把 NULL 喂给 ScreenLoadReplace（NULL 控件 = 无限重绘假死）。
+// 必须挂入虚拟键栈：否则按键分发器仍认为活跃屏是"home"，HOME/返回全部 no-op，用户被卡死在本屏。
 lv_obj_t *MakeFailScreen() {
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
@@ -85,6 +139,8 @@ lv_obj_t *MakeFailScreen() {
     lv_label_set_text(lbl, "App load failed\ncheck serial log");
     lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
     lv_obj_center(lbl);
+    VkKeyScreenDesc desc;  // 空描述：HOME/vk_prev 走默认策略返回桌面
+    VkKey_AttachScreen(scr, "dynapp_fail", desc);
     return scr;
 }
 
@@ -194,81 +250,107 @@ std::string ReadFileText(const char *path) {
     return out;
 }
 
-// 扫描单个应用目录：读 manifest（无代码执行）→ 校验 → 注册惰性模块。
-void RegisterFromDir(const std::string &dir_path) {
+// manifest 解析结果（abi/id/name 校验通过 + app.so 存在才有效）
+struct ManifestInfo {
+    bool valid = false;
+    int abi = 0;
+    std::string id, name, icon_rel, version;
+};
+
+// 读 manifest（无代码执行）：解析字段并校验 abi/id/name 与 app.so 存在性。
+bool ParseManifestDir(const std::string &dir_path, ManifestInfo &out) {
     const std::string manifest_path = dir_path + "/" + kManifestName;
     const std::string text = ReadFileText(manifest_path.c_str());
     if (text.empty()) {
         ESP_LOGD(TAG, "%s: no manifest, skip", manifest_path.c_str());
-        return;
+        return false;
     }
 
     cJSON *root = cJSON_Parse(text.c_str());
     if (root == nullptr) {
         ESP_LOGE(TAG, "%s: manifest parse failed", manifest_path.c_str());
-        return;
+        return false;
     }
 
-    std::string id, name, icon_rel;
-    int abi = 0;
     cJSON *item = nullptr;
     cJSON_ArrayForEach(item, root) {
         if (item->string == nullptr) continue;
         if (strcmp(item->string, "id") == 0 && cJSON_IsString(item)) {
-            id = item->valuestring;
+            out.id = item->valuestring;
         } else if (strcmp(item->string, "name") == 0 && cJSON_IsString(item)) {
-            name = item->valuestring;
+            out.name = item->valuestring;
         } else if (strcmp(item->string, "icon") == 0 && cJSON_IsString(item)) {
-            icon_rel = item->valuestring;
+            out.icon_rel = item->valuestring;
+        } else if (strcmp(item->string, "version") == 0 && cJSON_IsString(item)) {
+            out.version = item->valuestring;
         } else if (strcmp(item->string, "abi") == 0 && cJSON_IsNumber(item)) {
-            abi = static_cast<int>(item->valuedouble);
+            out.abi = static_cast<int>(item->valuedouble);
         }
     }
     cJSON_Delete(root);
 
-    if (abi != METALIO_DYNAPP_ABI_VERSION) {
+    if (out.abi != METALIO_DYNAPP_ABI_VERSION) {
         // 扫描阶段闸门：abi 不匹配的包点名拒绝（固件升级后旧包在此失效，不执行代码）
-        ESP_LOGE(TAG, "%s: abi %d != %u, skip", manifest_path.c_str(), abi, METALIO_DYNAPP_ABI_VERSION);
-        return;
+        ESP_LOGE(TAG, "%s: abi %d != %u, skip", manifest_path.c_str(), out.abi, METALIO_DYNAPP_ABI_VERSION);
+        return false;
     }
-    if (id.empty() || id.size() > 12) {
-        // NVS 开关键为 "en_<id>"，总长 ≤15
-        ESP_LOGE(TAG, "%s: id '%s' invalid (need 1..12 chars)", manifest_path.c_str(), id.c_str());
-        return;
+    if (out.id.empty() || out.id.size() > 12) {
+        // NVS 键为 "in_<id>"/"en_<id>"，总长 ≤15
+        ESP_LOGE(TAG, "%s: id '%s' invalid (need 1..12 chars)", manifest_path.c_str(), out.id.c_str());
+        return false;
     }
-    if (name.empty()) {
+    if (out.name.empty()) {
         ESP_LOGE(TAG, "%s: name empty", manifest_path.c_str());
-        return;
+        return false;
     }
 
     const std::string so_path = dir_path + "/" + kSoName;
     struct stat st = {};
     if (stat(so_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
         ESP_LOGE(TAG, "%s: %s missing, skip", manifest_path.c_str(), kSoName);
-        return;
+        return false;
+    }
+    out.valid = true;
+    return true;
+}
+
+// 注册有效包（不做安装态判断）。已注册返回 0，新注册返回 1。
+int RegisterDir(const std::string &dir_path, const ManifestInfo &info) {
+    if (AppManager::GetInstance().GetAppById(info.id.c_str()) != nullptr) {
+        // 动态应用先于内置应用注册，同名时内置后注册会替换动态入口（内置优先）
+        ESP_LOGI(TAG, "dynamic app %s already registered, skip", info.id.c_str());
+        return 0;
     }
 
     // 图标：S: 盘符（LVGL POSIX FS → /sdcard）+ 卡内相对路径；缺省用内置图标
     std::string icon = "A:ic_app_home_clock.spng";
-    if (IconRelPathSafe(icon_rel.c_str())) {
-        icon = std::string("S:/") + SdUserPath(dir_path.c_str()) + "/" + icon_rel;
-    } else if (!icon_rel.empty()) {
-        ESP_LOGW(TAG, "%s: unsafe icon path '%s', using builtin", manifest_path.c_str(), icon_rel.c_str());
-    }
-
-    if (AppManager::GetInstance().GetAppById(id.c_str()) != nullptr) {
-        // 动态应用先于内置应用注册，同名时内置后注册会替换动态入口（内置优先）
-        ESP_LOGI(TAG, "dynamic app %s already registered, skip", id.c_str());
-        return;
+    if (IconRelPathSafe(info.icon_rel.c_str())) {
+        icon = std::string("S:/") + SdUserPath(dir_path.c_str()) + "/" + info.icon_rel;
+    } else if (!info.icon_rel.empty()) {
+        ESP_LOGW(TAG, "%s: unsafe icon path '%s', using builtin", dir_path.c_str(), info.icon_rel.c_str());
     }
 
     auto module = std::make_shared<LazyDynamicAppModule>(
-        std::move(id), std::move(name), std::move(icon), so_path);
+        info.id, info.name, icon, dir_path + "/" + kSoName);
     AppManager::GetInstance().RegisterApp(module);
     ESP_LOGI(TAG, "dynamic app available: %s (%s) — lazy, loads on tap",
              module->GetName(), module->GetId());
+    return 1;
 }
 
+// 开机/推送路径：仅当安装标志为真（缺省真）时注册；未安装的包留在商店。
+int RegisterDirIfInstalled(const std::string &dir_path) {
+    ManifestInfo info;
+    if (!ParseManifestDir(dir_path, info)) {
+        return 0;
+    }
+    const std::string flag_key = "in_" + info.id;
+    if (!AsyncSettingsStore::GetInstance().GetBool("dynapp", flag_key.c_str(), true)) {
+        ESP_LOGI(TAG, "dynamic app %s not installed (store only), skip", info.id.c_str());
+        return 0;
+    }
+    return RegisterDir(dir_path, info);
+}
 }  // namespace
 
 void RegisterElfSymbols() {
@@ -291,6 +373,7 @@ void ScanAndRegister() {
     }
 
     int found = 0;
+    int registered_new = 0;
     struct dirent *ent;
     while ((ent = readdir(dir)) != nullptr) {
         const std::string dir_path = std::string(SD_PATH_APPS) + "/" + ent->d_name;
@@ -298,7 +381,7 @@ void ScanAndRegister() {
         if (stat(dir_path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
             continue;
         }
-        RegisterFromDir(dir_path);
+        registered_new += RegisterDirIfInstalled(dir_path);
         ++found;
     }
     closedir(dir);
@@ -306,6 +389,87 @@ void ScanAndRegister() {
     if (found > 0) {
         ESP_LOGI(TAG, "dynamic app scan done: %d dirs under %s", found, SD_PATH_APPS);
     }
+    if (registered_new > 0) {
+        // 有人正停在桌面时让新应用即时出现（内部走线程安全投递，不在首页则 no-op）
+        HomeScreenRequestAppsRefresh();
+    }
+}
+
+
+std::vector<DynPackage> ListPackages() {
+    std::vector<DynPackage> out;
+    SdEnsureDir(SD_PATH_APPS);
+    DIR *dir = opendir(SD_PATH_APPS);
+    if (dir == nullptr) {
+        return out;
+    }
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != nullptr) {
+        const std::string dir_path = std::string(SD_PATH_APPS) + "/" + ent->d_name;
+        struct stat st = {};
+        if (stat(dir_path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            continue;
+        }
+        ManifestInfo info;
+        if (!ParseManifestDir(dir_path, info)) {
+            continue;
+        }
+        DynPackage pkg;
+        pkg.dir = dir_path;
+        pkg.id = info.id;
+        pkg.name = info.name;
+        pkg.version = info.version;
+        pkg.installed = (AppManager::GetInstance().GetAppById(info.id.c_str()) != nullptr);
+        out.push_back(std::move(pkg));
+    }
+    closedir(dir);
+    return out;
+}
+
+bool InstallPackage(const std::string& id) {
+    SdEnsureDir(SD_PATH_APPS);
+    DIR *dir = opendir(SD_PATH_APPS);
+    if (dir == nullptr) {
+        return false;
+    }
+    std::string dir_path;
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != nullptr) {
+        const std::string candidate = std::string(SD_PATH_APPS) + "/" + ent->d_name;
+        struct stat st = {};
+        if (stat(candidate.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            continue;
+        }
+        ManifestInfo info;
+        if (ParseManifestDir(candidate, info) && info.id == id) {
+            dir_path = candidate;
+            break;
+        }
+    }
+    closedir(dir);
+    if (dir_path.empty()) {
+        ESP_LOGW(TAG, "install: package %s not found on SD", id.c_str());
+        return false;
+    }
+
+    // 安装 = 按包元数据注册惰性入口（不 dlopen，代码在点开时才加载）+ 置安装标志
+    ManifestInfo info;
+    if (!ParseManifestDir(dir_path, info)) {
+        return false;
+    }
+    RegisterDir(dir_path, info);
+    AsyncSettingsStore::GetInstance().SetBool("dynapp", ("in_" + info.id).c_str(), true);
+    ESP_LOGI(TAG, "package installed: %s (%s)", info.name.c_str(), info.id.c_str());
+    return true;
+}
+
+bool UninstallPackage(const std::string& id) {
+    AsyncSettingsStore::GetInstance().SetBool("dynapp", ("in_" + id).c_str(), false);
+    const bool was = AppManager::GetInstance().UnregisterApp(id.c_str());
+    if (was) {
+        ESP_LOGI(TAG, "package uninstalled: %s", id.c_str());
+    }
+    return true;
 }
 
 }  // namespace dynamic_apps

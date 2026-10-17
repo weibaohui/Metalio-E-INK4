@@ -23,6 +23,7 @@
 
 #include "application.h"
 #include "core/app_manager.h"
+#include "display/screen/home_screen/home_screen.h"
 #include "mcp_server.h"
 #include "sd_paths.h"
 #include "services/dynamic_apps/dynamic_app_loader.h"
@@ -380,6 +381,7 @@ esp_err_t FsDeleteHandler(httpd_req_t* req) {
         const std::string id = app_id;
         Application::GetInstance().Schedule([id]() {
             AppManager::GetInstance().UnregisterApp(id.c_str());
+            HomeScreenRequestAppsRefresh();
         });
     }
 

@@ -27,10 +27,21 @@ manifest.json 字段：
 
 生命周期：
 
-- **开机/插卡扫描**：只读 manifest（cJSON 解析，零代码执行）→ 注册惰性入口
+- **开机/插卡扫描**：只读 manifest（cJSON 解析，零代码执行）→ 按安装标志注册惰性入口
 - **点开**：dlopen(app.so) → `metalio_app_entry(&desc)`（abi 二次校验）→ `desc.create()` 建屏
 - **退出**：屏幕树删除完成后 dlclose → `esp_elf_deinit` 释放 PSRAM 代码段，真实卸载
-- **删除**：删目录即卸载；经 `/fs/delete` 删除 `apps/<dir>` 会连桌面入口一起注销
+- **卸载**（应用商店或 `/fs/delete`）：注销桌面入口；商店卸载保留 SD 文件可随时重装，`/fs/delete` 则连文件一起删
+- **安装**（应用商店）：按包元数据注册惰性入口（不执行代码），桌面即时出现
+
+**安装态**持久化于 NVS（`dynapp/in_<id>`，缺省=已安装）：推送的新包自动上桌面；卸载的包保留在商店「未安装」列表。
+
+## 2.1 应用商店
+
+内置应用「应用商店」扫描 `apps/` 下所有有效包，逐行展示名称/版本/安装状态，点按安装或卸载：
+
+- 已安装 → 「卸载」按钮：注销桌面入口（文件保留，商店内可重装）
+- 未安装 → 「安装」按钮：注册进桌面，即时出现
+- 操作即时生效并刷新商店列表与桌面宫格，无需重启
 
 ## 2. 文件直传（AI 可操作，内容不经模型）
 
@@ -93,4 +104,6 @@ curl -X POST "http://<IP>:8080/fs/delete?path=<相对路径>" \
 | elf_loader 组件（官方，v1.3.5） | `managed_components/espressif__elf_loader`（dlopen 模式 + S3 PSRAM 运行） |
 | 常驻 HTTP 端点（upload/delete） | `main/services/local_mcp/local_mcp_server.cc` |
 | 扫描时机（SD 挂载同步事件） | `main/core/boot_orchestrator.cc` + `main/boards/metalio-e-ink-4/metalio_e_ink_4_board.cc` |
-| 样例应用 | `tools/hello_app/` |
+| 样例应用 | `tools/hello_app/`（hello）、`tools/fangfang_app/`（方方=方块战争移植，真实应用打包范例） |
+| 应用商店 | `main/display/screen/app_store_screen/`（内置应用，扫描/安装/卸载） |
+| C ABI 垫片（虚拟键/状态栏/返回桌面/全刷） | `main/services/dynamic_apps/dynamic_app_shims.cc` |
