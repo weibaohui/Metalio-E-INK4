@@ -318,6 +318,7 @@ int dynapp_glm_get_snapshot(dynapp_glm_snapshot_t* out) {
     auto st = svc.GetStatus();
     out->configured = st.configured ? 1 : 0;
     out->busy = st.busy ? 1 : 0;
+    out->discovering = st.discovering ? 1 : 0;
     out->last_ok = st.last_ok ? 1 : 0;
     out->active_context = static_cast<int>(st.active_context);
     out->context_count = static_cast<int>(st.context_count);
@@ -328,13 +329,32 @@ int dynapp_glm_get_snapshot(dynapp_glm_snapshot_t* out) {
         const auto& ctx = contexts[st.active_context];
         strncpy(out->context_name, ctx.name.c_str(), sizeof(out->context_name) - 1);
         if (ctx.has_usage) {
+            strncpy(out->level, ctx.usage.level.c_str(), sizeof(out->level) - 1);
             out->tokens_5h_pct = ctx.usage.tokens_5h_used_pct;
             out->tokens_5h_remaining = ctx.usage.tokens_5h_remaining;
             out->tokens_week_pct = ctx.usage.tokens_week_used_pct;
             out->tokens_week_remaining = ctx.usage.tokens_week_remaining;
+            out->five_hour_resets_left = ctx.usage.five_hour_resets_left;
+            out->week_resets_left = ctx.usage.week_resets_left;
         }
     }
     return 1;
+}
+
+int dynapp_glm_get_context_name(int index, char* out_name, size_t max_len) {
+    if (out_name == nullptr || max_len == 0 || index < 0) return 0;
+    auto contexts = GlmUsageService::GetInstance().GetContexts();
+    if (static_cast<size_t>(index) < contexts.size()) {
+        strncpy(out_name, contexts[index].name.c_str(), max_len - 1);
+        out_name[max_len - 1] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
+void dynapp_glm_configure(const char* api_key, const char* jwt_token) {
+    if (api_key == nullptr) return;
+    GlmUsageService::GetInstance().Configure(api_key, jwt_token != nullptr ? jwt_token : "");
 }
 
 void dynapp_glm_request_refresh(void) {

@@ -9,7 +9,6 @@
 #include "app_store_screen/app_store_screen.h"
 #include "backup_screen/backup_screen.h"
 #include "book_screen/book_screen.h"
-#include "glm_usage_screen/glm_usage_screen.h"
 #include "radio_screen/radio_screen.h"
 #include "settings_screen/settings_screen.h"
 
@@ -41,7 +40,6 @@ void OnWifiFilePause() {
     wifi_file::WifiFileService::GetInstance().Stop();
 }
 
-const char *AppNameGlm() { return "GLM 用量"; }
 const char *AppNameRadio() { return "收音机"; }
 const char *AppNameBook() { return Lang::Strings::HOME_APP_BOOK; }
 const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
@@ -67,8 +65,6 @@ AppManager::AppManager() {
 void AppManager::RegisterDefaultApps() {
     modules_.clear();
     // 注册内置默认应用 (全部采用新架构 AppModule)
-    RegisterApp(std::make_shared<StandardAppModule>(
-        "glm", "A:ic_app_home_glm.spng", AppNameGlm, GlmUsageScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
         "book", "A:ic_app_home_book.spng", AppNameBook, BookScreen::Create, nullptr, false,
         BookScreen::OnResumeFromStandby, BookScreen::OnEnterStandby, nullptr));
