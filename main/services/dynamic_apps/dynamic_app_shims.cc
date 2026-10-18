@@ -263,6 +263,7 @@ int dynapp_sysinfo_get(dynapp_sysinfo_t* out) {
     return 1;
 }
 
+#include "services/calendar/calendar_ics.h"
 #include "services/calendar/calendar_store.h"
 #include "services/glm_usage/glm_usage_service.h"
 #include "services/backup/nvs_backup_service.h"
@@ -302,6 +303,11 @@ int dynapp_cal_get_events_text(const char* date, char* out_buf, size_t max_len) 
     strncpy(out_buf, text.c_str(), max_len - 1);
     out_buf[max_len - 1] = '\0';
     return static_cast<int>(events.size());
+}
+
+void dynapp_cal_auto_refresh(void) {
+    CalendarStore_EnsureLoaded();
+    CalendarIcs_MaybeAutoRefresh();
 }
 
 // GLM 用量服务
