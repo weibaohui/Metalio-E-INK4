@@ -7,7 +7,6 @@
 
 #include "ai_voice_chat_screen/ai_voice_chat_screen.h"
 #include "app_store_screen/app_store_screen.h"
-#include "backup_screen/backup_screen.h"
 #include "book_screen/book_screen.h"
 #include "radio_screen/radio_screen.h"
 #include "settings_screen/settings_screen.h"
@@ -19,7 +18,6 @@
 #include "wifi_transfer_screen/wifi_transfer_screen.h"
 #include "services/wifi_transfer/wifi_transfer_service.h"
 #include "system_upgrade_screen/system_upgrade_screen.h"
-#include "wallpaper_screen/wallpaper_screen.h"
 #include "wifi_file_screen/wifi_file_screen.h"
 #include "services/wifi_file/wifi_file_service.h"
 
@@ -44,10 +42,8 @@ const char *AppNameRadio() { return "收音机"; }
 const char *AppNameBook() { return Lang::Strings::HOME_APP_BOOK; }
 const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
 const char *AppNameAiChat() { return "AI 对话"; }
-const char *AppNameBackup() { return "备份恢复"; }
 const char *AppNameTransfer() { return "WiFi 传书"; }
 const char *AppNameUpgrade() { return "系统升级"; }
-const char *AppNameWallpaper() { return "壁纸"; }
 const char *AppNameWifiFile() { return "WiFi 文件"; }
 const char *AppNameStore() { return "应用商店"; }
 
@@ -74,11 +70,7 @@ void AppManager::RegisterDefaultApps() {
     RegisterApp(std::make_shared<StandardAppModule>(
         "aichat", "A:ic_app_home_buddy.spng", AppNameAiChat, AiVoiceChatScreen::Create, AiChat_BootRegister, false));
     RegisterApp(std::make_shared<StandardAppModule>(
-        "backup", "A:ic_app_home_cloud.spng", AppNameBackup, BackupScreen::Create, nullptr, false));
-    RegisterApp(std::make_shared<StandardAppModule>(
         "transfer", "A:ic_app_home_cloud.spng", AppNameTransfer, WifiTransferScreen::Create, BookRegisterMcpTools, false, nullptr, OnTransferPause, OnTransferPause));
-    RegisterApp(std::make_shared<StandardAppModule>(
-        "wallpaper", "A:ic_app_home_wallpaper.spng", AppNameWallpaper, WallpaperScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
         "wififile", "A:ic_app_home_cloud.spng", AppNameWifiFile, WifiFileScreen::Create, nullptr, false, nullptr, OnWifiFilePause, OnWifiFilePause));
     RegisterApp(std::make_shared<StandardAppModule>(

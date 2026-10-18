@@ -122,12 +122,32 @@ void dynapp_glm_start(void);
 void dynapp_glm_stop(void);
 
 // 备份恢复服务
+typedef struct {
+    char filename[64];
+    char full_path[128];
+    uint32_t size_bytes;
+    int64_t mod_time;
+    int entry_count;
+} dynapp_backup_info_t;
+
+int dynapp_backup_is_sd_mounted(void);
+int dynapp_backup_get_sd_capacity(char* out_free, size_t free_len, char* out_total, size_t total_len);
+int dynapp_backup_list_count(void);
+int dynapp_backup_get_item(int index, dynapp_backup_info_t* out);
 int dynapp_backup_export(char* out_filename, size_t max_len);
 int dynapp_backup_import(const char* filepath);
 int dynapp_backup_delete(const char* filepath);
 int dynapp_backup_get_nvs_count(void);
 
 // 壁纸设置服务
+typedef struct {
+    char name[64];
+    char path[128];
+    size_t size_bytes;
+} dynapp_wallpaper_info_t;
+
+int dynapp_wallpaper_list_count(void);
+int dynapp_wallpaper_get_item(int index, dynapp_wallpaper_info_t* out);
 int dynapp_wallpaper_get_standby(char* out_name, size_t max_len);
 int dynapp_wallpaper_set_standby(const char* path_or_name);
 int dynapp_wallpaper_clear_standby(void);

@@ -43,6 +43,8 @@
 #include "core/app_manager.h"
 #include "display/screen/home_screen/home_screen.h"
 #include "display/screen/vk_key_handler.h"
+#include "services/radio/radio_player.h"
+#include "services/radio/radio_catalog.h"
 #include "display/font/fontpack_lvgl.h"
 #include "dynamic_app_shims.h"
 #include "sd_paths.h"
@@ -184,10 +186,16 @@ const struct esp_elfsym g_metalio_dynapp_syms[] = {
     ESP_ELFSYM_EXPORT(dynapp_glm_select_context),
     ESP_ELFSYM_EXPORT(dynapp_glm_start),
     ESP_ELFSYM_EXPORT(dynapp_glm_stop),
+    ESP_ELFSYM_EXPORT(dynapp_backup_is_sd_mounted),
+    ESP_ELFSYM_EXPORT(dynapp_backup_get_sd_capacity),
+    ESP_ELFSYM_EXPORT(dynapp_backup_list_count),
+    ESP_ELFSYM_EXPORT(dynapp_backup_get_item),
     ESP_ELFSYM_EXPORT(dynapp_backup_export),
     ESP_ELFSYM_EXPORT(dynapp_backup_import),
     ESP_ELFSYM_EXPORT(dynapp_backup_delete),
     ESP_ELFSYM_EXPORT(dynapp_backup_get_nvs_count),
+    ESP_ELFSYM_EXPORT(dynapp_wallpaper_list_count),
+    ESP_ELFSYM_EXPORT(dynapp_wallpaper_get_item),
     ESP_ELFSYM_EXPORT(dynapp_wallpaper_get_standby),
     ESP_ELFSYM_EXPORT(dynapp_wallpaper_set_standby),
     ESP_ELFSYM_EXPORT(dynapp_wallpaper_clear_standby),
@@ -200,6 +208,15 @@ const struct esp_elfsym g_metalio_dynapp_syms[] = {
     ESP_ELFSYM_EXPORT(dynapp_wifi_transfer_stop),
     ESP_ELFSYM_EXPORT(dynapp_wifi_transfer_is_running),
     ESP_ELFSYM_EXPORT(dynapp_wifi_transfer_get_port),
+    ESP_ELFSYM_EXPORT(radio_catalog_count),
+    ESP_ELFSYM_EXPORT(radio_catalog_get),
+    ESP_ELFSYM_EXPORT(radio_player_start),
+    ESP_ELFSYM_EXPORT(radio_play_indexed),
+    ESP_ELFSYM_EXPORT(radio_play),
+    ESP_ELFSYM_EXPORT(radio_stop),
+    ESP_ELFSYM_EXPORT(radio_player_shutdown),
+    ESP_ELFSYM_EXPORT(radio_set_volume),
+    ESP_ELFSYM_EXPORT(radio_player_snapshot),
     ESP_ELFSYM_END
 };
 
