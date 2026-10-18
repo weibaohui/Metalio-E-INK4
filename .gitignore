@@ -30,4 +30,5 @@ mmap_generate_*.h
 tools/epdfont/.venv/
 tools/fontpack/.venv/
 tools/ebook/.venv/
+*.so
 

@@ -47,7 +47,7 @@ static const int k_shapes[TYPES][4][4][2] = {
 
 static uint8_t board[FH][FW];
 static int type_, rot_, px_, py_, next_, hold_, can_hold_;
-static int state_, score_, lines_, level_, pieces_, drop_ms_;
+static int state_ = STATE_OVER, score_, lines_, level_, pieces_, drop_ms_;
 
 static int rnd7(void) { return (int)(esp_random() % TYPES); }
 

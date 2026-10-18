@@ -26,3 +26,21 @@ grep -c "PATCH(metalio)" managed_components/espressif__esp_lvgl_adapter/src/disp
 ```
 
 被覆盖时:按上面的位置说明重放(代码块见 git 历史 patches/README.md 首次提交)。
+
+## 2. espressif/elf_loader 1.3.5 — 导出符号表补齐 I-Bus 重映射(防 PSRAM 取指死机)
+
+文件:`managed_components/espressif__elf_loader/src/esp_elf.c`
+
+**背景**:S3 开启 `CONFIG_ELF_LOADER_LOAD_PSRAM` 时，.text 在 PSRAM D-Bus（`0x3C000000..0x3DFFFFFF`）。`dlsym` 查表的 `elf->symtab[num].addr` 遗漏了 `elf_remap_text`，返回 D-Bus 裸指针；CPU 执行 `entry()` 时在第一条指令触发 `InstructionFetchError (EXCCAUSE=2)` 崩溃重启。
+
+**补丁内容**:
+```c
+#if CONFIG_ELF_LOADER_BUS_ADDRESS_MIRROR
+    uintptr_t func_addr =
+        (uintptr_t)(elf->ptext + symtab[j].value - elf->sec[ELF_SEC_TEXT].v_addr);
+#ifdef CONFIG_ELF_LOADER_CACHE_OFFSET
+    func_addr = elf_remap_text(elf, func_addr);
+#endif
+    elf->symtab[num].addr = (void *)func_addr;
+#else
+```

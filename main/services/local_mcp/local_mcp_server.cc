@@ -593,7 +593,14 @@ void LocalMcpServer::Start() {
         ESP_LOGE(TAG, "register /fs/delete failed");
     }
 
-    ESP_LOGI(TAG, "resident HTTP MCP listening on port 8080 at /mcp");
+    {
+        std::lock_guard<std::mutex> lock(pin_mutex_);
+        if (pin_.empty()) {
+            ESP_LOGI(TAG, "resident HTTP MCP listening on port 8080 at /mcp (auth disabled)");
+        } else {
+            ESP_LOGI(TAG, "resident HTTP MCP listening on port 8080 at /mcp (auth PIN=%s)", pin_.c_str());
+        }
+    }
 }
 
 void LocalMcpServer::Stop() {
@@ -626,6 +633,11 @@ void LocalMcpServer::SetPin(const std::string& pin) {
             return;
         }
         pin_ = pin;
+        if (pin_.empty()) {
+            ESP_LOGI(TAG, "MCP auth PIN cleared (auth disabled)");
+        } else {
+            ESP_LOGI(TAG, "MCP auth PIN updated: %s", pin_.c_str());
+        }
     }
     // 落盘必须离开 LVGL worker(PSRAM 栈,写 flash 会关 cache 触发断言),调度到 main。
     // 缓存已先行更新,UI 立即生效;写盘是异步收尾。

@@ -2,7 +2,7 @@
 // 布局:左盘右栏——棋盘 10×20(30px 格) + 右栏(下一个/暂存/得分/行数/等级/最高),
 // 底部 暂停/重开/退出 + 速降(黑底反白)。
 // 操作方式:
-// 1. 盖板虚拟键(触摸条): vk_home=旋转, vk_next=左移, vk_prev=右移;
+// 1. 盖板虚拟键(触摸条): vk_home=旋转, vk_prev=左移, vk_next=右移;
 // 2. 屏幕触控: 点暂存框=暂存; 底部按键=速降/暂停/重开/退出。
 // （音量键与 BOOT 键不参与游戏，保持系统原生功能；棋盘不响应点按）
 // 刷新纪律:差量重绘——占格只在变化时改样式、文本只在变化时 set,墨水屏走局部刷新;
@@ -32,9 +32,9 @@ constexpr int kW = tetris::kW;
 constexpr int kH = tetris::kH;
 constexpr lv_coord_t kCell = 30;     // 棋盘格距
 constexpr lv_coord_t kBoardX = 22;   // 棋盘框位置(body 内,坐标原点=body 内容区)
-constexpr lv_coord_t kBoardY = 8;
+constexpr lv_coord_t kBoardY = 12;
 constexpr lv_coord_t kSideX = 338;   // 右栏 X(棋盘 306 + 10 间距)
-constexpr lv_coord_t kBtnH = 52;
+constexpr lv_coord_t kBtnH = 60;     // 底部按钮高度
 constexpr int kFullRefreshEvery = 10;  // 每 N 块落定全刷一次
 
 // 输入种类(lv_async 投递 user_data)
@@ -58,6 +58,7 @@ lv_obj_t* s_next_pv[4];         // 下一个块预览格
 lv_obj_t* s_hold_pv[4];         // 暂存块预览格
 int s_next_fp = -1;             // 预览形状指纹;-1=未画
 int s_hold_fp = -1;             // -2=无暂存(隐藏)
+lv_obj_t* s_hold_tip = nullptr; // 暂存区无方块时的提示文本
 lv_obj_t* s_score_lbl = nullptr;
 lv_obj_t* s_lines_lbl = nullptr;
 lv_obj_t* s_level_lbl = nullptr;
@@ -207,6 +208,13 @@ void DrawPreviews() {
     if (hfp != s_hold_fp) {
         s_hold_fp = hfp;
         DrawPreview(s_hold_pv, true, s_core.has_hold() ? 0 : -2);
+        if (s_hold_tip != nullptr) {
+            if (s_core.has_hold()) {
+                lv_obj_add_flag(s_hold_tip, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_remove_flag(s_hold_tip, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
 }
 
@@ -355,12 +363,12 @@ bool PostInput(int input) {
     return true;
 }
 
-// 盖板三键(y=900 触摸条,物理从左到右): vk_home=旋转, vk_next=左移, vk_prev=右移
+// 盖板三键(y=900 触摸条): vk_home=旋转, vk_prev=左移, vk_next=右移
 bool OnVkKey(const char* key) {
     if (key == nullptr) return false;
     if (strcmp(key, "vk_home") == 0) return PostInput(kInRotate);
-    if (strcmp(key, "vk_next") == 0) return PostInput(kInLeft);
-    if (strcmp(key, "vk_prev") == 0) return PostInput(kInRight);
+    if (strcmp(key, "vk_prev") == 0) return PostInput(kInLeft);
+    if (strcmp(key, "vk_next") == 0) return PostInput(kInRight);
     return false;
 }
 
@@ -437,6 +445,7 @@ void OnScreenUnloaded(lv_event_t*) {
     for (auto*& p : s_ghost) p = nullptr;
     for (auto*& p : s_next_pv) p = nullptr;
     for (auto*& p : s_hold_pv) p = nullptr;
+    s_hold_tip = nullptr;
     s_board = nullptr;
     s_score_lbl = s_lines_lbl = s_level_lbl = s_best_lbl = nullptr;
     s_pause_btn_lbl = nullptr;
@@ -514,7 +523,7 @@ lv_obj_t* MakeText(lv_obj_t* parent, const char* text, int font_size, lv_coord_t
 
 lv_obj_t* TetrisScreen::Create() {
     auto* scaffold = EpdWidgetKit::EpdPageScaffold::Create({
-        .title = "俄罗斯方块",
+        .title = "方块战争",
         .show_header = false,
         .show_status_bar = true,
         .show_back_btn = false,
@@ -592,7 +601,11 @@ lv_obj_t* TetrisScreen::Create() {
         lv_obj_add_flag(s_next_pv[i], LV_OBJ_FLAG_HIDDEN);
     }
 
-    MakeText(body, "暂存", 25, kSideX, 162);
+    lv_obj_t* hold_title = MakeText(body, "暂存", 25, kSideX, 162);
+    lv_obj_add_flag(hold_title, LV_OBJ_FLAG_CLICKABLE);
+    HapticAttachClick(hold_title);
+    lv_obj_add_event_cb(hold_title, OnHoldBoxClicked, LV_EVENT_CLICKED, nullptr);
+
     // 暂存框 = 暂存交换热区
     lv_obj_t* hold_box = lv_obj_create(body);
     lv_obj_remove_style_all(hold_box);
@@ -607,6 +620,18 @@ lv_obj_t* TetrisScreen::Create() {
     lv_obj_add_flag(hold_box, LV_OBJ_FLAG_CLICKABLE);
     HapticAttachClick(hold_box);
     lv_obj_add_event_cb(hold_box, OnHoldBoxClicked, LV_EVENT_CLICKED, nullptr);
+
+    s_hold_tip = lv_label_create(hold_box);
+    lv_label_set_text(s_hold_tip, "点击\n暂存");
+    lv_obj_set_style_text_font(s_hold_tip, UiFont(), 0);
+    lv_obj_set_style_text_color(s_hold_tip, lv_palette_darken(LV_PALETTE_GREY, 2), 0);
+    lv_obj_set_style_text_align(s_hold_tip, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(s_hold_tip);
+    lv_obj_clear_flag(s_hold_tip, LV_OBJ_FLAG_CLICKABLE);
+    if (s_core.has_hold()) {
+        lv_obj_add_flag(s_hold_tip, LV_OBJ_FLAG_HIDDEN);
+    }
+
     for (int i = 0; i < 4; ++i) {
         s_hold_pv[i] = MakeBlock(hold_box);
         lv_obj_set_size(s_hold_pv[i], 20, 20);
@@ -628,19 +653,19 @@ lv_obj_t* TetrisScreen::Create() {
     MakeText(body, "最高", 25, kSideX, row_y);
     SyncBestLabel();
 
-    // 底部按键行:暂停 / 重开 / 退出 / 速降(黑底反白)
+    // 底部按键行:暂停 / 重开 / 退出 / 速降(黑底反白)，对齐至屏幕最底边去除空白
     lv_obj_t* row = lv_obj_create(body);
     lv_obj_remove_style_all(row);
-    lv_obj_set_pos(row, kBoardX, kBoardY + kH * kCell + 6 + 14);
-    lv_obj_set_size(row, 426, kBtnH);
+    lv_obj_set_size(row, 436, kBtnH);
+    lv_obj_align(row, LV_ALIGN_BOTTOM_MID, 0, -8);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     DisableScroll(row);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
-    s_pause_btn_lbl = MakeBtn(row, "暂停", 100, kBtnH, OnBtnClicked, (void*)0);
-    MakeBtn(row, "重开", 100, kBtnH, OnBtnClicked, (void*)1);
-    MakeBtn(row, "退出", 100, kBtnH, OnBtnClicked, (void*)2);
-    MakeBtn(row, "速降", 100, kBtnH, OnBtnClicked, (void*)3, true);
+    s_pause_btn_lbl = MakeBtn(row, "暂停", 102, kBtnH, OnBtnClicked, (void*)0);
+    MakeBtn(row, "重开", 102, kBtnH, OnBtnClicked, (void*)1);
+    MakeBtn(row, "退出", 102, kBtnH, OnBtnClicked, (void*)2);
+    MakeBtn(row, "速降", 102, kBtnH, OnBtnClicked, (void*)3, true);
 
     // 初始渲染
     RedrawBoard();
