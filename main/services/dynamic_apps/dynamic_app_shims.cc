@@ -138,3 +138,65 @@ int dynapp_is_path_allowed(const char* path, int write) {
     if (strncmp(path, "/sdcard/metalio/e-ink/wallpaper", 31) == 0) return 1;
     return 0;
 }
+
+#include "application.h"
+#include "board.h"
+#include "boot_key_handler.h"
+#include "display/screen/epd_widget_kit.h"
+#include "power_policy.h"
+#include "services/time_service.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+void dynapp_power_sleep(void) {
+    ESP_LOGI(kShimTag, "dynapp power sleep");
+    PowerKey_OnClick();
+}
+
+void dynapp_power_reboot(void) {
+    ESP_LOGI(kShimTag, "dynapp power reboot");
+    Application::GetInstance().Schedule([]() {
+        vTaskDelay(pdMS_TO_TICKS(300));
+        Application::GetInstance().Reboot();
+    });
+}
+
+void dynapp_power_shutdown(void) {
+    ESP_LOGI(kShimTag, "dynapp power shutdown");
+    PowerPolicy::GetInstance().RequestPowerOff();
+}
+
+int dynapp_is_network_ready(void) {
+    return Board::GetInstance().IsNetworkReady() ? 1 : 0;
+}
+
+int dynapp_time_is_synced(void) {
+    return TimeService_IsSynced() ? 1 : 0;
+}
+
+long dynapp_time_last_sync_epoch(void) {
+    return TimeService_LastSyncEpoch();
+}
+
+int dynapp_time_get_tz_offset_min(void) {
+    return TimeService_GetTzOffsetMin();
+}
+
+void dynapp_time_set_tz_offset_min(int minutes) {
+    TimeService_SetTzOffsetMin(minutes);
+}
+
+void dynapp_time_sync_now(void) {
+    TimeService_SyncNow();
+}
+
+int dynapp_time_set_manual(int year, int month, int day, int hour, int minute) {
+    return TimeService_SetManual(year, month, day, hour, minute) ? 1 : 0;
+}
+
+void dynapp_toast_show(const char* message, uint32_t duration_ms) {
+    if (message != nullptr && message[0] != '\0') {
+        EpdWidgetKit::EpdToast::Show(message, duration_ms);
+    }
+}
+
