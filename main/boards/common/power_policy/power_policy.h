@@ -91,6 +91,11 @@ public:
     void RequestPowerOff();
 
     /**
+     * @brief 检查当前是否连接 USB（供电/调试）
+     */
+    bool IsUsbConnected() const;
+
+    /**
      * @brief 读取 AppIdle 目标 CPU 频率（MHz）
      * @return 80 / 160 / 240
      */

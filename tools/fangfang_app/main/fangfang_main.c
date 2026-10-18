@@ -204,7 +204,7 @@ static void core_cells(const int shape[TYPES][4][2] /*未用*/, int t, int r, in
 #define FULL_REFRESH_EVERY 10
 
 static const char* k_screen_id = "fangfang";
-static const char* k_hiscore_path = "/sdcard/metalio/e-ink/apps/fangfang/hiscore.txt";
+static const char* k_hiscore_filename = "hiscore.txt";
 
 static int s_alive = 0;
 static lv_obj_t* s_scr;
@@ -397,9 +397,9 @@ static void update_labels(void) {
     set_text_guarded(s_level_lbl, s_level_txt, sizeof(s_level_txt), level_);
 }
 
-// ---- 最高分（SD 文件；原版为 NVS，动态应用以文件替代）----
+// ---- 最高分（应用 data 目录文件：支持热重装不覆盖、沙箱隔离）----
 static int load_best(void) {
-    FILE* f = fopen(k_hiscore_path, "r");
+    FILE* f = (FILE*)dynapp_fopen_data(k_hiscore_filename, "r");
     if (f == NULL) return 0;
     char line[32] = {0};
     fgets(line, sizeof(line), f);
@@ -410,7 +410,7 @@ static int load_best(void) {
 static void save_best_if_needed(void) {
     const int best = load_best();
     if (score_ > best) {
-        FILE* f = fopen(k_hiscore_path, "w");
+        FILE* f = (FILE*)dynapp_fopen_data(k_hiscore_filename, "w");
         if (f != NULL) {
             fprintf(f, "%d\n", score_);
             fclose(f);

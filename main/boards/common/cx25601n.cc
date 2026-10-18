@@ -686,6 +686,24 @@ esp_err_t cx25601n_get_vbus_stat(uint8_t *stat)
     return err;
 }
 
+bool cx25601n_is_vbus_present(void)
+{
+    if (!s_ready || !s_dev) {
+        return false;
+    }
+    uint8_t reg1e = 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = read_byte(REG_STATUS1, &reg1e);
+    xSemaphoreGive(s_lock);
+    if (err != ESP_OK) {
+        return false;
+    }
+    const uint8_t vbus_stat = reg1e & 0x07;
+    const uint8_t chrg_stat = (reg1e >> 3) & 0x03;
+    const uint8_t pg_stat = (reg1e >> 5) & 0x01;
+    return (pg_stat != 0) || (vbus_stat != 0 && vbus_stat != 7) || (chrg_stat != CX25601N_CHG_STAT_NOT);
+}
+
 const char *cx25601n_chrg_stat_str(uint8_t stat)
 {
     switch (stat) {

@@ -69,6 +69,7 @@ esp_err_t cx25601n_get_vreg_mv(uint32_t *mv);
 esp_err_t cx25601n_get_chrg_stat(uint8_t *stat);
 esp_err_t cx25601n_get_vbus_stat(uint8_t *stat);
 esp_err_t cx25601n_read_reg(uint8_t reg, uint8_t *val);
+bool cx25601n_is_vbus_present(void);
 
 const char *cx25601n_chrg_stat_str(uint8_t stat);
 const char *cx25601n_vbus_stat_str(uint8_t stat);
