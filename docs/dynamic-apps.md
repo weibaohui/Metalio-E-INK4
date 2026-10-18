@@ -62,8 +62,9 @@ flowchart TD
 ```text
 /sdcard/metalio/e-ink/apps/<AppName>.app/
 ├── manifest.json       [必需 | 只读] 应用元数据描述清单
-├── app.so              [必需 | 只读] 应用的主代码段（ELF 共享库）
 ├── icon.png            [可选 | 只读] 桌面展示图标（70x70 单色 PNG）
+├── bin/                [必需 | 只读] 编译出的可执行文件目录
+│   └── app.so          ELF 动态共享库代码段
 ├── resources/          [可选 | 只读] 应用静态资源包（字体、私有图片、离线字典等）
 └── data/               [自动创建 | 可写] 应用唯一的私有持久化目录（沙箱隔离区）
     ├── config.json     [规范] 用户个性化配置（参数、开关、API Key 等）
@@ -76,8 +77,8 @@ flowchart TD
 | 文件 / 文件夹 | 权限 | 更新策略 | 职责与使用约束 |
 |---|---|---|---|
 | `manifest.json` | 固件只读 | 覆盖更新 | 声明应用 ID、展示名称、版本、ABI 闸门与入口可执行文件。格式必须为标准 JSON。严禁在代码中动态修改此文件。 |
-| `app.so` | 固件只读 | 覆盖更新 | 编译出的动态共享库文件。由 `dlopen` 加载入 PSRAM 运行。重装或发布新版本时直接替换此文件完成代码升级。 |
 | `icon.png` | 固件只读 | 覆盖更新 | 桌面 70×70 黑白 PNG 图标。若缺失则使用固件内置默认图标。 |
+| `bin/` | 固件只读 | 覆盖更新 | **编译构建出的二进制程序目录**。存放 `app.so`。由 `dlopen` 加载入 PSRAM 运行。重装或发布新版本时直接替换此目录下的二进制文件完成代码升级。 |
 | `resources/` | 固件只读 | 覆盖更新 | 静态只读资源（如关卡地图、本地离线词典、自定义点阵字模等）。应用仅拥有**读权限**，禁止写入。 |
 | `data/` | **应用读写** | **绝不覆盖** | **当前应用专属的沙箱数据目录**。由固件在首次加载时自动创建。**重装、升级应用、OTA 升级时，系统严格保留此目录！** 所有可变状态与配置必须且只能存放于此。 |
 
@@ -97,7 +98,7 @@ flowchart TD
 #### 新规范：基于 `data/` 的文件化配置
 - **配置主文件必须位于 `data/config.json`**：应用所有个性化设置（如墨水屏刷新偏好、主题、字号、接口地址、用户 Token、功能开关等）统一采用 JSON 文件保存在 `data/` 目录下。
 - **配置持久化保障**：
-  - 更新/重装应用时，工具仅上传或替换 `manifest.json`、`app.so` 和 `icon.png`，**`data/` 目录绝不触碰**。
+  - 更新/重装应用时，工具仅上传或替换 `manifest.json`、`icon.png` 与 `bin/app.so`，**`data/` 目录绝不触碰**。
   - 用户配置永不丢失，完美实现无缝热升级。
   - 用户或开发者可随时通过 USB 虚拟磁盘、取出 SD 卡或通过 HTTP `/fs/upload` / `/fs/delete` 直接查看和编辑 `config.json`。
 
@@ -113,23 +114,30 @@ flowchart TD
 
 ---
 
-### 2.3 开发源码工程目录规范
+### 2.3 开发工程源码与构建产物（Git 排除约束）
 
-在开发仓库（如 `tools/hello_app` 或 `tools/<your_app>`）中，推荐遵循以下工程组织形式：
+> [!CAUTION]
+> **【构建产物约束】打包出来的产物必须位于 `bin/` 目录下，并严格从 Git 仓库中排除！**
+> 严禁将编译出的 `.so`、二进制文件或中间构建产物提交到代码仓库。
+
+在开发仓库中，应用源码与资源遵循以下工程组织形式：
 
 ```text
 tools/<your_app>/
 ├── main/
-│   ├── <app>_main.c     # 应用主入口源码（包含 metalio_app_entry）
-│   └── ...              # 其它模块源码与私有头文件
-├── pkg/
-│   └── <app>.app/       # 打包输出产物（即最终推入 SD 卡的 Bundle）
-│       ├── manifest.json
-│       ├── icon.png
-│       └── app.so
-└── README.md            # 应用说明文档
+│   ├── <app>_main.c     # [源码] 应用主入口源码（包含 metalio_app_entry）
+│   └── ...              # [源码] 其它模块源码与私有头文件
+├── manifest.json        # [源码] 清单元数据模板
+├── icon.png             # [源码] 应用 70x70 原始图标
+├── README.md            # [文档] 应用说明文档
+└── bin/                 # 【构建输出产物目录，.gitignore 排除，绝不进 git】
+    └── <app>.app/
+        ├── manifest.json
+        ├── icon.png
+        └── bin/
+            └── app.so
 ```
-使用统一构建工具 `./tools/package_app.sh tools/<your_app>` 即可一键完成编译与打包。
+使用统一构建工具 `./tools/package_app.sh tools/<your_app>` 即可一键完成编译并打包到 `bin/<app>.app/`。
 
 ---
 

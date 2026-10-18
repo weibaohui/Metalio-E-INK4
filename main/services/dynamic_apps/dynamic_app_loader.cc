@@ -380,26 +380,27 @@ bool ParseManifestDir(const std::string &dir_path, ManifestInfo &out) {
         return false;
     }
 
-    // 寻找可执行文件：manifest 指定名 -> app.so -> <id>.so
-    std::string so_name = out.executable.empty() ? kSoName : out.executable;
-    std::string so_path = dir_path + "/" + so_name;
+    // 寻找可执行文件：优先 bin/ 子目录（规范），兼容根目录
+    std::vector<std::string> candidates;
+    if (!out.executable.empty()) {
+        candidates.push_back(dir_path + "/" + out.executable);
+        candidates.push_back(dir_path + "/bin/" + out.executable);
+    }
+    candidates.push_back(dir_path + "/bin/app.so");
+    candidates.push_back(dir_path + "/bin/" + out.id + ".so");
+    candidates.push_back(dir_path + "/app.so");
+    candidates.push_back(dir_path + "/" + out.id + ".so");
+
+    std::string so_path;
     struct stat st = {};
-    if (stat(so_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
-        if (so_name != kSoName) {
-            std::string fallback = dir_path + "/" + kSoName;
-            if (stat(fallback.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
-                so_path = fallback;
-            }
+    for (const auto &cand : candidates) {
+        if (stat(cand.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+            so_path = cand;
+            break;
         }
     }
-    if (stat(so_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
-        std::string fallback = dir_path + "/" + out.id + ".so";
-        if (stat(fallback.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
-            so_path = fallback;
-        }
-    }
-    if (stat(so_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
-        ESP_LOGE(TAG, "%s: executable %s missing, skip", manifest_path.c_str(), so_name.c_str());
+    if (so_path.empty()) {
+        ESP_LOGE(TAG, "%s: executable missing (checked bin/app.so, app.so), skip", manifest_path.c_str());
         return false;
     }
     out.executable = so_path;

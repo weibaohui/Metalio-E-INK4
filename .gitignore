@@ -31,4 +31,7 @@ tools/epdfont/.venv/
 tools/fontpack/.venv/
 tools/ebook/.venv/
 *.so
+bin/
+**/bin/
+*.app
 

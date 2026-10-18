@@ -2,6 +2,7 @@
   "id": "fangfang",
   "name": "方方",
   "icon": "icon.png",
+  "executable": "bin/app.so",
   "abi": 1,
   "version": "1.0.0"
 }
