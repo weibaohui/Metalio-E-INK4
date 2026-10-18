@@ -114,6 +114,7 @@ void BootOrchestrator::Run(Application& app) {
              SyslogRegisterMcpTools();
              MemReport_RegisterMcpTools();
              backup_restore::Backup_RegisterMcpTools();
+             dynamic_apps::RegisterMcpTools();
              LocalMcpServer::GetInstance().Start();
              Syslog_Init();
              TimeService_Init();

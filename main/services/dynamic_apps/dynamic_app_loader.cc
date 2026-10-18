@@ -50,6 +50,12 @@
 #include "sd_paths.h"
 
 #include "dynamic_app_abi.h"
+#include <unistd.h>
+#include <esp_heap_caps.h>
+#include "reader_core/zip_reader.h"
+#include "reader/http_download_file.h"
+#include "SdCardManager.hpp"
+#include "mcp_server.h"
 
 namespace dynamic_apps {
 namespace {
@@ -655,6 +661,517 @@ bool UninstallPackage(const std::string& id) {
         ESP_LOGI(TAG, "package uninstalled: %s", id.c_str());
     }
     return true;
+}
+
+namespace {
+
+bool DynRemoveRecursive(const std::string& path) {
+    struct stat st = {};
+    if (stat(path.c_str(), &st) != 0) return true;
+    if (!S_ISDIR(st.st_mode)) return unlink(path.c_str()) == 0;
+    DIR* dir = opendir(path.c_str());
+    if (!dir) return false;
+    struct dirent* ent;
+    bool ok = true;
+    while ((ent = readdir(dir)) != nullptr) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        const std::string child = path + "/" + ent->d_name;
+        struct stat cst = {};
+        if (stat(child.c_str(), &cst) == 0 && S_ISDIR(cst.st_mode)) {
+            ok = DynRemoveRecursive(child) && ok;
+        } else {
+            ok = (unlink(child.c_str()) == 0) && ok;
+        }
+    }
+    closedir(dir);
+    return rmdir(path.c_str()) == 0 && ok;
+}
+
+}  // namespace
+
+AppInstallResult InstallFromZip(const std::string& zip_path, bool overwrite) {
+    (void)overwrite;
+    AppInstallResult res;
+    if (!SdCardManager::GetInstance().IsMounted()) {
+        res.error_msg = "SD 卡未挂载";
+        return res;
+    }
+
+    reader::ZipReader zip;
+    if (!zip.Open(zip_path.c_str())) {
+        res.error_msg = "无法打开 ZIP 压缩包或格式损坏: " + zip_path;
+        return res;
+    }
+
+    std::vector<std::string> entries;
+    zip.ListEntries(entries);
+    if (entries.empty()) {
+        res.error_msg = "ZIP 压缩包为空";
+        return res;
+    }
+
+    std::string manifest_entry;
+    std::string prefix;
+    for (const auto& e : entries) {
+        if (e == "manifest.json") {
+            manifest_entry = e;
+            prefix = "";
+            break;
+        }
+        if (e.size() > 14 && e.compare(e.size() - 14, 14, "/manifest.json") == 0) {
+            manifest_entry = e;
+            prefix = e.substr(0, e.size() - 13);
+            break;
+        }
+    }
+
+    if (manifest_entry.empty()) {
+        res.error_msg = "压缩包内未找到 manifest.json";
+        return res;
+    }
+
+    std::vector<uint8_t> mdata;
+    if (!zip.ReadEntry(manifest_entry.c_str(), mdata, 64 * 1024) || mdata.empty()) {
+        res.error_msg = "读取 manifest.json 失败";
+        return res;
+    }
+
+    std::string manifest_str(reinterpret_cast<char*>(mdata.data()), mdata.size());
+    cJSON* root = cJSON_Parse(manifest_str.c_str());
+    if (!root) {
+        res.error_msg = "manifest.json JSON 语法解析错误";
+        return res;
+    }
+
+    cJSON* j_id = cJSON_GetObjectItem(root, "id");
+    cJSON* j_name = cJSON_GetObjectItem(root, "name");
+    cJSON* j_ver = cJSON_GetObjectItem(root, "version");
+    cJSON* j_abi = cJSON_GetObjectItem(root, "abi");
+
+    if (!cJSON_IsString(j_id) || !j_id->valuestring || strlen(j_id->valuestring) == 0) {
+        cJSON_Delete(root);
+        res.error_msg = "manifest.json 缺少有效的 id 字段";
+        return res;
+    }
+    if (j_abi && cJSON_IsNumber(j_abi) && static_cast<int>(j_abi->valuedouble) != METALIO_DYNAPP_ABI_VERSION) {
+        int got_abi = static_cast<int>(j_abi->valuedouble);
+        cJSON_Delete(root);
+        res.error_msg = "应用 ABI 版本不匹配 (期望 " + std::to_string(METALIO_DYNAPP_ABI_VERSION) +
+                        ", 包为 " + std::to_string(got_abi) + ")";
+        return res;
+    }
+
+    const std::string app_id = j_id->valuestring;
+    const std::string app_name = (j_name && cJSON_IsString(j_name)) ? j_name->valuestring : app_id;
+    const std::string app_ver = (j_ver && cJSON_IsString(j_ver)) ? j_ver->valuestring : "1.0.0";
+    cJSON_Delete(root);
+
+    res.app_id = app_id;
+    res.app_name = app_name;
+    res.version = app_ver;
+
+    const std::string target_dir = std::string(SD_PATH_APPS) + "/" + app_id + ".app";
+    res.bundle_dir = target_dir;
+    SdEnsureDir(SD_APP_ROOT);
+    SdEnsureDir(SD_PATH_APPS);
+    SdEnsureDir(target_dir.c_str());
+
+    constexpr size_t kBufSize = 4096;
+    uint8_t* chunk_buf = static_cast<uint8_t*>(heap_caps_malloc(kBufSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!chunk_buf) {
+        chunk_buf = static_cast<uint8_t*>(malloc(kBufSize));
+    }
+    if (!chunk_buf) {
+        res.error_msg = "内存不足，无法分配解压缓冲区";
+        return res;
+    }
+
+    for (const auto& e : entries) {
+        if (!prefix.empty()) {
+            if (e.rfind(prefix, 0) != 0) {
+                continue;
+            }
+        }
+        std::string rel = prefix.empty() ? e : e.substr(prefix.size());
+        if (rel.empty()) continue;
+
+        if (rel.back() == '/') {
+            std::string sub_dir = target_dir + "/" + rel.substr(0, rel.size() - 1);
+            SdEnsureDir(sub_dir.c_str());
+            continue;
+        }
+
+        size_t slash_pos = rel.rfind('/');
+        if (slash_pos != std::string::npos) {
+            std::string parent_rel = rel.substr(0, slash_pos);
+            std::string parent_full = target_dir + "/" + parent_rel;
+            for (size_t i = target_dir.size() + 1; i <= parent_full.size(); ++i) {
+                if (i == parent_full.size() || parent_full[i] == '/') {
+                    SdEnsureDir(parent_full.substr(0, i).c_str());
+                }
+            }
+        }
+
+        std::string out_path = target_dir + "/" + rel;
+        if (rel.rfind("data/", 0) == 0) {
+            struct stat st = {};
+            if (stat(out_path.c_str(), &st) == 0) {
+                ESP_LOGI(TAG, "skip existing user data file: %s", out_path.c_str());
+                continue;
+            }
+        }
+
+        if (!zip.OpenEntryStream(e.c_str())) {
+            ESP_LOGW(TAG, "failed to open zip entry stream: %s", e.c_str());
+            continue;
+        }
+
+        std::string tmp_out = out_path + ".unpack.tmp";
+        unlink(tmp_out.c_str());
+        FILE* fp = fopen(tmp_out.c_str(), "wb");
+        if (!fp) {
+            zip.CloseEntryStream();
+            ESP_LOGE(TAG, "cannot open file for writing: %s", tmp_out.c_str());
+            continue;
+        }
+
+        bool stream_ok = true;
+        while (!zip.EntryStreamEof() && !zip.EntryStreamError()) {
+            size_t n = zip.EntryStreamRead(chunk_buf, kBufSize);
+            if (n > 0) {
+                if (fwrite(chunk_buf, 1, n, fp) != n) {
+                    stream_ok = false;
+                    break;
+                }
+            }
+        }
+        fclose(fp);
+        zip.CloseEntryStream();
+
+        if (stream_ok && !zip.EntryStreamError()) {
+            unlink(out_path.c_str());
+            rename(tmp_out.c_str(), out_path.c_str());
+        } else {
+            unlink(tmp_out.c_str());
+            ESP_LOGE(TAG, "unpack stream failed for %s", e.c_str());
+        }
+    }
+
+    free(chunk_buf);
+    zip.Close();
+
+    SdEnsureDir((target_dir + "/data").c_str());
+
+    // 重新热注册应用
+    AppManager::GetInstance().UnregisterApp(app_id.c_str());
+    AsyncSettingsStore::GetInstance().SetBool("dynapp", ("in_" + app_id).c_str(), true);
+    dynamic_apps::ScanAndRegister();
+    HomeScreenRequestAppsRefresh();
+
+    ESP_LOGI(TAG, "app %s (%s) installed/updated successfully to %s",
+             app_name.c_str(), app_id.c_str(), target_dir.c_str());
+    res.success = true;
+    return res;
+}
+
+AppInstallResult InstallFromUrl(const std::string& url) {
+    AppInstallResult res;
+    if (url.empty()) {
+        res.error_msg = "URL 不能为空";
+        return res;
+    }
+    SdEnsureDir(SD_APP_ROOT);
+    std::string tmp_zip = std::string(SD_APP_ROOT) + "/app_url_download.zip";
+    unlink(tmp_zip.c_str());
+
+    std::string err;
+    constexpr size_t kMaxZipBytes = 20 * 1024 * 1024; // 20MB
+    bool ok = reader::DownloadHttpToFile(url.c_str(), tmp_zip.c_str(), nullptr, 0,
+                                         kMaxZipBytes, nullptr, nullptr, err, nullptr);
+    if (!ok) {
+        unlink(tmp_zip.c_str());
+        res.error_msg = "下载应用包失败: " + err;
+        return res;
+    }
+
+    res = InstallFromZip(tmp_zip, true);
+    unlink(tmp_zip.c_str());
+    return res;
+}
+
+bool UninstallApp(const std::string& app_id, bool keep_data, std::string& out_error) {
+    if (app_id.empty()) {
+        out_error = "应用 ID 不能为空";
+        return false;
+    }
+
+    // 1. 从 AppManager 注销
+    AppManager::GetInstance().UnregisterApp(app_id.c_str());
+
+    // 2. 清除 NVS 安装标志
+    AsyncSettingsStore::GetInstance().SetBool("dynapp", ("in_" + app_id).c_str(), false);
+
+    // 3. 寻找 SD 卡上的应用目录
+    std::string bundle_dir = std::string(SD_PATH_APPS) + "/" + app_id + ".app";
+    struct stat st = {};
+    if (stat(bundle_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+        bundle_dir = std::string(SD_PATH_APPS) + "/" + app_id;
+        if (stat(bundle_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            bundle_dir.clear();
+        }
+    }
+
+    if (!bundle_dir.empty()) {
+        if (!keep_data) {
+            DynRemoveRecursive(bundle_dir);
+        } else {
+            DIR* dir = opendir(bundle_dir.c_str());
+            if (dir) {
+                struct dirent* ent;
+                while ((ent = readdir(dir)) != nullptr) {
+                    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+                    if (strcmp(ent->d_name, "data") == 0) continue;
+                    std::string child = bundle_dir + "/" + ent->d_name;
+                    DynRemoveRecursive(child);
+                }
+                closedir(dir);
+            }
+        }
+    }
+
+    HomeScreenRequestAppsRefresh();
+    ESP_LOGI(TAG, "app %s uninstalled (keep_data=%d)", app_id.c_str(), keep_data ? 1 : 0);
+    return true;
+}
+
+bool GetAppDetails(const std::string& app_id, AppDetails& out_details) {
+    std::string bundle_dir = std::string(SD_PATH_APPS) + "/" + app_id + ".app";
+    struct stat st = {};
+    if (stat(bundle_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+        bundle_dir = std::string(SD_PATH_APPS) + "/" + app_id;
+        if (stat(bundle_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            return false;
+        }
+    }
+
+    out_details.id = app_id;
+    out_details.bundle_dir = bundle_dir;
+    out_details.installed = (AppManager::GetInstance().GetAppById(app_id.c_str()) != nullptr);
+    out_details.enabled = AppManager::GetInstance().IsAppEnabled(app_id.c_str());
+
+    FILE* mf = fopen((bundle_dir + "/manifest.json").c_str(), "rb");
+    if (mf) {
+        std::string mstr;
+        char buf[256];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), mf)) > 0 && mstr.size() < 4096) {
+            mstr.append(buf, n);
+        }
+        fclose(mf);
+        cJSON* root = cJSON_Parse(mstr.c_str());
+        if (root) {
+            cJSON* j_name = cJSON_GetObjectItem(root, "name");
+            cJSON* j_ver = cJSON_GetObjectItem(root, "version");
+            cJSON* j_desc = cJSON_GetObjectItem(root, "description");
+            cJSON* j_author = cJSON_GetObjectItem(root, "author");
+            if (cJSON_IsString(j_name)) out_details.name = j_name->valuestring;
+            if (cJSON_IsString(j_ver)) out_details.version = j_ver->valuestring;
+            if (cJSON_IsString(j_desc)) out_details.description = j_desc->valuestring;
+            if (cJSON_IsString(j_author)) out_details.author = j_author->valuestring;
+            cJSON_Delete(root);
+        }
+    }
+    if (out_details.name.empty()) out_details.name = app_id;
+
+    out_details.has_icon = (stat((bundle_dir + "/icon.png").c_str(), &st) == 0);
+
+    std::string readme_path = bundle_dir + "/README.md";
+    if (stat(readme_path.c_str(), &st) == 0) {
+        out_details.has_readme = true;
+        FILE* rf = fopen(readme_path.c_str(), "rb");
+        if (rf) {
+            char buf[512];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), rf)) > 0 && out_details.readme_text.size() < 4096) {
+                out_details.readme_text.append(buf, n);
+            }
+            fclose(rf);
+        }
+    }
+
+    DIR* dir = opendir(bundle_dir.c_str());
+    if (dir) {
+        struct dirent* ent;
+        while ((ent = readdir(dir)) != nullptr) {
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+            std::string cpath = bundle_dir + "/" + ent->d_name;
+            struct stat cst = {};
+            if (stat(cpath.c_str(), &cst) == 0) {
+                if (S_ISREG(cst.st_mode)) {
+                    out_details.total_size_bytes += cst.st_size;
+                    out_details.file_list.push_back(ent->d_name);
+                } else if (S_ISDIR(cst.st_mode)) {
+                    out_details.file_list.push_back(std::string(ent->d_name) + "/");
+                }
+            }
+        }
+        closedir(dir);
+    }
+    return true;
+}
+
+bool SetAppEnabled(const std::string& app_id, bool enabled) {
+    AppManager::GetInstance().SetAppEnabled(app_id.c_str(), enabled);
+    HomeScreenRequestAppsRefresh();
+    return true;
+}
+
+void RegisterMcpTools() {
+    auto& mcp = McpServer::GetInstance();
+
+    mcp.AddTool("self.app.list",
+        "List all dynamic applications on the SD card, including their id, name, version, installed status and enabled status.",
+        PropertyList(),
+        [](const PropertyList&) -> ReturnValue {
+            auto pkgs = ListPackages();
+            cJSON* arr = cJSON_CreateArray();
+            for (const auto& pkg : pkgs) {
+                cJSON* obj = cJSON_CreateObject();
+                cJSON_AddStringToObject(obj, "id", pkg.id.c_str());
+                cJSON_AddStringToObject(obj, "name", pkg.name.c_str());
+                cJSON_AddStringToObject(obj, "version", pkg.version.c_str());
+                cJSON_AddStringToObject(obj, "dir", pkg.dir.c_str());
+                cJSON_AddBoolToObject(obj, "installed", pkg.installed);
+                cJSON_AddBoolToObject(obj, "enabled", AppManager::GetInstance().IsAppEnabled(pkg.id.c_str()));
+                cJSON_AddItemToArray(arr, obj);
+            }
+            return arr;
+        });
+
+    mcp.AddTool("self.app.get_info",
+        "Get detailed information about an installed dynamic application (manifest info, README documentation, files, size). Arg: id.",
+        PropertyList({Property("id", kPropertyTypeString)}),
+        [](const PropertyList& p) -> ReturnValue {
+            std::string id = p["id"].value<std::string>();
+            AppDetails details;
+            cJSON* obj = cJSON_CreateObject();
+            if (!GetAppDetails(id, details)) {
+                cJSON_AddBoolToObject(obj, "success", false);
+                cJSON_AddStringToObject(obj, "error", "未找到指定应用");
+                return obj;
+            }
+            cJSON_AddBoolToObject(obj, "success", true);
+            cJSON_AddStringToObject(obj, "id", details.id.c_str());
+            cJSON_AddStringToObject(obj, "name", details.name.c_str());
+            cJSON_AddStringToObject(obj, "version", details.version.c_str());
+            cJSON_AddStringToObject(obj, "description", details.description.c_str());
+            cJSON_AddStringToObject(obj, "author", details.author.c_str());
+            cJSON_AddStringToObject(obj, "bundle_dir", details.bundle_dir.c_str());
+            cJSON_AddBoolToObject(obj, "installed", details.installed);
+            cJSON_AddBoolToObject(obj, "enabled", details.enabled);
+            cJSON_AddBoolToObject(obj, "has_icon", details.has_icon);
+            cJSON_AddBoolToObject(obj, "has_readme", details.has_readme);
+            if (details.has_readme) {
+                cJSON_AddStringToObject(obj, "readme", details.readme_text.c_str());
+            }
+            cJSON_AddNumberToObject(obj, "total_size_bytes", details.total_size_bytes);
+            cJSON* files_arr = cJSON_CreateArray();
+            for (const auto& f : details.file_list) {
+                cJSON_AddItemToArray(files_arr, cJSON_CreateString(f.c_str()));
+            }
+            cJSON_AddItemToObject(obj, "files", files_arr);
+            return obj;
+        });
+
+    mcp.AddTool("self.app.install",
+        "Install or update an external dynamic application from a .zip package on SD card (zip_path) or via remote URL (url). "
+        "Binary .app.zip packages can also be posted directly to 'http://<device-ip>:8080/app/install' using curl with PIN. "
+        "Args: zip_path (optional path on SD card, e.g. 'radio.app.zip'), url (optional http/https link to download).",
+        PropertyList({Property("zip_path", kPropertyTypeString, std::string("")),
+                      Property("url", kPropertyTypeString, std::string(""))}),
+        [](const PropertyList& p) -> ReturnValue {
+            std::string zip_path = p["zip_path"].value<std::string>();
+            std::string url = p["url"].value<std::string>();
+
+            AppInstallResult res;
+            if (!url.empty()) {
+                res = InstallFromUrl(url);
+            } else if (!zip_path.empty()) {
+                std::string full_path = zip_path;
+                if (zip_path.rfind("/sdcard", 0) != 0) {
+                    if (zip_path[0] == '/') {
+                        full_path = std::string(SD_APP_ROOT) + zip_path;
+                    } else {
+                        full_path = std::string(SD_APP_ROOT) + "/" + zip_path;
+                    }
+                }
+                res = InstallFromZip(full_path, true);
+            } else {
+                res.error_msg = "必须提供 zip_path 或 url 参数";
+            }
+
+            cJSON* obj = cJSON_CreateObject();
+            cJSON_AddBoolToObject(obj, "success", res.success);
+            if (res.success) {
+                cJSON_AddStringToObject(obj, "id", res.app_id.c_str());
+                cJSON_AddStringToObject(obj, "name", res.app_name.c_str());
+                cJSON_AddStringToObject(obj, "version", res.version.c_str());
+                cJSON_AddStringToObject(obj, "bundle", res.bundle_dir.c_str());
+                cJSON_AddStringToObject(obj, "message", "应用安装/更新成功，已在桌面热注册完毕");
+            } else {
+                cJSON_AddStringToObject(obj, "error", res.error_msg.c_str());
+            }
+            return obj;
+        });
+
+    mcp.AddTool("self.app.uninstall",
+        "Uninstall an external application from the device, removing its bundle files and unregistering from desktop. "
+        "Args: id (app ID), keep_data (optional bool, default false to keep data/ folder).",
+        PropertyList({Property("id", kPropertyTypeString),
+                      Property("keep_data", kPropertyTypeBoolean, false)}),
+        [](const PropertyList& p) -> ReturnValue {
+            std::string id = p["id"].value<std::string>();
+            bool keep_data = p["keep_data"].value<bool>();
+            std::string err;
+            bool ok = UninstallApp(id, keep_data, err);
+            cJSON* obj = cJSON_CreateObject();
+            cJSON_AddBoolToObject(obj, "success", ok);
+            cJSON_AddStringToObject(obj, "id", id.c_str());
+            if (ok) {
+                cJSON_AddStringToObject(obj, "message", "应用已成功卸载");
+            } else {
+                cJSON_AddStringToObject(obj, "error", err.c_str());
+            }
+            return obj;
+        });
+
+    mcp.AddTool("self.app.enable",
+        "Enable an application on the desktop. Arg: id (app ID).",
+        PropertyList({Property("id", kPropertyTypeString)}),
+        [](const PropertyList& p) -> ReturnValue {
+            std::string id = p["id"].value<std::string>();
+            bool ok = SetAppEnabled(id, true);
+            cJSON* obj = cJSON_CreateObject();
+            cJSON_AddBoolToObject(obj, "success", ok);
+            cJSON_AddStringToObject(obj, "id", id.c_str());
+            cJSON_AddBoolToObject(obj, "enabled", true);
+            return obj;
+        });
+
+    mcp.AddTool("self.app.disable",
+        "Disable an application on the desktop. Arg: id (app ID).",
+        PropertyList({Property("id", kPropertyTypeString)}),
+        [](const PropertyList& p) -> ReturnValue {
+            std::string id = p["id"].value<std::string>();
+            bool ok = SetAppEnabled(id, false);
+            cJSON* obj = cJSON_CreateObject();
+            cJSON_AddBoolToObject(obj, "success", ok);
+            cJSON_AddStringToObject(obj, "id", id.c_str());
+            cJSON_AddBoolToObject(obj, "enabled", false);
+            return obj;
+        });
+
+    ESP_LOGI(TAG, "dynamic apps management MCP tools registered");
 }
 
 }  // namespace dynamic_apps
