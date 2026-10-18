@@ -35,6 +35,7 @@
 #include <esp_dlfcn.h>
 #include <esp_random.h>
 #include <lvgl.h>
+#include <soc/soc.h>
 
 #include "core/async_settings_store.h"
 #include "core/app_manager.h"
@@ -150,6 +151,21 @@ lv_obj_t *MakeFailScreen() {
     return scr;
 }
 
+// ESP32-S3 PSRAM 动态加载：若函数指针落在 PSRAM D-Bus（0x3C000000..0x3E000000），
+// CPU 从 D-Bus 取指会触发 InstructionFetchError (EXCCAUSE=2) 重启崩溃回桌面。
+// 修正为 S3 的 I-Bus 镜像空间（0x42000000..0x44000000）。
+template <typename T>
+T EnsureIbusCallable(T fn_ptr) {
+#if CONFIG_IDF_TARGET_ESP32S3 && CONFIG_ELF_LOADER_LOAD_PSRAM
+    uintptr_t addr = reinterpret_cast<uintptr_t>(fn_ptr);
+    if (addr >= SOC_DROM_LOW && addr < SOC_DROM_HIGH) {
+        addr += (SOC_IROM_LOW - SOC_DROM_LOW);
+        return reinterpret_cast<T>(addr);
+    }
+#endif
+    return fn_ptr;
+}
+
 // dlopen 并校验描述符。成功返回 true 且 *out_handle 有效（调用方负责 dlclose 或挂卸载钩子）；
 // 失败已 dlclose 收尾，返回 false。
 bool ReadDesc(const char *path, void **out_handle, metalio_app_desc_t *out_desc) {
@@ -165,9 +181,12 @@ bool ReadDesc(const char *path, void **out_handle, metalio_app_desc_t *out_desc)
         dlclose(handle);
         return false;
     }
+    entry = EnsureIbusCallable(entry);
 
     memset(out_desc, 0, sizeof(*out_desc));
     entry(out_desc);
+
+    out_desc->create = EnsureIbusCallable(out_desc->create);
 
     if (out_desc->abi_version != METALIO_DYNAPP_ABI_VERSION) {
         ESP_LOGE(TAG, "%s: abi %u != %u", path, out_desc->abi_version, METALIO_DYNAPP_ABI_VERSION);
