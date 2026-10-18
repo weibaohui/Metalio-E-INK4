@@ -43,6 +43,23 @@ void* dynapp_fopen_data(const char* rel_filename, const char* mode);
 //   write=0: 允许读取应用自身 bundle、自身 data，以及公共字体/系统资源。
 int dynapp_is_path_allowed(const char* path, int write);
 
+// 电源管理与系统控制
+void dynapp_power_sleep(void);
+void dynapp_power_reboot(void);
+void dynapp_power_shutdown(void);
+
+// 网络状态与时间服务
+int dynapp_is_network_ready(void);
+int dynapp_time_is_synced(void);
+long dynapp_time_last_sync_epoch(void);
+int dynapp_time_get_tz_offset_min(void);
+void dynapp_time_set_tz_offset_min(int minutes);
+void dynapp_time_sync_now(void);
+int dynapp_time_set_manual(int year, int month, int day, int hour, int minute);
+
+// 提示小浮窗 (EpdToast)
+void dynapp_toast_show(const char* message, uint32_t duration_ms);
+
 #ifdef __cplusplus
 }
 
