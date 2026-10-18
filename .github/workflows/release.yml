@@ -121,6 +121,21 @@ jobs:
           ./merge_firmware.sh
           test -f "firmware/${{ steps.ver.outputs.asset }}"
 
+      - name: Regenerate symbol table & verify freshness
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 符号导出表由固件 ELF 自动生成;若源码改动后忘了重新生成,这里拒绝发布
+          ./scripts/gen_symbols.sh
+          git diff --exit-code main/services/dynamic_apps/generated_symbol_table.inc sdk/symbols.txt
+
+      - name: Pack dynamic-app SDK (with smoke test)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/gen_sdk.sh "${{ steps.ver.outputs.ver }}"
+          test -f "dist/metalio-sdk-${{ steps.ver.outputs.ver }}.zip"
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -134,7 +149,9 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: metalio-e-ink4-${{ steps.ver.outputs.ver }}
           body_file: release_notes.md
-          files: firmware/${{ steps.ver.outputs.asset }}
+          files: |
+            firmware/${{ steps.ver.outputs.asset }}
+            dist/metalio-sdk-${{ steps.ver.outputs.ver }}.zip
           fail_on_unmatched_files: true
           generate_release_notes: false
         env:

@@ -35,3 +35,10 @@ bin/
 **/bin/
 *.app
 
+
+# Metalio SDK 物化产物(由 scripts/gen_sdk.sh / sync_sdk_lvgl.sh 生成)
+dist/
+sdk/build/
+sdk/include/lvgl/
+sdk/examples/*/build/
+sdk/examples/*/bin/

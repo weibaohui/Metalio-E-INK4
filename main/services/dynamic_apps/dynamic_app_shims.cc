@@ -10,6 +10,7 @@
 #include "display/lv_adapter_display.h"
 #include "display/screen/screen_common.h"
 #include "display/screen/vk_key_handler.h"
+#include "reader/image_util.h"
 #include "sd_paths.h"
 
 void* dynapp_screen_status_bar(void* scr) {
@@ -517,6 +518,25 @@ int dynapp_wallpaper_set_standby(const char* path_or_name) {
 
 int dynapp_wallpaper_clear_standby(void) {
     wallpaper::ClearStandbyWallpaper();
+    return 1;
+}
+
+int dynapp_image_decode_l8(const char* path, int max_w, int max_h,
+                           uint8_t* out_pixels, size_t cap,
+                           int* out_w, int* out_h) {
+    if (path == nullptr || out_pixels == nullptr || out_w == nullptr || out_h == nullptr ||
+        max_w <= 0 || max_h <= 0) {
+        return 0;
+    }
+    reader::RasterImage img;
+    if (!reader::DecodeImageFileToL8(path, max_w, max_h, img) || img.empty()) {
+        return 0;
+    }
+    const size_t need = static_cast<size_t>(img.width) * static_cast<size_t>(img.height);
+    if (need > cap) return 0;
+    memcpy(out_pixels, img.pixels.data(), need);
+    *out_w = img.width;
+    *out_h = img.height;
     return 1;
 }
 
