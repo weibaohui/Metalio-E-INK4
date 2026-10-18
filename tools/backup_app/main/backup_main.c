@@ -1,5 +1,8 @@
 // tools/backup_app/main/backup_main.c
-// 备份恢复 动态应用：.app Bundle 规范版
+// 备份与恢复 动态应用：全新三分层架构规范版
+// 1. 系统基础配置 (System Config)
+// 2. 应用配置与私有数据 (App Data & State)
+// 3. 动态应用安装包 (App Bundles)
 // 纯 C + LVGL，仅调用固件符号表导出接口。
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,11 +14,16 @@
 #include "dynamic_app_shims.h"
 #include "fontpack_lvgl.h"
 
+#define ROWS_PER_PAGE 5
+
 static lv_obj_t *s_scr = NULL;
 static lv_obj_t *s_sd_lbl = NULL;
-static lv_obj_t *s_nvs_lbl = NULL;
+static lv_obj_t *s_stats_lbl = NULL;
+static lv_obj_t *s_page_lbl = NULL;
 static lv_obj_t *s_list_box = NULL;
 static lv_obj_t *s_modal = NULL;
+
+static int s_page = 0;
 
 static void *backup_create(void);
 
@@ -30,11 +38,17 @@ static void on_back_clicked(lv_event_t *e) {
     dynapp_screen_go_home();
 }
 
+static void close_modal(void) {
+    if (s_modal) {
+        lv_obj_del(s_modal);
+        s_modal = NULL;
+    }
+}
+
 static int backup_on_vk_key(const char* key) {
     if (key != NULL && (strcmp(key, "esc") == 0 || strcmp(key, "back") == 0)) {
         if (s_modal != NULL) {
-            lv_obj_del(s_modal);
-            s_modal = NULL;
+            close_modal();
             return 1;
         }
         dynapp_screen_go_home();
@@ -43,198 +57,271 @@ static int backup_on_vk_key(const char* key) {
     return 0;
 }
 
+static lv_obj_t *make_btn(lv_obj_t *parent, const char *txt, lv_coord_t w, lv_coord_t h, lv_event_cb_t cb, void *user_data, lv_obj_t **out_lbl) {
+    lv_obj_t *btn = lv_obj_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, w, h);
+    lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(btn, lv_color_black(), 0);
+    lv_obj_set_style_border_width(btn, 2, 0);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, txt);
+    const lv_font_t *f16 = get_font(16, 2);
+    if (f16) lv_obj_set_style_text_font(lbl, f16, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
+    lv_obj_center(lbl);
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    if (out_lbl) *out_lbl = lbl;
+    return btn;
+}
+
 static void refresh_list(void);
 
-static void on_export_clicked(lv_event_t *e) {
-    (void)e;
-    char fname[64] = {0};
-    int ret = dynapp_backup_export(fname, sizeof(fname));
+// ==================== 1. 执行备份导出 ====================
+static void do_export(int backup_type, const char *type_name) {
+    if (!dynapp_backup_is_sd_mounted()) {
+        dynapp_toast_show("SD 卡未挂载，无法备份", 2000);
+        return;
+    }
+
+    dynapp_toast_show("正在生成备份，请稍候...", 2000);
+
+    char out_name[64] = {};
+    int ret = dynapp_backup_export(backup_type, out_name, sizeof(out_name));
     if (ret) {
         char msg[128];
-        snprintf(msg, sizeof(msg), "备份成功: %s", fname);
-        dynapp_toast_show(msg, 2500);
+        snprintf(msg, sizeof(msg), "%s完成:\n%s", type_name, out_name);
+        dynapp_toast_show(msg, 3000);
+        s_page = 0;
         refresh_list();
     } else {
-        dynapp_toast_show("备份失败，请检查 SD 卡状态", 2500);
+        dynapp_toast_show("备份失败，请检查 SD 卡剩余空间", 2500);
     }
 }
 
-static void close_modal(void) {
-    if (s_modal) {
-        lv_obj_del(s_modal);
-        s_modal = NULL;
-    }
-}
-
-static void on_cancel_modal_clicked(lv_event_t *e) {
+static void on_backup_full_clicked(lv_event_t *e) {
     (void)e;
-    close_modal();
+    do_export(0, "完整快照备份");
 }
 
-static void on_confirm_delete_clicked(lv_event_t *e) {
-    const char *path = (const char *)lv_event_get_user_data(e);
-    if (path) {
-        dynapp_backup_delete(path);
-        dynapp_toast_show("备份已删除", 1500);
-    }
-    close_modal();
-    refresh_list();
+static void on_backup_sys_clicked(lv_event_t *e) {
+    (void)e;
+    do_export(1, "系统配置备份");
 }
 
+static void on_backup_app_clicked(lv_event_t *e) {
+    (void)e;
+    do_export(2, "应用数据备份");
+}
+
+// ==================== 2. 执行恢复与重启 ====================
 static void on_reboot_timer(lv_timer_t *tmr) {
     (void)tmr;
     dynapp_power_reboot();
 }
 
-static void on_confirm_import_clicked(lv_event_t *e) {
-    const char *path = (const char *)lv_event_get_user_data(e);
-    if (path) {
-        int ret = dynapp_backup_import(path);
-        if (ret) {
-            close_modal();
-            dynapp_toast_show("导入成功！正在重启设备...", 3000);
-            lv_timer_create(on_reboot_timer, 1500, NULL);
-            return;
-        } else {
-            dynapp_toast_show("导入失败，备份文件可能已损坏", 2500);
-        }
-    }
+static void execute_restore(const char *snapshot_path, int restore_mask, bool need_reboot) {
+    dynapp_toast_show("正在恢复数据，请稍候...", 2500);
+    int ret = dynapp_backup_import(snapshot_path, restore_mask);
     close_modal();
+
+    if (ret) {
+        if (need_reboot) {
+            dynapp_toast_show("恢复成功！正在重启设备生效...", 3000);
+            lv_timer_create(on_reboot_timer, 1500, NULL);
+        } else {
+            dynapp_toast_show("应用数据恢复成功！已重新加载", 2500);
+            refresh_list();
+        }
+    } else {
+        dynapp_toast_show("恢复失败，快照可能已损坏", 2500);
+    }
 }
 
-static void open_action_modal(const dynapp_backup_info_t *item) {
-    if (s_modal) close_modal();
+// 恢复回调结构体
+typedef struct {
+    char path[128];
+    int mask;
+    bool reboot;
+} restore_action_ctx_t;
 
-    s_modal = lv_obj_create(s_scr);
-    lv_obj_remove_style_all(s_modal);
-    lv_obj_set_size(s_modal, 480, 800);
-    lv_obj_set_style_bg_color(s_modal, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(s_modal, LV_OPA_50, 0);
-    lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_SCROLLABLE);
+static void on_restore_action_clicked(lv_event_t *e) {
+    restore_action_ctx_t *ctx = (restore_action_ctx_t *)lv_event_get_user_data(e);
+    if (ctx) {
+        execute_restore(ctx->path, ctx->mask, ctx->reboot);
+    }
+}
 
-    lv_obj_t *box = lv_obj_create(s_modal);
-    lv_obj_remove_style_all(box);
-    lv_obj_set_size(box, 420, 260);
-    lv_obj_center(box);
-    lv_obj_set_style_bg_color(box, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(box, lv_color_black(), 0);
-    lv_obj_set_style_border_width(box, 3, 0);
-    lv_obj_set_style_radius(box, 16, 0);
-    lv_obj_set_style_pad_all(box, 16, 0);
-    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(box, 12, 0);
-    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+static void on_delete_action_clicked(lv_event_t *e) {
+    const char *path = (const char *)lv_event_get_user_data(e);
+    if (path) {
+        dynapp_backup_delete(path);
+        dynapp_toast_show("快照已删除", 1500);
+    }
+    close_modal();
+    refresh_list();
+}
 
-    lv_obj_t *title = lv_label_create(box);
-    lv_label_set_text(title, item->filename);
-    const lv_font_t *f20 = get_font(20, 2);
-    if (f20) lv_obj_set_style_text_font(title, f20, 0);
-    lv_obj_set_width(title, lv_pct(100));
-    lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
+// ==================== 3. 恢复交互弹窗 ====================
+static void show_snapshot_modal(const dynapp_backup_info_t *item) {
+    close_modal();
 
-    lv_obj_t *desc = lv_label_create(box);
-    char buf[128];
-    snprintf(buf, sizeof(buf), "大小: %u 字节 · 包含 %d 项配置\n请选择对该备份的操作：",
-             (unsigned)item->size_bytes, item->entry_count);
+    lv_obj_t *modal = lv_obj_create(s_scr);
+    s_modal = modal;
+    lv_obj_remove_style_all(modal);
+    lv_obj_set_size(modal, 440, 520);
+    lv_obj_center(modal);
+    lv_obj_set_style_bg_color(modal, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(modal, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(modal, lv_color_black(), 0);
+    lv_obj_set_style_border_width(modal, 2, 0);
+    lv_obj_set_style_radius(modal, 12, 0);
+    lv_obj_set_style_pad_all(modal, 16, 0);
+    lv_obj_set_flex_flow(modal, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(modal, 10, 0);
+    lv_obj_clear_flag(modal, LV_OBJ_FLAG_SCROLLABLE);
+
+    // 标题
+    lv_obj_t *title = lv_label_create(modal);
+    lv_label_set_text(title, "快照恢复与管理");
+    const lv_font_t *f22 = get_font(22, 2);
+    if (f22) lv_obj_set_style_text_font(title, f22, 0);
+
+    // 快照详情信息
+    lv_obj_t *desc = lv_label_create(modal);
+    char buf[256];
+    const char *tname = (item->backup_type == 1) ? "系统配置备份"
+                        : (item->backup_type == 2) ? "应用数据备份" : "全量设备快照";
+    snprintf(buf, sizeof(buf), "名称: %s\n类型: %s\n时间: %s\n内容: 系统配置 %d 项 | 应用配置 %d 项\n      数据应用 %d 个 | 安装包 %d 个",
+             item->name, tname, item->created_at,
+             item->system_nvs_count, item->app_nvs_count,
+             item->app_data_count, item->app_bundle_count);
     lv_label_set_text(desc, buf);
     const lv_font_t *f16 = get_font(16, 0);
     if (f16) lv_obj_set_style_text_font(desc, f16, 0);
+    lv_obj_set_width(desc, lv_pct(100));
 
-    lv_obj_t *btn_row = lv_obj_create(box);
-    lv_obj_remove_style_all(btn_row);
-    lv_obj_set_size(btn_row, lv_pct(100), 50);
-    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
+    // 分隔线
+    lv_obj_t *line = lv_obj_create(modal);
+    lv_obj_remove_style_all(line);
+    lv_obj_set_size(line, lv_pct(100), 1);
+    lv_obj_set_style_bg_color(line, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
 
-    // 导入按钮
-    lv_obj_t *b_imp = lv_obj_create(btn_row);
-    lv_obj_remove_style_all(b_imp);
-    lv_obj_set_size(b_imp, 116, 44);
-    lv_obj_set_style_bg_color(b_imp, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(b_imp, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(b_imp, 8, 0);
-    lv_obj_add_flag(b_imp, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(b_imp, on_confirm_import_clicked, LV_EVENT_CLICKED, (void*)item->full_path);
-    lv_obj_t *lbl_imp = lv_label_create(b_imp);
-    lv_label_set_text(lbl_imp, "导入恢复");
-    const lv_font_t *f18 = get_font(18, 2);
-    if (f18) lv_obj_set_style_text_font(lbl_imp, f18, 0);
-    lv_obj_set_style_text_color(lbl_imp, lv_color_white(), 0);
-    lv_obj_center(lbl_imp);
+    // 操作按钮区域
+    if (item->backup_type == 0) { // 全量快照
+        // 1. 恢复全部
+        restore_action_ctx_t *ctx_all = (restore_action_ctx_t *)malloc(sizeof(restore_action_ctx_t));
+        strncpy(ctx_all->path, item->full_path, sizeof(ctx_all->path) - 1);
+        ctx_all->mask = 0x07; // ALL
+        ctx_all->reboot = true;
+        lv_obj_t *b1 = make_btn(modal, "● 恢复全部 (系统配置+应用数据+安装包)", lv_pct(100), 44, on_restore_action_clicked, ctx_all, NULL);
+        lv_obj_add_event_cb(b1, (lv_event_cb_t)free, LV_EVENT_DELETE, ctx_all);
 
-    // 删除按钮
-    lv_obj_t *b_del = lv_obj_create(btn_row);
-    lv_obj_remove_style_all(b_del);
-    lv_obj_set_size(b_del, 116, 44);
-    lv_obj_set_style_bg_color(b_del, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(b_del, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(b_del, lv_color_black(), 0);
-    lv_obj_set_style_border_width(b_del, 2, 0);
-    lv_obj_set_style_radius(b_del, 8, 0);
-    lv_obj_add_flag(b_del, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(b_del, on_confirm_delete_clicked, LV_EVENT_CLICKED, (void*)item->full_path);
-    lv_obj_t *lbl_del = lv_label_create(b_del);
-    lv_label_set_text(lbl_del, "删除备份");
-    if (f18) lv_obj_set_style_text_font(lbl_del, f18, 0);
-    lv_obj_set_style_text_color(lbl_del, lv_color_black(), 0);
-    lv_obj_center(lbl_del);
+        // 2. 仅恢复应用数据
+        restore_action_ctx_t *ctx_app = (restore_action_ctx_t *)malloc(sizeof(restore_action_ctx_t));
+        strncpy(ctx_app->path, item->full_path, sizeof(ctx_app->path) - 1);
+        ctx_app->mask = 0x02; // APP_DATA
+        ctx_app->reboot = false;
+        lv_obj_t *b2 = make_btn(modal, "○ 仅恢复应用数据 (存档/收藏，不改网络)", lv_pct(100), 40, on_restore_action_clicked, ctx_app, NULL);
+        lv_obj_add_event_cb(b2, (lv_event_cb_t)free, LV_EVENT_DELETE, ctx_app);
 
-    // 取消按钮
-    lv_obj_t *b_can = lv_obj_create(btn_row);
-    lv_obj_remove_style_all(b_can);
-    lv_obj_set_size(b_can, 116, 44);
-    lv_obj_set_style_bg_color(b_can, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(b_can, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(b_can, lv_color_black(), 0);
-    lv_obj_set_style_border_width(b_can, 2, 0);
-    lv_obj_set_style_radius(b_can, 8, 0);
-    lv_obj_add_flag(b_can, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(b_can, on_cancel_modal_clicked, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *lbl_can = lv_label_create(b_can);
-    lv_label_set_text(lbl_can, "取消");
-    if (f18) lv_obj_set_style_text_font(lbl_can, f18, 0);
-    lv_obj_set_style_text_color(lbl_can, lv_color_black(), 0);
-    lv_obj_center(lbl_can);
+        // 3. 仅恢复系统配置
+        restore_action_ctx_t *ctx_sys = (restore_action_ctx_t *)malloc(sizeof(restore_action_ctx_t));
+        strncpy(ctx_sys->path, item->full_path, sizeof(ctx_sys->path) - 1);
+        ctx_sys->mask = 0x01; // SYSTEM
+        ctx_sys->reboot = true;
+        lv_obj_t *b3 = make_btn(modal, "○ 仅恢复系统配置 (Wi-Fi/音量/设置)", lv_pct(100), 40, on_restore_action_clicked, ctx_sys, NULL);
+        lv_obj_add_event_cb(b3, (lv_event_cb_t)free, LV_EVENT_DELETE, ctx_sys);
+    } else if (item->backup_type == 1) { // 仅系统配置
+        restore_action_ctx_t *ctx_sys = (restore_action_ctx_t *)malloc(sizeof(restore_action_ctx_t));
+        strncpy(ctx_sys->path, item->full_path, sizeof(ctx_sys->path) - 1);
+        ctx_sys->mask = 0x01;
+        ctx_sys->reboot = true;
+        lv_obj_t *b = make_btn(modal, "● 恢复系统配置 (完成后将重启)", lv_pct(100), 44, on_restore_action_clicked, ctx_sys, NULL);
+        lv_obj_add_event_cb(b, (lv_event_cb_t)free, LV_EVENT_DELETE, ctx_sys);
+    } else { // 仅应用数据
+        restore_action_ctx_t *ctx_app = (restore_action_ctx_t *)malloc(sizeof(restore_action_ctx_t));
+        strncpy(ctx_app->path, item->full_path, sizeof(ctx_app->path) - 1);
+        ctx_app->mask = 0x02;
+        ctx_app->reboot = false;
+        lv_obj_t *b = make_btn(modal, "● 恢复应用数据与状态", lv_pct(100), 44, on_restore_action_clicked, ctx_app, NULL);
+        lv_obj_add_event_cb(b, (lv_event_cb_t)free, LV_EVENT_DELETE, ctx_app);
+    }
+
+    // 底部控制：[删除此快照] [关闭取消]
+    lv_obj_t *btm = lv_obj_create(modal);
+    lv_obj_remove_style_all(btm);
+    lv_obj_set_size(btm, lv_pct(100), 42);
+    lv_obj_set_flex_flow(btm, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btm, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    char *path_copy = strdup(item->full_path);
+    lv_obj_t *del_btn = make_btn(btm, "删除快照", 120, 38, on_delete_action_clicked, path_copy, NULL);
+    lv_obj_add_event_cb(del_btn, (lv_event_cb_t)free, LV_EVENT_DELETE, path_copy);
+
+    make_btn(btm, "关闭", 100, 38, (lv_event_cb_t)close_modal, NULL, NULL);
 }
 
-static void on_item_clicked(lv_event_t *e) {
-    dynapp_backup_info_t *item = (dynapp_backup_info_t *)lv_event_get_user_data(e);
-    if (item) {
-        open_action_modal(item);
+static void on_snapshot_row_clicked(lv_event_t *e) {
+    dynapp_backup_info_t *info = (dynapp_backup_info_t *)lv_event_get_user_data(e);
+    if (info) {
+        show_snapshot_modal(info);
     }
 }
 
-static void on_card_deleted(lv_event_t *e) {
-    void *d = lv_event_get_user_data(e);
-    if (d) free(d);
+// ==================== 4. 列表与主界面刷新 ====================
+static void on_page_prev(lv_event_t *e) {
+    (void)e;
+    if (s_page > 0) {
+        s_page--;
+        refresh_list();
+    }
+}
+
+static void on_page_next(lv_event_t *e) {
+    (void)e;
+    s_page++;
+    refresh_list();
 }
 
 static void refresh_list(void) {
     if (!s_scr || !lv_obj_is_valid(s_scr)) return;
 
-    int mounted = dynapp_backup_is_sd_mounted();
-    if (mounted) {
-        char free_str[32] = {0}, total_str[32] = {0};
-        dynapp_backup_get_sd_capacity(free_str, sizeof(free_str), total_str, sizeof(total_str));
-        char buf[128];
-        snprintf(buf, sizeof(buf), "SD 卡状态: 已挂载 (可用: %s / 共: %s)", free_str, total_str);
-        lv_label_set_text(s_sd_lbl, buf);
-    } else {
-        lv_label_set_text(s_sd_lbl, "SD 卡状态: 未检测到 SD 卡 / 未挂载");
-    }
+    // 1. 刷新状态栏
+    char free_str[32] = "--", total_str[32] = "--";
+    dynapp_backup_get_sd_capacity(free_str, sizeof(free_str), total_str, sizeof(total_str));
+    char sd_txt[64];
+    snprintf(sd_txt, sizeof(sd_txt), "SD 卡: 可用 %s / 总共 %s", free_str, total_str);
+    lv_label_set_text(s_sd_lbl, sd_txt);
 
-    int nvs_count = dynapp_backup_get_nvs_count();
-    char nbuf[64];
-    snprintf(nbuf, sizeof(nbuf), "本机配置: 已用 NVS 条目 %d 项", nvs_count);
-    lv_label_set_text(s_nvs_lbl, nbuf);
+    int sys_nvs = 0, app_nvs = 0, inst_apps = 0;
+    dynapp_backup_get_stats(&sys_nvs, &app_nvs, &inst_apps);
+    char st_txt[128];
+    snprintf(st_txt, sizeof(st_txt), "系统配置: %d 项 | 应用配置: %d 项 | 已装应用: %d 个", sys_nvs, app_nvs, inst_apps);
+    lv_label_set_text(s_stats_lbl, st_txt);
 
+    // 2. 刷新快照列表
     lv_obj_clean(s_list_box);
+    int total_backups = dynapp_backup_list_count();
 
-    if (!mounted) {
+    int total_pages = (total_backups + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
+    if (total_pages <= 0) total_pages = 1;
+    if (s_page >= total_pages) s_page = total_pages - 1;
+    if (s_page < 0) s_page = 0;
+
+    char pbuf[32];
+    snprintf(pbuf, sizeof(pbuf), "%d / %d", s_page + 1, total_pages);
+    lv_label_set_text(s_page_lbl, pbuf);
+
+    if (total_backups == 0) {
         lv_obj_t *tip = lv_label_create(s_list_box);
-        lv_label_set_text(tip, "请插入 SD 卡以进行备份与恢复");
+        lv_label_set_text(tip, "暂无备份快照\n点击上方按钮即可创建备份");
         const lv_font_t *f18 = get_font(18, 0);
         if (f18) lv_obj_set_style_text_font(tip, f18, 0);
         lv_obj_set_width(tip, lv_pct(100));
@@ -242,21 +329,13 @@ static void refresh_list(void) {
         return;
     }
 
-    int count = dynapp_backup_list_count();
-    if (count == 0) {
-        lv_obj_t *tip = lv_label_create(s_list_box);
-        lv_label_set_text(tip, "未在 SD 卡找到备份文件\n点击右上角「导出配置」进行备份");
-        const lv_font_t *f18 = get_font(18, 0);
-        if (f18) lv_obj_set_style_text_font(tip, f18, 0);
-        lv_obj_set_width(tip, lv_pct(100));
-        lv_obj_set_style_text_align(tip, LV_TEXT_ALIGN_CENTER, 0);
-        return;
-    }
+    int start = s_page * ROWS_PER_PAGE;
+    int end = start + ROWS_PER_PAGE;
+    if (end > total_backups) end = total_backups;
 
-    for (int i = 0; i < count; ++i) {
-        dynapp_backup_info_t *item = malloc(sizeof(dynapp_backup_info_t));
+    for (int i = start; i < end; ++i) {
+        dynapp_backup_info_t *item = (dynapp_backup_info_t *)malloc(sizeof(dynapp_backup_info_t));
         if (!item) continue;
-        memset(item, 0, sizeof(*item));
         if (!dynapp_backup_get_item(i, item)) {
             free(item);
             continue;
@@ -264,53 +343,77 @@ static void refresh_list(void) {
 
         lv_obj_t *card = lv_obj_create(s_list_box);
         lv_obj_remove_style_all(card);
-        lv_obj_set_size(card, lv_pct(100), 72);
+        lv_obj_set_size(card, lv_pct(100), 54);
         lv_obj_set_style_bg_color(card, lv_color_white(), 0);
         lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(card, lv_color_black(), 0);
-        lv_obj_set_style_border_width(card, 2, 0);
-        lv_obj_set_style_radius(card, 10, 0);
-        lv_obj_set_style_pad_all(card, 8, 0);
+        lv_obj_set_style_border_width(card, 1, 0);
+        lv_obj_set_style_radius(card, 8, 0);
+        lv_obj_set_style_pad_hor(card, 12, 0);
+        lv_obj_set_style_pad_ver(card, 6, 0);
         lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_style_pad_row(card, 4, 0);
+        lv_obj_set_style_pad_row(card, 2, 0);
         lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(card, on_item_clicked, LV_EVENT_CLICKED, item);
 
-        lv_obj_add_event_cb(card, on_card_deleted, LV_EVENT_DELETE, item);
+        lv_obj_add_event_cb(card, on_snapshot_row_clicked, LV_EVENT_CLICKED, item);
+        lv_obj_add_event_cb(card, (lv_event_cb_t)free, LV_EVENT_DELETE, item);
 
-        lv_obj_t *name_lbl = lv_label_create(card);
-        lv_label_set_text(name_lbl, item->filename);
-        const lv_font_t *f18 = get_font(18, 2);
-        if (f18) lv_obj_set_style_text_font(name_lbl, f18, 0);
-        lv_obj_clear_flag(name_lbl, LV_OBJ_FLAG_CLICKABLE);
+        // 第一行：[标签] + 时间
+        lv_obj_t *r1 = lv_obj_create(card);
+        lv_obj_remove_style_all(r1);
+        lv_obj_set_size(r1, lv_pct(100), 22);
+        lv_obj_set_flex_flow(r1, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(r1, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(r1, 8, 0);
+        lv_obj_clear_flag(r1, LV_OBJ_FLAG_CLICKABLE);
 
-        char meta_buf[128];
-        struct tm tm_info = {0};
-        time_t mt = (time_t)item->mod_time;
-        localtime_r(&mt, &tm_info);
-        snprintf(meta_buf, sizeof(meta_buf), "%u 字节 · %04d-%02d-%02d %02d:%02d · 共 %d 项",
-                 (unsigned)item->size_bytes, tm_info.tm_year + 1900, tm_info.tm_mon + 1, tm_info.tm_mday,
-                 tm_info.tm_hour, tm_info.tm_min, item->entry_count);
+        const char *tag_txt = (item->backup_type == 1) ? "[系统]"
+                              : (item->backup_type == 2) ? "[应用]" : "[全量]";
+        lv_obj_t *tag_lbl = lv_label_create(r1);
+        lv_label_set_text(tag_lbl, tag_txt);
+        const lv_font_t *f16b = get_font(16, 2);
+        if (f16b) lv_obj_set_style_text_font(tag_lbl, f16b, 0);
+        lv_obj_clear_flag(tag_lbl, LV_OBJ_FLAG_CLICKABLE);
 
-        lv_obj_t *meta_lbl = lv_label_create(card);
-        lv_label_set_text(meta_lbl, meta_buf);
+        lv_obj_t *time_lbl = lv_label_create(r1);
+        lv_label_set_text(time_lbl, item->created_at);
+        if (f16b) lv_obj_set_style_text_font(time_lbl, f16b, 0);
+        lv_obj_clear_flag(time_lbl, LV_OBJ_FLAG_CLICKABLE);
+
+        // 第二行：详细内容说明
+        lv_obj_t *sub_lbl = lv_label_create(card);
+        char sub[128];
+        if (item->backup_type == 0) {
+            snprintf(sub, sizeof(sub), "系统(%d项) · 应用数据(%d个应用) · 应用包(%d个)",
+                     item->system_nvs_count, item->app_data_count, item->app_bundle_count);
+        } else if (item->backup_type == 1) {
+            snprintf(sub, sizeof(sub), "包含核心系统与网络配置 %d 项", item->system_nvs_count);
+        } else {
+            snprintf(sub, sizeof(sub), "包含应用配置 %d 项 · 应用私有数据 %d 个",
+                     item->app_nvs_count, item->app_data_count);
+        }
+        lv_label_set_text(sub_lbl, sub);
         const lv_font_t *f14 = get_font(14, 0);
-        if (f14) lv_obj_set_style_text_font(meta_lbl, f14, 0);
-        lv_obj_clear_flag(meta_lbl, LV_OBJ_FLAG_CLICKABLE);
+        if (f14) lv_obj_set_style_text_font(sub_lbl, f14, 0);
+        lv_obj_clear_flag(sub_lbl, LV_OBJ_FLAG_CLICKABLE);
     }
 }
 
 static void on_screen_deleted(lv_event_t *e) {
     (void)e;
+    close_modal();
     s_scr = NULL;
     s_sd_lbl = NULL;
-    s_nvs_lbl = NULL;
+    s_stats_lbl = NULL;
+    s_page_lbl = NULL;
     s_list_box = NULL;
     s_modal = NULL;
 }
 
 static void *backup_create(void) {
+    s_page = 0;
+
     lv_obj_t *scr = lv_obj_create(NULL);
     s_scr = scr;
     lv_obj_remove_style_all(scr);
@@ -342,30 +445,11 @@ static void *backup_create(void) {
     lv_obj_center(back_lbl);
 
     lv_obj_t *title_lbl = lv_label_create(header);
-    lv_label_set_text(title_lbl, "备份恢复");
+    lv_label_set_text(title_lbl, "备份与恢复");
     const lv_font_t *f26 = get_font(26, 2);
     if (f26) lv_obj_set_style_text_font(title_lbl, f26, 0);
     lv_obj_set_style_text_color(title_lbl, lv_color_black(), 0);
     lv_obj_align(title_lbl, LV_ALIGN_CENTER, 0, 0);
-
-    lv_obj_t *exp_btn = lv_obj_create(header);
-    lv_obj_remove_style_all(exp_btn);
-    lv_obj_set_size(exp_btn, 88, 38);
-    lv_obj_align(exp_btn, LV_ALIGN_RIGHT_MID, -12, 0);
-    lv_obj_set_style_bg_color(exp_btn, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(exp_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(exp_btn, lv_color_black(), 0);
-    lv_obj_set_style_border_width(exp_btn, 2, 0);
-    lv_obj_set_style_radius(exp_btn, 8, 0);
-    lv_obj_add_flag(exp_btn, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(exp_btn, on_export_clicked, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *exp_lbl = lv_label_create(exp_btn);
-    lv_label_set_text(exp_lbl, "导出配置");
-    const lv_font_t *f18 = get_font(18, 0);
-    if (f18) lv_obj_set_style_text_font(exp_lbl, f18, 0);
-    lv_obj_set_style_text_color(exp_lbl, lv_color_black(), 0);
-    lv_obj_center(exp_lbl);
 
     // 主内容区
     lv_obj_t *body = lv_obj_create(scr);
@@ -374,8 +458,9 @@ static void *backup_create(void) {
     lv_obj_set_pos(body, 12, 96);
     lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(body, 10, 0);
+    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
 
-    // 状态卡片
+    // 1. 状态卡片
     lv_obj_t *card = lv_obj_create(body);
     lv_obj_remove_style_all(card);
     lv_obj_set_width(card, lv_pct(100));
@@ -384,52 +469,67 @@ static void *backup_create(void) {
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(card, lv_color_black(), 0);
     lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 12, 0);
+    lv_obj_set_style_radius(card, 10, 0);
     lv_obj_set_style_pad_all(card, 12, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(card, 6, 0);
+    lv_obj_set_style_pad_row(card, 4, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     s_sd_lbl = lv_label_create(card);
-    lv_label_set_text(s_sd_lbl, "SD 卡状态: 检测中...");
-    const lv_font_t *f16 = get_font(16, 0);
-    if (f16) lv_obj_set_style_text_font(s_sd_lbl, f16, 0);
+    lv_label_set_text(s_sd_lbl, "SD 卡: 正在读取...");
+    const lv_font_t *f16b = get_font(16, 2);
+    if (f16b) lv_obj_set_style_text_font(s_sd_lbl, f16b, 0);
 
-    s_nvs_lbl = lv_label_create(card);
-    lv_label_set_text(s_nvs_lbl, "本机配置: 查询中...");
-    if (f16) lv_obj_set_style_text_font(s_nvs_lbl, f16, 0);
+    s_stats_lbl = lv_label_create(card);
+    lv_label_set_text(s_stats_lbl, "系统与应用状态统计中...");
+    const lv_font_t *f14 = get_font(14, 0);
+    if (f14) lv_obj_set_style_text_font(s_stats_lbl, f14, 0);
 
-    // 标题条
-    lv_obj_t *sec_bar = lv_obj_create(body);
-    lv_obj_remove_style_all(sec_bar);
-    lv_obj_set_size(sec_bar, lv_pct(100), 32);
-    lv_obj_set_style_bg_color(sec_bar, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(sec_bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(sec_bar, 8, 0);
-    lv_obj_set_style_radius(sec_bar, 4, 0);
-    lv_obj_clear_flag(sec_bar, LV_OBJ_FLAG_SCROLLABLE);
+    // 2. 备份操作栏 (三分层备份入口)
+    lv_obj_t *act_box = lv_obj_create(body);
+    lv_obj_remove_style_all(act_box);
+    lv_obj_set_size(act_box, lv_pct(100), 44);
+    lv_obj_set_flex_flow(act_box, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(act_box, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(act_box, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *sec_lbl = lv_label_create(sec_bar);
-    lv_label_set_text(sec_lbl, "SD 卡备份列表 (点击条目恢复/删除)");
-    if (f16) lv_obj_set_style_text_font(sec_lbl, f16, 0);
-    lv_obj_set_style_text_color(sec_lbl, lv_color_white(), 0);
-    lv_obj_align(sec_lbl, LV_ALIGN_LEFT_MID, 0, 0);
+    make_btn(act_box, "★ 完整快照", 146, 42, on_backup_full_clicked, NULL, NULL);
+    make_btn(act_box, "系统配置", 146, 42, on_backup_sys_clicked, NULL, NULL);
+    make_btn(act_box, "应用数据", 146, 42, on_backup_app_clicked, NULL, NULL);
 
-    // 列表容器
+    // 3. 历史快照导航与翻页
+    lv_obj_t *nav_bar = lv_obj_create(body);
+    lv_obj_remove_style_all(nav_bar);
+    lv_obj_set_size(nav_bar, lv_pct(100), 36);
+    lv_obj_set_flex_flow(nav_bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(nav_bar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(nav_bar, LV_OBJ_FLAG_SCROLLABLE);
+
+    make_btn(nav_bar, "‹ 上页", 76, 32, on_page_prev, NULL, NULL);
+
+    s_page_lbl = lv_label_create(nav_bar);
+    lv_label_set_text(s_page_lbl, "1 / 1");
+    if (f16b) lv_obj_set_style_text_font(s_page_lbl, f16b, 0);
+
+    make_btn(nav_bar, "下页 ›", 76, 32, on_page_next, NULL, NULL);
+
+    // 4. 快照列表容器
     s_list_box = lv_obj_create(body);
     lv_obj_remove_style_all(s_list_box);
-    lv_obj_set_size(s_list_box, lv_pct(100), 540);
+    lv_obj_set_size(s_list_box, lv_pct(100), 470);
     lv_obj_set_flex_flow(s_list_box, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_list_box, 8, 0);
+    lv_obj_clear_flag(s_list_box, LV_OBJ_FLAG_SCROLLABLE);
 
     refresh_list();
+
     return scr;
 }
 
 void metalio_app_entry(metalio_app_desc_t *out) {
     out->abi_version = METALIO_DYNAPP_ABI_VERSION;
     out->id = "backup";
-    out->name = "备份恢复";
+    out->name = "备份与恢复";
     out->icon = "icon.png";
     out->create = backup_create;
 }

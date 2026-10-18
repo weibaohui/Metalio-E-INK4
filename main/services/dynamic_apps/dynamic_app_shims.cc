@@ -388,6 +388,17 @@ int dynapp_backup_get_sd_capacity(char* out_free, size_t free_len, char* out_tot
     return 0;
 }
 
+int dynapp_backup_get_stats(int* out_system_nvs, int* out_app_nvs, int* out_installed_apps) {
+    int s = 0, a = 0, i = 0;
+    if (backup_restore::NvsBackupService::GetInstance().GetStats(s, a, i)) {
+        if (out_system_nvs) *out_system_nvs = s;
+        if (out_app_nvs) *out_app_nvs = a;
+        if (out_installed_apps) *out_installed_apps = i;
+        return 1;
+    }
+    return 0;
+}
+
 static std::vector<backup_restore::BackupFileInfo> s_backup_cache;
 
 int dynapp_backup_list_count(void) {
@@ -398,38 +409,41 @@ int dynapp_backup_list_count(void) {
 int dynapp_backup_get_item(int index, dynapp_backup_info_t* out) {
     if (out == nullptr || index < 0 || static_cast<size_t>(index) >= s_backup_cache.size()) return 0;
     const auto& b = s_backup_cache[index];
-    strncpy(out->filename, b.filename.c_str(), sizeof(out->filename) - 1);
-    out->filename[sizeof(out->filename) - 1] = '\0';
+    memset(out, 0, sizeof(*out));
+    strncpy(out->name, b.filename.c_str(), sizeof(out->name) - 1);
     strncpy(out->full_path, b.full_path.c_str(), sizeof(out->full_path) - 1);
-    out->full_path[sizeof(out->full_path) - 1] = '\0';
+    strncpy(out->created_at, b.created_at.c_str(), sizeof(out->created_at) - 1);
+    out->backup_type = b.backup_type;
+    out->has_system = b.has_system ? 1 : 0;
+    out->has_app_data = b.has_app_data ? 1 : 0;
+    out->has_app_bundles = b.has_app_bundles ? 1 : 0;
+    out->system_nvs_count = b.system_nvs_count;
+    out->app_nvs_count = b.app_nvs_count;
+    out->app_data_count = b.app_data_count;
+    out->app_bundle_count = b.app_bundle_count;
     out->size_bytes = b.size_bytes;
     out->mod_time = static_cast<int64_t>(b.mod_time);
-    out->entry_count = b.entry_count;
     return 1;
 }
 
-int dynapp_backup_export(char* out_filename, size_t max_len) {
-    auto res = backup_restore::NvsBackupService::GetInstance().ExportToSd();
-    if (res.success && out_filename != nullptr && max_len > 0) {
-        strncpy(out_filename, res.filename.c_str(), max_len - 1);
-        out_filename[max_len - 1] = '\0';
+int dynapp_backup_export(int backup_type, char* out_name, size_t max_len) {
+    auto res = backup_restore::NvsBackupService::GetInstance().ExportToSd(backup_type);
+    if (res.success && out_name != nullptr && max_len > 0) {
+        strncpy(out_name, res.filename.c_str(), max_len - 1);
+        out_name[max_len - 1] = '\0';
     }
     return res.success ? 1 : 0;
 }
 
-int dynapp_backup_import(const char* filepath) {
-    if (filepath == nullptr) return 0;
-    auto res = backup_restore::NvsBackupService::GetInstance().ImportFromSd(filepath);
+int dynapp_backup_import(const char* snapshot_path, int restore_mask) {
+    if (snapshot_path == nullptr) return 0;
+    auto res = backup_restore::NvsBackupService::GetInstance().ImportFromSd(snapshot_path, restore_mask);
     return res.success ? 1 : 0;
 }
 
-int dynapp_backup_delete(const char* filepath) {
-    if (filepath == nullptr) return 0;
-    return backup_restore::NvsBackupService::GetInstance().DeleteBackup(filepath) ? 1 : 0;
-}
-
-int dynapp_backup_get_nvs_count(void) {
-    return backup_restore::NvsBackupService::GetInstance().GetLocalNvsEntryCount();
+int dynapp_backup_delete(const char* snapshot_path) {
+    if (snapshot_path == nullptr) return 0;
+    return backup_restore::NvsBackupService::GetInstance().DeleteBackup(snapshot_path) ? 1 : 0;
 }
 
 // 壁纸设置服务
