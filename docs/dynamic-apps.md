@@ -51,20 +51,89 @@ flowchart TD
 
 ---
 
-## 2. Bundle 目录结构规范
+---
 
-每个应用必须以独立目录形式存放在 `/sdcard/metalio/e-ink/apps/` 下，目录命名推荐以 `.app` 结尾：
+## 2. 目录规范与文件职责约束
+
+### 2.1 运行时 Bundle 目录结构与各文件职责
+
+应用部署在设备 SD 卡上的标准路径为 `/sdcard/metalio/e-ink/apps/<AppName>.app/`。整体结构学习了 macOS 的 `.app` Bundle 设计，代码、资源与数据职责清晰划分：
 
 ```text
 /sdcard/metalio/e-ink/apps/<AppName>.app/
-├── manifest.json       [必需] 应用元数据清单
-├── app.so              [必需] 编译出的 ELF 共享动态库（代码段）
-├── icon.png            [可选] 70x70 像素应用图标（缺省使用系统默认图标）
-└── data/               [自动创建] 私有持久化数据目录（配置、存档等）
-    └── config.json
+├── manifest.json       [必需 | 只读] 应用元数据描述清单
+├── app.so              [必需 | 只读] 应用的主代码段（ELF 共享库）
+├── icon.png            [可选 | 只读] 桌面展示图标（70x70 单色 PNG）
+├── resources/          [可选 | 只读] 应用静态资源包（字体、私有图片、离线字典等）
+└── data/               [自动创建 | 可写] 应用唯一的私有持久化目录（沙箱隔离区）
+    ├── config.json     [规范] 用户个性化配置（参数、开关、API Key 等）
+    ├── state.json      [规范] 运行时进度、历史记录、游戏最高分
+    └── cache/          [可选] 应用本地临时缓存
 ```
 
-### 2.1 manifest.json 规范
+#### 各文件与文件夹的约束与权限说明：
+
+| 文件 / 文件夹 | 权限 | 更新策略 | 职责与使用约束 |
+|---|---|---|---|
+| `manifest.json` | 固件只读 | 覆盖更新 | 声明应用 ID、展示名称、版本、ABI 闸门与入口可执行文件。格式必须为标准 JSON。严禁在代码中动态修改此文件。 |
+| `app.so` | 固件只读 | 覆盖更新 | 编译出的动态共享库文件。由 `dlopen` 加载入 PSRAM 运行。重装或发布新版本时直接替换此文件完成代码升级。 |
+| `icon.png` | 固件只读 | 覆盖更新 | 桌面 70×70 黑白 PNG 图标。若缺失则使用固件内置默认图标。 |
+| `resources/` | 固件只读 | 覆盖更新 | 静态只读资源（如关卡地图、本地离线词典、自定义点阵字模等）。应用仅拥有**读权限**，禁止写入。 |
+| `data/` | **应用读写** | **绝不覆盖** | **当前应用专属的沙箱数据目录**。由固件在首次加载时自动创建。**重装、升级应用、OTA 升级时，系统严格保留此目录！** 所有可变状态与配置必须且只能存放于此。 |
+
+---
+
+### 2.2 配置文件存储规范：彻底告别 NVS，全面拥抱文件化
+
+> [!IMPORTANT]
+> **【强制约束】动态应用严禁使用 NVS（Non-Volatile Storage）存储业务配置！**
+
+#### 为什么禁止使用 NVS？
+1. **容量极端受限**：固件划分给 NVS 的分区仅 16KB，需要支撑整机 Wi-Fi 配网、蓝牙、系统音量、网络对时等底层参数。任何应用滥用 NVS 都会造成全系统存储耗尽崩溃。
+2. **缺乏命名空间隔离**：NVS 键名限制在 15 字节以内，多应用极易产生键名冲突。
+3. **备份与迁移困难**：NVS 存在于内部 SPI Flash 中，无法通过简单的文件复制进行导出、备份或跨机迁移；设备执行重置（Erase Flash）时配置全丢。
+4. **Flash 寿命损耗**：高频更新 NVS 会加快内部 Flash 块擦写磨损。
+
+#### 新规范：基于 `data/` 的文件化配置
+- **配置主文件必须位于 `data/config.json`**：应用所有个性化设置（如墨水屏刷新偏好、主题、字号、接口地址、用户 Token、功能开关等）统一采用 JSON 文件保存在 `data/` 目录下。
+- **配置持久化保障**：
+  - 更新/重装应用时，工具仅上传或替换 `manifest.json`、`app.so` 和 `icon.png`，**`data/` 目录绝不触碰**。
+  - 用户配置永不丢失，完美实现无缝热升级。
+  - 用户或开发者可随时通过 USB 虚拟磁盘、取出 SD 卡或通过 HTTP `/fs/upload` / `/fs/delete` 直接查看和编辑 `config.json`。
+
+#### 推荐的 `data/config.json` 格式：
+```json
+{
+  "theme": "light",
+  "font_size": 24,
+  "auto_refresh_interval": 60,
+  "sound_effects": false
+}
+```
+
+---
+
+### 2.3 开发源码工程目录规范
+
+在开发仓库（如 `tools/hello_app` 或 `tools/<your_app>`）中，推荐遵循以下工程组织形式：
+
+```text
+tools/<your_app>/
+├── main/
+│   ├── <app>_main.c     # 应用主入口源码（包含 metalio_app_entry）
+│   └── ...              # 其它模块源码与私有头文件
+├── pkg/
+│   └── <app>.app/       # 打包输出产物（即最终推入 SD 卡的 Bundle）
+│       ├── manifest.json
+│       ├── icon.png
+│       └── app.so
+└── README.md            # 应用说明文档
+```
+使用统一构建工具 `./tools/package_app.sh tools/<your_app>` 即可一键完成编译与打包。
+
+---
+
+### 2.4 manifest.json 字段定义
 
 ```json
 {
@@ -77,14 +146,15 @@ flowchart TD
 }
 ```
 
-| 字段 | 类型 | 必填 | 说明 |
+| 字段 | 类型 | 必填 | 规范与说明 |
 |---|---|---|---|
-| `id` | string | 是 | 唯一英文标识（1~16字符，建议全小写）。用于桌面排重及 NVS 状态管理。 |
-| `name` | string | 是 | 桌面展示名称（支持 UTF-8 中文）。 |
-| `icon` | string | 否 | 图标相对路径，默认为 `"icon.png"`。 |
-| `executable`| string | 否 | 动态库文件名，默认为 `"app.so"`（或兼容旧版 `<id>.so`）。 |
-| `abi` | int | 是 | 必须等于固件当前 `METALIO_DYNAPP_ABI_VERSION`（当前为 `1`）。若固件大版本升级导致 ABI 变更，不匹配的应用在扫描阶段会被拦截并提示，避免发生崩溃。 |
-| `version` | string | 否 | 语义化版本号，如 `"1.0.0"`，在应用商店展示。 |
+| `id` | string | 是 | 唯一英文标识（1~12字符，建议全小写字母/数字，如 `hello`, `fangfang`, `reader`）。用于排重与系统内部状态索引。 |
+| `name` | string | 是 | 桌面展示名称（支持 UTF-8 中文，如 `"方方"`、`"动态时钟"`）。 |
+| `icon` | string | 否 | 图标相对路径，默认为 `"icon.png"`。禁止绝对路径或 `..` 穿越。 |
+| `executable`| string | 否 | 动态库文件名，默认为 `"app.so"`（或向下兼容旧版 `<id>.so`）。 |
+| `abi` | int | 是 | 必须等于固件当前 `METALIO_DYNAPP_ABI_VERSION`（当前值为 `1`）。若固件大版本升级导致 ABI 变更，不匹配的应用在扫描阶段会被拦截并提示，避免发生崩溃。 |
+| `version` | string | 否 | 语义化版本号，如 `"1.0.0"`，在应用商店或设置页展示。 |
+
 
 ---
 
@@ -117,16 +187,77 @@ const char* dynapp_get_bundle_path(void);
 int dynapp_is_path_allowed(const char* path, int write);
 ```
 
-#### 数据读写示例：
+#### 数据读写示例（基础文本与 cJSON 结构化配置）：
+
+**示例 1：读取与更新结构化配置 `data/config.json`（免 NVS）**
 ```c
-// 保存游戏配置或最高分
+#include <cJSON.h>
+
+typedef struct {
+    int font_size;
+    int auto_refresh;
+} app_config_t;
+
+// 读取配置（若文件不存在则赋默认值）
+void app_load_config(app_config_t *cfg) {
+    cfg->font_size = 24;
+    cfg->auto_refresh = 60;
+
+    FILE *fp = (FILE *)dynapp_fopen_data("config.json", "r");
+    if (!fp) return;
+
+    fseek(fp, 0, SEEK_END);
+    long sz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (sz <= 0 || sz > 16384) { fclose(fp); return; }
+
+    char *buf = (char *)malloc(sz + 1);
+    fread(buf, 1, sz, fp);
+    buf[sz] = '\0';
+    fclose(fp);
+
+    cJSON *root = cJSON_Parse(buf);
+    free(buf);
+    if (!root) return;
+
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(root, "font_size");
+    if (cJSON_IsNumber(item)) cfg->font_size = item->valueint;
+
+    item = cJSON_GetObjectItemCaseSensitive(root, "auto_refresh");
+    if (cJSON_IsNumber(item)) cfg->auto_refresh = item->valueint;
+
+    cJSON_Delete(root);
+}
+
+// 保存配置
+void app_save_config(const app_config_t *cfg) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "font_size", cfg->font_size);
+    cJSON_AddNumberToObject(root, "auto_refresh", cfg->auto_refresh);
+
+    char *json_str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json_str) return;
+
+    FILE *fp = (FILE *)dynapp_fopen_data("config.json", "w");
+    if (fp) {
+        fputs(json_str, fp);
+        fclose(fp);
+    }
+    free(json_str);
+}
+```
+
+**示例 2：纯文本简单读写（如游戏最高分、计数器）**
+```c
+// 保存最高分
 FILE *fp = (FILE *)dynapp_fopen_data("hiscore.txt", "w");
 if (fp != NULL) {
     fprintf(fp, "%d\n", high_score);
     fclose(fp);
 }
 
-// 读取游戏配置
+// 读取最高分
 FILE *fp = (FILE *)dynapp_fopen_data("hiscore.txt", "r");
 if (fp != NULL) {
     fscanf(fp, "%d", &high_score);
