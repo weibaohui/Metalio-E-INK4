@@ -1,0 +1,8 @@
+{
+  "id": "game2048",
+  "name": "2048",
+  "icon": "icon.png",
+  "executable": "lib/app.so",
+  "abi": 1,
+  "version": "1.0.0"
+}

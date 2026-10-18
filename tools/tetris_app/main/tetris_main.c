@@ -828,8 +828,9 @@ static void* fangfang_create(void) {
 // 固件 dlsym("metalio_app_entry") 的入口：填 desc 后返回（无副作用）。
 void metalio_app_entry(metalio_app_desc_t* out) {
     out->abi_version = METALIO_DYNAPP_ABI_VERSION;
-    out->id = "fangfang";
-    out->name = "方方";
+    out->id = "tetris";
+    out->name = "方块战争";
     out->icon = "icon.png";
     out->create = fangfang_create;
 }
+

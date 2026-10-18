@@ -1,6 +1,6 @@
 {
-  "id": "fangfang",
-  "name": "方方",
+  "id": "tetris",
+  "name": "方块战争",
   "icon": "icon.png",
   "executable": "lib/app.so",
   "abi": 1,
