@@ -15,8 +15,6 @@
 #include "radio_screen/radio_screen.h"
 #include "settings_screen/settings_screen.h"
 #include "system_info_screen/system_info_screen.h"
-#include "tetris_screen/tetris_screen.h"
-#include "game_2048_screen/game_2048_screen.h"
 #include "time_sync_screen/time_sync_screen.h"
 
 #include "services/ai_chat/ai_chat_service.h"
@@ -62,8 +60,6 @@ const char *AppNameUpgrade() { return "系统升级"; }
 const char *AppNameWallpaper() { return "壁纸"; }
 const char *AppNameWifiFile() { return "WiFi 文件"; }
 const char *AppNameStore() { return "应用商店"; }
-const char *AppNameTetris() { return "方块战争"; }
-const char *AppName2048() { return "2048"; }
 
 } // namespace
 
@@ -102,10 +98,6 @@ void AppManager::RegisterDefaultApps() {
         "transfer", "A:ic_app_home_cloud.spng", AppNameTransfer, WifiTransferScreen::Create, BookRegisterMcpTools, false, nullptr, OnTransferPause, OnTransferPause));
     RegisterApp(std::make_shared<StandardAppModule>(
         "wallpaper", "A:ic_app_home_wallpaper.spng", AppNameWallpaper, WallpaperScreen::Create, nullptr, false));
-    RegisterApp(std::make_shared<StandardAppModule>(
-        "tetris", "A:ic_app_home_tetris.spng", AppNameTetris, TetrisScreen::Create, nullptr, false));
-    RegisterApp(std::make_shared<StandardAppModule>(
-        "game2048", "A:ic_app_home_2048.spng", AppName2048, Game2048Screen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
         "wififile", "A:ic_app_home_cloud.spng", AppNameWifiFile, WifiFileScreen::Create, nullptr, false, nullptr, OnWifiFilePause, OnWifiFilePause));
     RegisterApp(std::make_shared<StandardAppModule>(
