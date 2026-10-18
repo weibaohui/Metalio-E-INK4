@@ -115,6 +115,18 @@ if [ -f "$APP_DIR/icon.png" ]; then
     cp "$APP_DIR/icon.png" "$BUNDLE_DIR/icon.png"
 fi
 
+# 复制说明文档 README.md（若存在）
+if [ -f "$APP_DIR/README.md" ]; then
+    cp "$APP_DIR/README.md" "$BUNDLE_DIR/README.md"
+fi
+
+# 复制示例配置文件（如 stations.example.json 等）
+for ex in "$APP_DIR"/*.example.*; do
+    if [ -f "$ex" ]; then
+        cp "$ex" "$BUNDLE_DIR/"
+    fi
+done
+
 echo "==> Bundle 准备就绪: $BUNDLE_DIR"
 find "$BUNDLE_DIR" -type f
 
@@ -147,6 +159,29 @@ if [ -n "$UPLOAD_IP" ]; then
             --data-binary "@$BUNDLE_DIR/icon.png"
         echo ""
     fi
+
+    # 上传 README.md（若存在）
+    if [ -f "$BUNDLE_DIR/README.md" ]; then
+        echo "-> 上传 README.md..."
+        curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app" \
+            -H "X-Filename: README.md" \
+            "${AUTH_HEADER[@]}" \
+            --data-binary "@$BUNDLE_DIR/README.md"
+        echo ""
+    fi
+
+    # 上传示例文件（若存在）
+    for ex in "$BUNDLE_DIR"/*.example.*; do
+        if [ -f "$ex" ]; then
+            ex_name="$(basename "$ex")"
+            echo "-> 上传 $ex_name..."
+            curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app" \
+                -H "X-Filename: $ex_name" \
+                "${AUTH_HEADER[@]}" \
+                --data-binary "@$ex"
+            echo ""
+        fi
+    done
 
     # 上传 lib/app.so
     echo "-> 上传 lib/app.so..."
