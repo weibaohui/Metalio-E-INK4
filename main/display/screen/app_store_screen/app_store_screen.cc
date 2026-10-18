@@ -154,7 +154,7 @@ lv_obj_t* AppStoreScreen::Create() {
     cfg.title = "应用商店";
     cfg.show_header = true;
     cfg.show_status_bar = true;
-    cfg.show_back_btn = true;
+    cfg.show_back_btn = false;
     cfg.scrollable = true;
     cfg.pad_h = 16;
     cfg.pad_v = 10;

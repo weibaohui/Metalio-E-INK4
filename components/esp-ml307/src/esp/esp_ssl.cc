@@ -68,9 +68,8 @@ void EspSsl::Disconnect() {
     
     // Close socket if it is open
     if (tls_client_ != nullptr) {
-        int sockfd;
-        ESP_ERROR_CHECK(esp_tls_get_conn_sockfd(tls_client_, &sockfd));
-        if (sockfd >= 0) {
+        int sockfd = -1;
+        if (esp_tls_get_conn_sockfd(tls_client_, &sockfd) == ESP_OK && sockfd >= 0) {
             close(sockfd);
         }
     

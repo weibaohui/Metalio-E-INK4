@@ -16,13 +16,21 @@
 #include <esp_http_server.h>
 #include <esp_log.h>
 #include <esp_random.h>
+#include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
 #include <cJSON.h>
 
+#include <esp_ota_ops.h>
+
 #include "application.h"
+#include "boards/common/power_policy/power_policy.h"
 #include "core/app_manager.h"
+#include "display/lv_adapter_display.h"
+#include "display/screen/boot_key_handler.h"
+#include "display/screen/screen_common.h"
+#include "display/screen/vk_key_handler.h"
 #include "display/screen/home_screen/home_screen.h"
 #include "mcp_server.h"
 #include "sd_paths.h"
@@ -483,6 +491,374 @@ esp_err_t AppInstallHandler(httpd_req_t* req) {
     return ESP_OK;
 }
 
+esp_err_t SystemRebootHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "Authorization bearer token required");
+        return ESP_OK;
+    }
+
+    SetCommonHeaders(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Rebooting device...\"}");
+
+    // 独立 FreeRTOS 任务重启，彻底绕过 main event loop 和 LVGL 锁，即便 UI 假死也能正常重启
+    xTaskCreate([](void*) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
+        vTaskDelete(nullptr);
+    }, "system_reboot", 2048, nullptr, 5, nullptr);
+
+    return ESP_OK;
+}
+
+esp_err_t SystemPowerOffHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "Authorization bearer token required");
+        return ESP_OK;
+    }
+
+    SetCommonHeaders(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Powering off device...\"}");
+
+    xTaskCreate([](void*) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        PowerPolicy::GetInstance().RequestPowerOff();
+        vTaskDelete(nullptr);
+    }, "pwr_off", 2048, nullptr, 5, nullptr);
+    return ESP_OK;
+}
+
+esp_err_t SystemSleepHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "Authorization bearer token required");
+        return ESP_OK;
+    }
+
+    PowerKey_OnClick();
+    SetCommonHeaders(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Standby triggered\"}");
+    return ESP_OK;
+}
+
+esp_err_t SystemOtaHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "Authorization bearer token required");
+        return ESP_OK;
+    }
+
+    if (req->content_len <= 0) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"success\":false,\"error\":\"Empty OTA body\"}");
+        return ESP_OK;
+    }
+
+    const esp_partition_t* update_part = esp_ota_get_next_update_partition(nullptr);
+    if (update_part == nullptr) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "500 Internal Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"success\":false,\"error\":\"No OTA partition available\"}");
+        return ESP_OK;
+    }
+
+    esp_ota_handle_t ota_handle = 0;
+    esp_err_t err = esp_ota_begin(update_part, req->content_len, &ota_handle);
+    if (err != ESP_OK) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "500 Internal Error");
+        httpd_resp_set_type(req, "application/json");
+        char msg[128];
+        snprintf(msg, sizeof(msg), "{\"success\":false,\"error\":\"esp_ota_begin failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_sendstr(req, msg);
+        return ESP_OK;
+    }
+
+    constexpr size_t kChunkSize = 8192;
+    std::unique_ptr<uint8_t[]> buf(new (std::nothrow) uint8_t[kChunkSize]);
+    if (!buf) {
+        esp_ota_abort(ota_handle);
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "500 Internal Error");
+        httpd_resp_sendstr(req, "{\"success\":false,\"error\":\"Out of memory\"}");
+        return ESP_OK;
+    }
+
+    size_t total_recv = 0;
+    int remaining = static_cast<int>(req->content_len);
+    bool ok = true;
+    while (remaining > 0) {
+        int to_read = (remaining < static_cast<int>(kChunkSize)) ? remaining : static_cast<int>(kChunkSize);
+        int r = httpd_req_recv(req, reinterpret_cast<char*>(buf.get()), to_read);
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            ok = false;
+            break;
+        }
+        err = esp_ota_write(ota_handle, buf.get(), r);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
+            ok = false;
+            break;
+        }
+        total_recv += r;
+        remaining -= r;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    if (!ok || total_recv != static_cast<size_t>(req->content_len)) {
+        esp_ota_abort(ota_handle);
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "500 Internal Error");
+        httpd_resp_sendstr(req, "{\"success\":false,\"error\":\"OTA upload interrupted\"}");
+        return ESP_OK;
+    }
+
+    err = esp_ota_end(ota_handle);
+    if (err != ESP_OK) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "500 Internal Error");
+        char msg[128];
+        snprintf(msg, sizeof(msg), "{\"success\":false,\"error\":\"esp_ota_end failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_sendstr(req, msg);
+        return ESP_OK;
+    }
+
+    err = esp_ota_set_boot_partition(update_part);
+    if (err != ESP_OK) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "500 Internal Error");
+        char msg[128];
+        snprintf(msg, sizeof(msg), "{\"success\":false,\"error\":\"esp_ota_set_boot_partition failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_sendstr(req, msg);
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Silent OTA successful! Boot partition set to %s, rebooting in 1s...", update_part->label);
+    SetCommonHeaders(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Firmware flashed successfully, rebooting in 1s...\"}");
+
+    xTaskCreate([](void*) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        esp_restart();
+        vTaskDelete(nullptr);
+    }, "ota_reboot", 2048, nullptr, 5, nullptr);
+
+    return ESP_OK;
+}
+
+esp_err_t ScreenScreenshotHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "Authorization bearer token required");
+        return ESP_OK;
+    }
+
+    auto* disp = LVAdapterDisplay::Instance();
+    if (disp == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Display instance unavailable");
+        return ESP_FAIL;
+    }
+
+    std::vector<uint8_t> bmp;
+    if (!disp->GetScreenshotBmp(bmp) || bmp.empty()) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to capture screenshot");
+        return ESP_FAIL;
+    }
+
+    SetCommonHeaders(req);
+    httpd_resp_set_type(req, "image/bmp");
+    httpd_resp_send(req, reinterpret_cast<const char*>(bmp.data()), bmp.size());
+    return ESP_OK;
+}
+
+esp_err_t ScreenRefreshHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        return ESP_OK;
+    }
+    if (auto* disp = LVAdapterDisplay::Instance()) {
+        disp->RequestNextFullRefresh();
+    }
+    SetCommonHeaders(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Full e-ink refresh requested\"}");
+    return ESP_OK;
+}
+
+esp_err_t ScreenHomeHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        return ESP_OK;
+    }
+    ScreenRequestHome();
+    SetCommonHeaders(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Navigated to home screen\"}");
+    return ESP_OK;
+}
+
+esp_err_t AppLaunchHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        return ESP_OK;
+    }
+    char query[64] = {};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char val[32] = {};
+        if (httpd_query_key_value(query, "id", val, sizeof(val)) == ESP_OK) {
+            std::string id = val;
+            ScreenLvAsync([](void* p) {
+                auto* s = static_cast<std::string*>(p);
+                AppManager::GetInstance().LaunchApp(s->c_str());
+                delete s;
+            }, new std::string(id));
+            SetCommonHeaders(req);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"App launch initiated\"}");
+            return ESP_OK;
+        }
+    }
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing ?id=<app_id>");
+    return ESP_FAIL;
+}
+
+esp_err_t InputKeyHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        return ESP_OK;
+    }
+    char query[64] = {};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char val[32] = {};
+        if (httpd_query_key_value(query, "key", val, sizeof(val)) == ESP_OK) {
+            std::string k = val;
+            ScreenLvAsync([](void* p) {
+                auto* s = static_cast<std::string*>(p);
+                VkKey_Dispatch(s->c_str());
+                delete s;
+            }, new std::string(k));
+            SetCommonHeaders(req);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Key dispatched\"}");
+            return ESP_OK;
+        }
+    }
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing ?key=<key_name>");
+    return ESP_FAIL;
+}
+
+esp_err_t FsListHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        return ESP_OK;
+    }
+    char query[128] = {};
+    char rel_path[128] = {};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        httpd_query_key_value(query, "path", rel_path, sizeof(rel_path));
+    }
+    std::string full_path = SD_APP_ROOT;
+    if (rel_path[0] != '\0' && FsRelPathSafe(rel_path)) {
+        full_path += "/" + std::string(rel_path);
+    }
+    DIR* dir = opendir(full_path.c_str());
+    if (dir == nullptr) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Directory not found");
+        return ESP_FAIL;
+    }
+    cJSON* root = cJSON_CreateArray();
+    struct dirent* de = nullptr;
+    while ((de = readdir(dir)) != nullptr) {
+        if (de->d_name[0] == '.') continue;
+        cJSON* item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "name", de->d_name);
+        std::string child_path = full_path + "/" + de->d_name;
+        struct stat st = {};
+        if (stat(child_path.c_str(), &st) == 0) {
+            cJSON_AddBoolToObject(item, "is_dir", S_ISDIR(st.st_mode));
+            cJSON_AddNumberToObject(item, "size", S_ISDIR(st.st_mode) ? 0 : st.st_size);
+        }
+        cJSON_AddItemToArray(root, item);
+    }
+    closedir(dir);
+    char* json_str = cJSON_PrintUnformatted(root);
+    SetCommonHeaders(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_str);
+    cJSON_free(json_str);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+esp_err_t FsDownloadHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        return ESP_OK;
+    }
+    char query[128] = {};
+    char rel_path[128] = {};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "path", rel_path, sizeof(rel_path)) != ESP_OK ||
+        !FsRelPathSafe(rel_path)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid or missing path");
+        return ESP_FAIL;
+    }
+    std::string full_path = std::string(SD_APP_ROOT) + "/" + rel_path;
+    FILE* fp = fopen(full_path.c_str(), "rb");
+    if (fp == nullptr) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File not found");
+        return ESP_FAIL;
+    }
+    SetCommonHeaders(req);
+    httpd_resp_set_type(req, "application/octet-stream");
+    char chunk[4096];
+    size_t r = 0;
+    while ((r = fread(chunk, 1, sizeof(chunk), fp)) > 0) {
+        if (httpd_resp_send_chunk(req, chunk, r) != ESP_OK) {
+            break;
+        }
+    }
+    fclose(fp);
+    httpd_resp_send_chunk(req, nullptr, 0);
+    return ESP_OK;
+}
+
 esp_err_t PostHandler(httpd_req_t* req) {
     // PIN 即 bearer token(6 位数字),从 RAM 缓存读(避免每次请求都开 NVS)。
     const std::string token = LocalMcpServer::GetInstance().GetPin();
@@ -612,7 +988,7 @@ void LocalMcpServer::Start() {
     config.server_port = 8080;
     config.ctrl_port = 32769;
     config.stack_size = 12288;
-    config.max_uri_handlers = 8;
+    config.max_uri_handlers = 32;
     config.lru_purge_enable = true;
     config.recv_wait_timeout = 10;
     config.send_wait_timeout = 10;
@@ -703,6 +1079,113 @@ void LocalMcpServer::Start() {
     if (httpd_register_uri_handler(server, &app_upload_uri) != ESP_OK) {
         ESP_LOGE(TAG, "register /app/upload failed");
     }
+
+    // 系统远程重启端点：curl POST /system/reboot 或 /reboot 独立任务重启，彻底绕过 main 循环
+    httpd_uri_t system_reboot_uri = {};
+    system_reboot_uri.uri = "/system/reboot";
+    system_reboot_uri.method = HTTP_POST;
+    system_reboot_uri.handler = SystemRebootHandler;
+    system_reboot_uri.user_ctx = nullptr;
+    if (httpd_register_uri_handler(server, &system_reboot_uri) != ESP_OK) {
+        ESP_LOGE(TAG, "register /system/reboot failed");
+    }
+
+    httpd_uri_t reboot_uri = {};
+    reboot_uri.uri = "/reboot";
+    reboot_uri.method = HTTP_POST;
+    reboot_uri.handler = SystemRebootHandler;
+    reboot_uri.user_ctx = nullptr;
+    if (httpd_register_uri_handler(server, &reboot_uri) != ESP_OK) {
+        ESP_LOGE(TAG, "register /reboot failed");
+    }
+
+    // 关机端点
+    httpd_uri_t system_poweroff_uri = {};
+    system_poweroff_uri.uri = "/system/poweroff";
+    system_poweroff_uri.method = HTTP_POST;
+    system_poweroff_uri.handler = SystemPowerOffHandler;
+    httpd_register_uri_handler(server, &system_poweroff_uri);
+
+    httpd_uri_t poweroff_uri = {};
+    poweroff_uri.uri = "/poweroff";
+    poweroff_uri.method = HTTP_POST;
+    poweroff_uri.handler = SystemPowerOffHandler;
+    httpd_register_uri_handler(server, &poweroff_uri);
+
+    // 待机端点
+    httpd_uri_t system_sleep_uri = {};
+    system_sleep_uri.uri = "/system/sleep";
+    system_sleep_uri.method = HTTP_POST;
+    system_sleep_uri.handler = SystemSleepHandler;
+    httpd_register_uri_handler(server, &system_sleep_uri);
+
+    httpd_uri_t sleep_uri = {};
+    sleep_uri.uri = "/sleep";
+    sleep_uri.method = HTTP_POST;
+    sleep_uri.handler = SystemSleepHandler;
+    httpd_register_uri_handler(server, &sleep_uri);
+
+    // 一键静默远程 OTA 升级端点
+    httpd_uri_t system_ota_uri = {};
+    system_ota_uri.uri = "/system/ota";
+    system_ota_uri.method = HTTP_POST;
+    system_ota_uri.handler = SystemOtaHandler;
+    httpd_register_uri_handler(server, &system_ota_uri);
+
+    // 屏幕截屏回传端点 (BMP 格式，直接支持图像工具解析)
+    httpd_uri_t screenshot_uri = {};
+    screenshot_uri.uri = "/screen/screenshot";
+    screenshot_uri.method = HTTP_GET;
+    screenshot_uri.handler = ScreenScreenshotHandler;
+    httpd_register_uri_handler(server, &screenshot_uri);
+
+    httpd_uri_t capture_bmp_uri = {};
+    capture_bmp_uri.uri = "/screen/capture.bmp";
+    capture_bmp_uri.method = HTTP_GET;
+    capture_bmp_uri.handler = ScreenScreenshotHandler;
+    httpd_register_uri_handler(server, &capture_bmp_uri);
+
+    // 墨水屏全刷端点
+    httpd_uri_t screen_refresh_uri = {};
+    screen_refresh_uri.uri = "/screen/refresh";
+    screen_refresh_uri.method = HTTP_POST;
+    screen_refresh_uri.handler = ScreenRefreshHandler;
+    httpd_register_uri_handler(server, &screen_refresh_uri);
+
+    // 返回桌面端点
+    httpd_uri_t screen_home_uri = {};
+    screen_home_uri.uri = "/screen/home";
+    screen_home_uri.method = HTTP_POST;
+    screen_home_uri.handler = ScreenHomeHandler;
+    httpd_register_uri_handler(server, &screen_home_uri);
+
+    // 应用启动端点
+    httpd_uri_t app_launch_uri = {};
+    app_launch_uri.uri = "/app/launch";
+    app_launch_uri.method = HTTP_POST;
+    app_launch_uri.handler = AppLaunchHandler;
+    httpd_register_uri_handler(server, &app_launch_uri);
+
+    // 虚拟按键注入端点
+    httpd_uri_t input_key_uri = {};
+    input_key_uri.uri = "/input/key";
+    input_key_uri.method = HTTP_POST;
+    input_key_uri.handler = InputKeyHandler;
+    httpd_register_uri_handler(server, &input_key_uri);
+
+    // SD 卡文件目录浏览端点
+    httpd_uri_t fs_list_uri = {};
+    fs_list_uri.uri = "/fs/list";
+    fs_list_uri.method = HTTP_GET;
+    fs_list_uri.handler = FsListHandler;
+    httpd_register_uri_handler(server, &fs_list_uri);
+
+    // SD 卡文件直接下载读取端点
+    httpd_uri_t fs_download_uri = {};
+    fs_download_uri.uri = "/fs/download";
+    fs_download_uri.method = HTTP_GET;
+    fs_download_uri.handler = FsDownloadHandler;
+    httpd_register_uri_handler(server, &fs_download_uri);
 
     {
         std::lock_guard<std::mutex> lock(pin_mutex_);

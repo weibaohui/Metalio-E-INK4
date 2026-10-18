@@ -8,6 +8,7 @@
 #include "ai_voice_chat_screen/ai_voice_chat_screen.h"
 #include "app_store_screen/app_store_screen.h"
 #include "book_screen/book_screen.h"
+#include "power_screen/power_screen.h"
 #include "settings_screen/settings_screen.h"
 
 #include "services/ai_chat/ai_chat_service.h"
@@ -30,6 +31,7 @@ const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
 const char *AppNameAiChat() { return "AI 对话"; }
 const char *AppNameUpgrade() { return "系统升级"; }
 const char *AppNameStore() { return "应用商店"; }
+const char *AppNamePower() { return "电源管理"; }
 
 } // namespace
 
@@ -49,7 +51,7 @@ void AppManager::RegisterDefaultApps() {
     RadioRegisterMcpTools();
     BookRegisterMcpTools();
 
-    // 注册内置核心系统应用 (只保留 set, store, upgrade, book, aichat)
+    // 注册内置核心系统应用 (只保留 set, power, store, upgrade, book, aichat)
     RegisterApp(std::make_shared<StandardAppModule>(
         "book", "A:ic_app_home_book.spng", AppNameBook, BookScreen::Create, nullptr, false,
         BookScreen::OnResumeFromStandby, BookScreen::OnEnterStandby, nullptr));
@@ -59,6 +61,8 @@ void AppManager::RegisterDefaultApps() {
         "store", "A:ic_app_home_cloud.spng", AppNameStore, AppStoreScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
         "upgrade", "A:ic_app_home_setting.spng", AppNameUpgrade, SystemUpgradeScreen::Create, nullptr, false));
+    RegisterApp(std::make_shared<StandardAppModule>(
+        "power", "A:ic_app_home_setting.spng", AppNamePower, PowerScreen::Create, nullptr, true));
     RegisterApp(std::make_shared<StandardAppModule>(
         "set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create, nullptr, true));
 }
@@ -70,6 +74,10 @@ void AppManager::RegisterApp(std::shared_ptr<AppModule> module) {
     }
     int existing = FindIndexById(module->GetId());
     if (existing >= 0) {
+        if (modules_[existing]->IsMandatory()) {
+            ESP_LOGW(TAG, "cannot overwrite mandatory built-in app: %s", module->GetId());
+            return;
+        }
         modules_[existing] = module;
         ESP_LOGI(TAG, "updated app module: %s", module->GetId());
     } else {

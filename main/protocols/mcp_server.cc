@@ -9,9 +9,18 @@
 #include <algorithm>
 #include <cstring>
 #include <esp_pthread.h>
+#include <esp_system.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "application.h"
+#include "boards/common/power_policy/power_policy.h"
+#include "core/app_manager.h"
 #include "display.h"
+#include "display/lv_adapter_display.h"
+#include "display/screen/boot_key_handler.h"
+#include "display/screen/screen_common.h"
+#include "display/screen/vk_key_handler.h"
 #include "board.h"
 #include "settings.h"
 
@@ -97,6 +106,52 @@ void McpServer::AddCommonTools() {
         });
 
 
+    AddTool("self.reboot", "Reboot the device immediately. Safe to call even during UI hangs.",
+        PropertyList(),
+        [](const PropertyList& properties) -> ReturnValue {
+            return true;
+        });
+
+    AddTool("self.power_off", "Shutdown and power off the device completely.",
+        PropertyList(),
+        [](const PropertyList& properties) -> ReturnValue {
+            return true;
+        });
+
+    AddTool("self.sleep", "Put the device into standby / display sleep.",
+        PropertyList(),
+        [](const PropertyList& properties) -> ReturnValue {
+            return true;
+        });
+
+    AddTool("self.screen.refresh", "Force a full EPD e-ink screen refresh to clear ghosting.",
+        PropertyList(),
+        [](const PropertyList& properties) -> ReturnValue {
+            return true;
+        });
+
+    AddTool("self.screen.go_home", "Navigate back to the home desktop screen.",
+        PropertyList(),
+        [](const PropertyList& properties) -> ReturnValue {
+            return true;
+        });
+
+    AddTool("self.apps.launch", "Launch an application on screen by its id (e.g. power, radio, book, store, upgrade, set).",
+        PropertyList({
+            Property("id", kPropertyTypeString, "Application id")
+        }),
+        [](const PropertyList& properties) -> ReturnValue {
+            return true;
+        });
+
+    AddTool("self.input.key", "Dispatch a virtual hardware key (e.g. home, prev, next, boot).",
+        PropertyList({
+            Property("key", kPropertyTypeString, "Virtual key name")
+        }),
+        [](const PropertyList& properties) -> ReturnValue {
+            return true;
+        });
+
     // Restore the original tools list to the end of the tools list
     tools_.insert(tools_.end(), original_tools.begin(), original_tools.end());
 }
@@ -109,19 +164,6 @@ void McpServer::AddUserOnlyTools() {
         [this](const PropertyList& properties) -> ReturnValue {
             auto& board = Board::GetInstance();
             return board.GetSystemInfoJson();
-        });
-
-    AddUserOnlyTool("self.reboot", "Reboot the system",
-        PropertyList(),
-        [this](const PropertyList& properties) -> ReturnValue {
-            auto& app = Application::GetInstance();
-            app.Schedule([&app]() {
-                ESP_LOGW(TAG, "User requested reboot");
-                vTaskDelay(pdMS_TO_TICKS(1000));
-
-                app.Reboot();
-            });
-            return true;
         });
 
     // Firmware upgrade
@@ -395,6 +437,79 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
         ESP_LOGE(TAG, "tools/call: Unknown tool: %s", tool_name.c_str());
         ReplyError(id, "Unknown tool: " + tool_name, response_sink);
         return;
+    }
+
+    if (tool_name == "self.reboot") {
+        ESP_LOGW(TAG, "tools/call: self.reboot invoked directly, restarting device");
+        ReplyResult(id, "{\"content\":[{\"type\":\"text\",\"text\":\"Rebooting device...\"}]}", response_sink);
+        xTaskCreate([](void*) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            esp_restart();
+            vTaskDelete(nullptr);
+        }, "mcp_reboot", 2048, nullptr, 5, nullptr);
+        return;
+    }
+
+    if (tool_name == "self.power_off") {
+        ESP_LOGW(TAG, "tools/call: self.power_off invoked, shutting down");
+        ReplyResult(id, "{\"content\":[{\"type\":\"text\",\"text\":\"Powering off device...\"}]}", response_sink);
+        xTaskCreate([](void*) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            PowerPolicy::GetInstance().RequestPowerOff();
+            vTaskDelete(nullptr);
+        }, "mcp_pwr_off", 2048, nullptr, 5, nullptr);
+        return;
+    }
+
+    if (tool_name == "self.sleep") {
+        ESP_LOGI(TAG, "tools/call: self.sleep invoked");
+        PowerKey_OnClick();
+        ReplyResult(id, "{\"content\":[{\"type\":\"text\",\"text\":\"Standby triggered\"}]}", response_sink);
+        return;
+    }
+
+    if (tool_name == "self.screen.refresh") {
+        ESP_LOGI(TAG, "tools/call: self.screen.refresh invoked");
+        if (auto* disp = LVAdapterDisplay::Instance()) {
+            disp->RequestNextFullRefresh();
+        }
+        ReplyResult(id, "{\"content\":[{\"type\":\"text\",\"text\":\"Full refresh requested\"}]}", response_sink);
+        return;
+    }
+
+    if (tool_name == "self.screen.go_home") {
+        ESP_LOGI(TAG, "tools/call: self.screen.go_home invoked");
+        ScreenRequestHome();
+        ReplyResult(id, "{\"content\":[{\"type\":\"text\",\"text\":\"Navigated to home screen\"}]}", response_sink);
+        return;
+    }
+
+    if (tool_name == "self.apps.launch") {
+        auto val = cJSON_GetObjectItem(tool_arguments, "id");
+        if (cJSON_IsString(val)) {
+            std::string app_id = val->valuestring;
+            ScreenLvAsync([](void* p) {
+                auto* s = static_cast<std::string*>(p);
+                AppManager::GetInstance().LaunchApp(s->c_str());
+                delete s;
+            }, new std::string(app_id));
+            ReplyResult(id, "{\"content\":[{\"type\":\"text\",\"text\":\"App launched\"}]}", response_sink);
+            return;
+        }
+    }
+
+    if (tool_name == "self.input.key") {
+        auto val = cJSON_GetObjectItem(tool_arguments, "key");
+        if (cJSON_IsString(val)) {
+            std::string key = val->valuestring;
+            ScreenLvAsync([](void* p) {
+                auto* s = static_cast<std::string*>(p);
+                VkKey_Dispatch(s->c_str());
+                delete s;
+            }, new std::string(key));
+            ReplyResult(id, "{\"content\":[{\"type\":\"text\",\"text\":\"Key dispatched\"}]}", response_sink);
+            return;
+        }
     }
 
     PropertyList arguments = (*tool_iter)->properties();

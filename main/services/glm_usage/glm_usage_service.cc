@@ -168,6 +168,7 @@ bool HttpRequest(const std::string& url,
     api::HttpFetchOptions opts;
     opts.timeout_ms = kHttpTimeoutMs;
     opts.send_common_headers = false;
+    opts.tls_min_largest_block = 16 * 1024;
     api::HeaderList all_headers;
     all_headers.emplace_back("Accept", "application/json");
     for (const auto& header : headers) {
@@ -437,6 +438,9 @@ void GlmUsageService::FetchOnce() {
         context.updated_at = time(nullptr);
         StoreContextResult(i, context);
         contexts[i] = context;
+        if (i + 1 < contexts.size()) {
+            vTaskDelay(pdMS_TO_TICKS(250));
+        }
     }
     StoreGlobalResult();
     PersistContexts();
@@ -561,6 +565,7 @@ bool GlmUsageService::FetchContext(GlmUsageContext& context, std::string& error)
     int five = -1;
     int week = -1;
     bool got = false;
+    vTaskDelay(pdMS_TO_TICKS(250));
     for (int attempt = 0; attempt < 4 && !got; ++attempt) {
         HttpResult reset_result;
         std::vector<std::pair<std::string, std::string>> reset_headers;

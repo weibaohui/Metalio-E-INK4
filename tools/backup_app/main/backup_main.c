@@ -46,7 +46,7 @@ static void close_modal(void) {
 }
 
 static int backup_on_vk_key(const char* key) {
-    if (key != NULL && (strcmp(key, "esc") == 0 || strcmp(key, "back") == 0)) {
+    if (key != NULL && (strcmp(key, "esc") == 0 || strcmp(key, "back") == 0 || strcmp(key, "vk_home") == 0 || strcmp(key, "home") == 0)) {
         if (s_modal != NULL) {
             close_modal();
             return 1;
@@ -424,38 +424,11 @@ static void *backup_create(void) {
 
     dynapp_vk_attach(scr, "backup", backup_create, backup_on_vk_key);
 
-    // 顶部 Header
-    lv_obj_t *header = lv_obj_create(scr);
-    lv_obj_remove_style_all(header);
-    lv_obj_set_size(header, 480, 56);
-    lv_obj_set_pos(header, 0, 36);
-
-    lv_obj_t *back_btn = lv_obj_create(header);
-    lv_obj_remove_style_all(back_btn);
-    lv_obj_set_size(back_btn, 64, 48);
-    lv_obj_set_pos(back_btn, 12, 4);
-    lv_obj_add_flag(back_btn, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(back_btn, on_back_clicked, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *back_lbl = lv_label_create(back_btn);
-    lv_label_set_text(back_lbl, "‹ 返回");
-    const lv_font_t *f22 = get_font(22, 2);
-    if (f22) lv_obj_set_style_text_font(back_lbl, f22, 0);
-    lv_obj_set_style_text_color(back_lbl, lv_color_black(), 0);
-    lv_obj_center(back_lbl);
-
-    lv_obj_t *title_lbl = lv_label_create(header);
-    lv_label_set_text(title_lbl, "备份与恢复");
-    const lv_font_t *f26 = get_font(26, 2);
-    if (f26) lv_obj_set_style_text_font(title_lbl, f26, 0);
-    lv_obj_set_style_text_color(title_lbl, lv_color_black(), 0);
-    lv_obj_align(title_lbl, LV_ALIGN_CENTER, 0, 0);
-
-    // 主内容区
+    // 主内容区 (无返回顶栏，由底部 vk_home 键统一控制返回)
     lv_obj_t *body = lv_obj_create(scr);
     lv_obj_remove_style_all(body);
-    lv_obj_set_size(body, 456, 696);
-    lv_obj_set_pos(body, 12, 96);
+    lv_obj_set_size(body, 456, 750);
+    lv_obj_set_pos(body, 12, 42);
     lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(body, 10, 0);
     lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
