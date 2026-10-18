@@ -503,6 +503,15 @@ void TouchFeedHandleSample(uint8_t count, int x, int y) {
     }
 }
 
+struct TouchInjectRequest {
+    int x = 0;
+    int y = 0;
+    int remaining_ticks = 0;
+    bool active = false;
+};
+static TouchInjectRequest s_touch_inject{};
+static portMUX_TYPE s_touch_inject_mux = portMUX_INITIALIZER_UNLOCKED;
+
 void TouchFeedTask(void* arg) {
     auto* context = static_cast<TouchFeedContext*>(arg);
     auto* tp = context->touch;
@@ -511,6 +520,8 @@ void TouchFeedTask(void* arg) {
              kTouchFeedPeriodMs);
     while (s_touch_feed_run) {
         uint8_t count = 0;
+        int x = 0;
+        int y = 0;
         // 待机 LP 已写 A5 深睡：勿再 I2C 读（CST816S 不应答 → panel_io 刷 E 级日志）
         if (tp != nullptr && !PowerPolicy::GetInstance().IsTouchAsleep()) {
             const esp_err_t err = context->poll(tp, pts, &count, 1);
@@ -518,8 +529,25 @@ void TouchFeedTask(void* arg) {
                 count = 0;
             }
         }
-        const int x = count > 0 ? static_cast<int>(pts[0].x) : 0;
-        const int y = count > 0 ? static_cast<int>(pts[0].y) : 0;
+        if (count > 0) {
+            x = static_cast<int>(pts[0].x);
+            y = static_cast<int>(pts[0].y);
+        } else {
+            // 无物理触摸时，检查并执行虚拟触控注入
+            portENTER_CRITICAL(&s_touch_inject_mux);
+            if (s_touch_inject.active) {
+                if (s_touch_inject.remaining_ticks > 0) {
+                    count = 1;
+                    x = s_touch_inject.x;
+                    y = s_touch_inject.y;
+                    s_touch_inject.remaining_ticks--;
+                } else {
+                    s_touch_inject.active = false;
+                    count = 0;
+                }
+            }
+            portEXIT_CRITICAL(&s_touch_inject_mux);
+        }
         TouchFeedHandleSample(count, x, y);
         vTaskDelay(pdMS_TO_TICKS(kTouchFeedPeriodMs));
     }
@@ -1818,6 +1846,35 @@ bool LVAdapterDisplay::GetScreenshotBmp(std::vector<uint8_t>& out_bmp) {
         }
     }
     return true;
+}
+
+bool LVAdapterDisplay::InjectTouch(int x, int y, int duration_ms) {
+    if (duration_ms <= 0) {
+        duration_ms = 60;
+    }
+    const int ticks = (duration_ms + kTouchFeedPeriodMs - 1) / kTouchFeedPeriodMs;
+    const int actual_ticks = ticks < 2 ? 2 : ticks;
+
+    ESP_LOGI(TAG, "InjectTouch x=%d y=%d dur=%dms (%d ticks)", x, y, duration_ms, actual_ticks);
+
+    if (s_touch_feed_task != nullptr) {
+        portENTER_CRITICAL(&s_touch_inject_mux);
+        s_touch_inject.x = x;
+        s_touch_inject.y = y;
+        s_touch_inject.remaining_ticks = actual_ticks;
+        s_touch_inject.active = true;
+        portEXIT_CRITICAL(&s_touch_inject_mux);
+
+        // 等待整个按下与抬起周期完成
+        const int wait_ms = (actual_ticks + 2) * kTouchFeedPeriodMs + 20;
+        vTaskDelay(pdMS_TO_TICKS(wait_ms));
+        return true;
+    } else {
+        TouchFeedHandleSample(1, x, y);
+        vTaskDelay(pdMS_TO_TICKS(duration_ms));
+        TouchFeedHandleSample(0, 0, 0);
+        return true;
+    }
 }
 
 void LVAdapterDisplay::SleepEpdForPowerOff() {

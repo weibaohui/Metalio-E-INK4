@@ -238,6 +238,7 @@ convert /tmp/raw.bmp -rotate 90 /tmp/screen_upright.bmp
 | `self.upgrade_firmware` | `url: string` | 从指定网络 URL 下载并烧录固件，自动重启 |
 | `self.apps.launch` | `id: string` | 根据应用 ID 拉起界面（如 `power`、`radio`、`book`、`store`、`upgrade` 等） |
 | `self.input.key` | `key: string` | 注入虚拟按键事件（如 `vk_home`、`vk_prev`、`vk_next`、`boot`） |
+| `self.input.click` | `x: int, y: int, duration_ms?: int` | 模拟屏幕物理触控点击，触发完整 LVGL 命中测试、按压视觉反馈、马达震动与点击回调 |
 | `self.fs.save_file` | 无 | 文件直传指引工具，指导 AI 通过 curl 极速上传二进制至 SD 卡 |
 
 #### B. 日历日程 (`self.calendar.*`)
@@ -337,6 +338,7 @@ convert /tmp/raw.bmp -rotate 90 /tmp/screen_upright.bmp
 | `/screen/home` | `POST` | 无 | JSON | 强制安全回到桌面，退出当前运行中的应用 |
 | `/app/launch` | `POST` | `?id=<app_id>` | JSON | 启动指定应用（如 `power`、`upgrade`、`radio` 等） |
 | `/input/key` | `POST` | `?key=<key_name>` | JSON | 注入硬件触控键（`vk_home`、`vk_prev`、`vk_next`） |
+| `/input/click` | `POST` / `GET` | `?x=<0..479>&y=<0..799>&duration_ms=<ms>` 或 JSON Body | JSON | 模拟真实手指点击屏幕或盖板按键，触发完整 LVGL 命中测试、按压视觉态与马达震动 |
 | `/system/reboot` | `POST` | 无 | JSON | 独立后台任务 1 秒后重启设备 |
 | `/system/sleep` | `POST` | 无 | JSON | 触发设备进入低功耗息屏待机 |
 | `/sleep` | `POST` | 无 | JSON | 同上，简便别名 |

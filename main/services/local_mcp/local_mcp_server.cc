@@ -779,6 +779,70 @@ esp_err_t InputKeyHandler(httpd_req_t* req) {
     return ESP_FAIL;
 }
 
+esp_err_t InputClickHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        return ESP_OK;
+    }
+
+    int x = -1;
+    int y = -1;
+    int duration_ms = 60;
+
+    char query[128] = {};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char val[32] = {};
+        if (httpd_query_key_value(query, "x", val, sizeof(val)) == ESP_OK) {
+            x = std::atoi(val);
+        }
+        if (httpd_query_key_value(query, "y", val, sizeof(val)) == ESP_OK) {
+            y = std::atoi(val);
+        }
+        if (httpd_query_key_value(query, "duration_ms", val, sizeof(val)) == ESP_OK) {
+            duration_ms = std::atoi(val);
+        }
+    }
+
+    if ((x < 0 || y < 0) && req->content_len > 0 && req->content_len < 1024) {
+        std::string body(req->content_len, '\0');
+        int ret = httpd_req_recv(req, &body[0], req->content_len);
+        if (ret > 0) {
+            cJSON* root = cJSON_Parse(body.c_str());
+            if (root != nullptr) {
+                auto x_item = cJSON_GetObjectItem(root, "x");
+                auto y_item = cJSON_GetObjectItem(root, "y");
+                auto dur_item = cJSON_GetObjectItem(root, "duration_ms");
+                if (cJSON_IsNumber(x_item)) x = x_item->valueint;
+                if (cJSON_IsNumber(y_item)) y = y_item->valueint;
+                if (cJSON_IsNumber(dur_item)) duration_ms = dur_item->valueint;
+                cJSON_Delete(root);
+            }
+        }
+    }
+
+    if (x < 0 || y < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or invalid ?x=<int>&y=<int>");
+        return ESP_FAIL;
+    }
+
+    auto* disp = LVAdapterDisplay::Instance();
+    if (disp == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Display instance unavailable");
+        return ESP_FAIL;
+    }
+
+    disp->InjectTouch(x, y, duration_ms);
+
+    SetCommonHeaders(req);
+    httpd_resp_set_type(req, "application/json");
+    char resp[128];
+    snprintf(resp, sizeof(resp), "{\"success\":true,\"x\":%d,\"y\":%d,\"duration_ms\":%d}", x, y, duration_ms);
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
 esp_err_t FsListHandler(httpd_req_t* req) {
     const std::string token = LocalMcpServer::GetInstance().GetPin();
     if (!CheckAuthorization(req, token)) {
@@ -1172,6 +1236,19 @@ void LocalMcpServer::Start() {
     input_key_uri.method = HTTP_POST;
     input_key_uri.handler = InputKeyHandler;
     httpd_register_uri_handler(server, &input_key_uri);
+
+    // 虚拟屏幕点击注入端点 (支持 GET 与 POST)
+    httpd_uri_t input_click_get_uri = {};
+    input_click_get_uri.uri = "/input/click";
+    input_click_get_uri.method = HTTP_GET;
+    input_click_get_uri.handler = InputClickHandler;
+    httpd_register_uri_handler(server, &input_click_get_uri);
+
+    httpd_uri_t input_click_post_uri = {};
+    input_click_post_uri.uri = "/input/click";
+    input_click_post_uri.method = HTTP_POST;
+    input_click_post_uri.handler = InputClickHandler;
+    httpd_register_uri_handler(server, &input_click_post_uri);
 
     // SD 卡文件目录浏览端点
     httpd_uri_t fs_list_uri = {};
