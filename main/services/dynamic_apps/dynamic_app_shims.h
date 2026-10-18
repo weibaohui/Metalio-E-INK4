@@ -123,21 +123,29 @@ void dynapp_glm_stop(void);
 
 // 备份恢复服务
 typedef struct {
-    char filename[64];
+    char name[64];
     char full_path[128];
+    char created_at[32];
+    int backup_type;       // 0=全量, 1=系统, 2=应用
+    int has_system;
+    int has_app_data;
+    int has_app_bundles;
+    int system_nvs_count;
+    int app_nvs_count;
+    int app_data_count;
+    int app_bundle_count;
     uint32_t size_bytes;
     int64_t mod_time;
-    int entry_count;
 } dynapp_backup_info_t;
 
 int dynapp_backup_is_sd_mounted(void);
 int dynapp_backup_get_sd_capacity(char* out_free, size_t free_len, char* out_total, size_t total_len);
+int dynapp_backup_get_stats(int* out_system_nvs, int* out_app_nvs, int* out_installed_apps);
 int dynapp_backup_list_count(void);
 int dynapp_backup_get_item(int index, dynapp_backup_info_t* out);
-int dynapp_backup_export(char* out_filename, size_t max_len);
-int dynapp_backup_import(const char* filepath);
-int dynapp_backup_delete(const char* filepath);
-int dynapp_backup_get_nvs_count(void);
+int dynapp_backup_export(int backup_type, char* out_name, size_t max_len);
+int dynapp_backup_import(const char* snapshot_path, int restore_mask);
+int dynapp_backup_delete(const char* snapshot_path);
 
 // 壁纸设置服务
 typedef struct {

@@ -18,6 +18,7 @@
 #include "reader/book_home_snapshot.h"
 #include "reader/book_library_warmup.h"
 #include "services/calendar/calendar_ics.h"
+#include "services/backup/nvs_backup_service.h"
 #include "services/dynamic_apps/dynamic_app_loader.h"
 #include "services/glm_usage/glm_usage_service.h"
 #include "services/local_mcp/local_mcp_server.h"
@@ -112,6 +113,7 @@ void BootOrchestrator::Run(Application& app) {
              AppManager::GetInstance().RegisterEnabledMcpTools();
              SyslogRegisterMcpTools();
              MemReport_RegisterMcpTools();
+             backup_restore::Backup_RegisterMcpTools();
              LocalMcpServer::GetInstance().Start();
              Syslog_Init();
              TimeService_Init();
