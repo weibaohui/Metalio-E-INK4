@@ -13,7 +13,6 @@
 #include "glm_usage_screen/glm_usage_screen.h"
 #include "radio_screen/radio_screen.h"
 #include "settings_screen/settings_screen.h"
-#include "system_info_screen/system_info_screen.h"
 
 #include "services/ai_chat/ai_chat_service.h"
 #include "services/calendar/calendar_mcp.h"
@@ -48,7 +47,6 @@ const char *AppNameRadio() { return "收音机"; }
 const char *AppNameBook() { return Lang::Strings::HOME_APP_BOOK; }
 const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
 const char *AppNameCalendar() { return "日历"; }
-const char *AppNameSysInfo() { return "系统信息"; }
 const char *AppNameAiChat() { return "AI 对话"; }
 const char *AppNameBackup() { return "备份恢复"; }
 const char *AppNameTransfer() { return "WiFi 传书"; }
@@ -80,8 +78,6 @@ void AppManager::RegisterDefaultApps() {
         "radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create, RadioRegisterMcpTools, false));
     RegisterApp(std::make_shared<StandardAppModule>(
         "cal", "A:ic_app_home_task.spng", AppNameCalendar, CalendarScreen::Create, CalendarRegisterMcpTools, false));
-    RegisterApp(std::make_shared<StandardAppModule>(
-        "info", "A:ic_app_home_sysinfo.spng", AppNameSysInfo, SystemInfoScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
         "aichat", "A:ic_app_home_buddy.spng", AppNameAiChat, AiVoiceChatScreen::Create, AiChat_BootRegister, false));
     RegisterApp(std::make_shared<StandardAppModule>(
