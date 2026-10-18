@@ -1,0 +1,9 @@
+{
+  "id": "glm",
+  "name": "GLM 用量",
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "智谱 GLM API 用量额度监控",
+  "main": "lib/app.so",
+  "icon": "icon.png"
+}

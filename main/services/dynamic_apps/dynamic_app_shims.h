@@ -98,20 +98,26 @@ void dynapp_cal_auto_refresh(void);
 typedef struct {
     int configured;
     int busy;
+    int discovering;
     int last_ok;
     int active_context;
     int context_count;
     char context_name[64];
+    char level[32];
     int tokens_5h_pct;
     int tokens_5h_remaining;
     int tokens_week_pct;
     int tokens_week_remaining;
+    int five_hour_resets_left;
+    int week_resets_left;
     char error[64];
 } dynapp_glm_snapshot_t;
 
 int dynapp_glm_get_snapshot(dynapp_glm_snapshot_t* out);
+int dynapp_glm_get_context_name(int index, char* out_name, size_t max_len);
 void dynapp_glm_request_refresh(void);
 void dynapp_glm_select_context(int index);
+void dynapp_glm_configure(const char* api_key, const char* jwt_token);
 void dynapp_glm_start(void);
 void dynapp_glm_stop(void);
 
