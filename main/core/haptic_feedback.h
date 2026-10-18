@@ -35,6 +35,11 @@ void HapticAttachClick(lv_obj_t* obj);
 // 解除 HapticAttachClick：撤热区与事件，避免整页残留误震。
 void HapticDetachClick(lv_obj_t* obj);
 
+// 底层统一：递归遍历控件树，把全部可点控件自动挂上震动（幂等，跳过隐藏子树）。
+// 动态 app 裸建按钮无需逐个接入；首次调用后常驻 1s 低频巡检，
+// 给晚建控件（数据到达后的按钮、结算弹窗）自动补挂。
+void HapticBindTree(lv_obj_t* root);
+
 #ifdef __cplusplus
 }
 #endif

@@ -216,6 +216,7 @@ bool HapticTryPulseAtUiPoint(int16_t x, int16_t y) {
     if (!hit) {
         return false;
     }
+    ESP_LOGI(TAG, "early pulse at (%d,%d)", x, y);
     HapticPulseOnFingerDown();
     return true;
 }
@@ -253,5 +254,50 @@ void HapticDetachClick(lv_obj_t* obj) {
             RemoveZoneAt(i);
             break;
         }
+    }
+}
+
+// ---- 底层统一自动挂载（动态 app 裸建按钮无需逐个接入） ----
+namespace {
+
+void BindTreeRecursive(lv_obj_t* obj) {
+    if (obj == nullptr || lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN)) {
+        return;  // 隐藏子树不可点，挂了热区反而误震；显示后由巡检补挂
+    }
+    if (lv_obj_has_flag(obj, LV_OBJ_FLAG_CLICKABLE)) {
+        HapticAttachClick(obj);  // 幂等：已挂 kHapticBoundFlag 直接返回
+    }
+    const uint32_t n = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < n; ++i) {
+        BindTreeRecursive(lv_obj_get_child(obj, i));
+    }
+}
+
+// 晚建控件（数据到达后的按钮、结算弹窗）由低频巡检补挂，最多延迟 1s
+void RewalkTimerCb(lv_timer_t* t) {
+    (void)t;
+    lv_obj_t* scr = lv_screen_active();
+    if (scr != nullptr) {
+        BindTreeRecursive(scr);
+    }
+}
+
+}  // namespace
+
+void HapticBindTree(lv_obj_t* root) {
+    if (root == nullptr) {
+        return;
+    }
+    const size_t before = s_zone_count;
+    BindTreeRecursive(root);
+    if (s_zone_count > before) {
+        ESP_LOGI(TAG, "auto-bind +%u hot zones (total %u)",
+                 static_cast<unsigned>(s_zone_count - before),
+                 static_cast<unsigned>(s_zone_count));
+    }
+    static bool s_rewalk_armed = false;
+    if (!s_rewalk_armed) {
+        s_rewalk_armed = true;
+        lv_timer_create(RewalkTimerCb, 1000, nullptr);
     }
 }
