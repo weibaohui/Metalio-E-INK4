@@ -1,0 +1,26 @@
+[
+  {
+    "name": "中国之声",
+    "url": "https://lhttp.qtfm.cn/live/5021381/64k.mp3"
+  },
+  {
+    "name": "北京音乐广播",
+    "url": "https://lhttp.qtfm.cn/live/332/64k.mp3"
+  },
+  {
+    "name": "上海第一财经",
+    "url": "https://lhttp-hw.qtfm.cn/live/276/64k.mp3"
+  },
+  {
+    "name": "深圳飞扬971",
+    "url": "http://lhttp.qingting.fm/live/4925/64k.mp3"
+  },
+  {
+    "name": "上海长三角之声",
+    "url": "https://lhttp-hw.qtfm.cn/live/275/64k.mp3"
+  },
+  {
+    "name": "Lofi Chill Radio",
+    "url": "http://stream.lofi.cafe/stream"
+  }
+]
