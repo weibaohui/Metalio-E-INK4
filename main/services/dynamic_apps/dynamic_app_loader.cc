@@ -380,12 +380,15 @@ bool ParseManifestDir(const std::string &dir_path, ManifestInfo &out) {
         return false;
     }
 
-    // 寻找可执行文件：优先 bin/ 子目录（规范），兼容根目录
+    // 寻找动态库文件：优先 lib/（符合 Unix/Linux/Android .so 共享库规范），兼容 bin/ 与根目录
     std::vector<std::string> candidates;
     if (!out.executable.empty()) {
         candidates.push_back(dir_path + "/" + out.executable);
+        candidates.push_back(dir_path + "/lib/" + out.executable);
         candidates.push_back(dir_path + "/bin/" + out.executable);
     }
+    candidates.push_back(dir_path + "/lib/app.so");
+    candidates.push_back(dir_path + "/lib/" + out.id + ".so");
     candidates.push_back(dir_path + "/bin/app.so");
     candidates.push_back(dir_path + "/bin/" + out.id + ".so");
     candidates.push_back(dir_path + "/app.so");
@@ -400,7 +403,7 @@ bool ParseManifestDir(const std::string &dir_path, ManifestInfo &out) {
         }
     }
     if (so_path.empty()) {
-        ESP_LOGE(TAG, "%s: executable missing (checked bin/app.so, app.so), skip", manifest_path.c_str());
+        ESP_LOGE(TAG, "%s: executable missing (checked lib/app.so, bin/app.so, app.so), skip", manifest_path.c_str());
         return false;
     }
     out.executable = so_path;
