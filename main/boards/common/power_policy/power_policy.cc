@@ -15,6 +15,7 @@
 #include <freertos/task.h>
 #include <wifi_configuration_ap.h>
 #include <wifi_station.h>
+#include <driver/usb_serial_jtag.h>
 
 #include "lvgl.h"
 #include <esp_lv_adapter.h>
@@ -65,6 +66,19 @@ esp_timer_handle_t tick = nullptr;
 TaskHandle_t lp_task = nullptr;
 bool lp_session_active = false;
 bool standby_wake_exit = false;
+
+bool IsUsbConnectedLocked()
+{
+    if (board != nullptr && board->IsUsbConnected()) {
+        return true;
+    }
+#if CONFIG_USJ_ENABLE_USB_SERIAL_JTAG
+    if (usb_serial_jtag_is_connected()) {
+        return true;
+    }
+#endif
+    return false;
+}
 
 }  // namespace pwr
 
@@ -152,6 +166,10 @@ bool UserInactiveLongEnoughLocked()
     }
     // 虚拟 U 盘 / 显式禁待机：禁止无操作进待机（PC 挂载或产测老化可能长时间无触摸）
     if (NeedHeld(PowerNeed::UsbVirtualDisk) || NeedHeld(PowerNeed::StandbyInhibit)) {
+        return false;
+    }
+    // 插着 USB 时禁止无操作进待机休眠
+    if (pwr::IsUsbConnectedLocked()) {
         return false;
     }
     if (pwr::last_user_activity_us == 0) {
@@ -409,6 +427,19 @@ void TickCb(void* /*arg*/)
         return;
     }
     xSemaphoreTake(pwr::mu, portMAX_DELAY);
+    static bool s_usb_connected_prev = false;
+    const bool usb_now = pwr::IsUsbConnectedLocked();
+    if (s_usb_connected_prev && !usb_now) {
+        pwr::last_user_activity_us = esp_timer_get_time();
+        ESP_LOGI(TAG, "USB disconnected -> restart user idle timer");
+    } else if (!s_usb_connected_prev && usb_now) {
+        ESP_LOGI(TAG, "USB connected -> inhibit standby and shutdown");
+        if (StandbyScreen::IsActive() || pwr::standby_ui_requested) {
+            pwr::RequestDismissStandbyOverlay();
+        }
+    }
+    s_usb_connected_prev = usb_now;
+
     pwr::ReevaluateLocked();
     if (pwr::mode == pwr::Mode::StandbyUi && pwr::StandbyUiLongEnoughLocked()) {
         pwr::RequestShutdownLocked();
@@ -838,6 +869,17 @@ void PowerPolicy::RequestPowerOff()
     pwr::BeginPowerOffLocked();
     xSemaphoreGive(pwr::mu);
     pwr::FlushTouchOutsideLock();
+}
+
+bool PowerPolicy::IsUsbConnected() const
+{
+    if (pwr::mu == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(pwr::mu, portMAX_DELAY);
+    const bool conn = pwr::IsUsbConnectedLocked();
+    xSemaphoreGive(pwr::mu);
+    return conn;
 }
 
 void PowerPolicy::OnStandbyOverlayDismissed()

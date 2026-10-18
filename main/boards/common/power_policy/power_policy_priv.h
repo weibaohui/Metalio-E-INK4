@@ -93,6 +93,9 @@ inline int64_t StandbyToShutdownUs()
 /** @brief 档位名（日志用） */
 const char* ModeName(Mode m);
 
+/** @brief 检查当前是否连接 USB（供电/调试） */
+bool IsUsbConnectedLocked();
+
 /** @brief 持锁重算并 Apply */
 void ReevaluateLocked();
 /** @brief 释放锁后投递/执行待改 CPU 频，并执行待 Pause/Resume WiFi */

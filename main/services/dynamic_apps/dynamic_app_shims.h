@@ -27,6 +27,27 @@ void dynapp_screen_go_home(void);
 // 请求下一次墨水屏全刷（清残影）
 void dynapp_epd_full_refresh(void);
 
+// 获取当前动态应用的 Bundle 根目录（例如 "/sdcard/metalio/e-ink/apps/fangfang.app"）
+const char* dynapp_get_bundle_path(void);
+
+// 获取当前动态应用的私有数据目录（例如 "/sdcard/metalio/e-ink/apps/fangfang.app/data"），
+// 首次调用若目录不存在会自动在 SD 卡上创建。配置文件/存档必须写入此目录。
+const char* dynapp_get_data_path(void);
+
+// 安全打开当前应用 data/ 目录下的文件（如 "config.json"、"hiscore.txt"）。
+// 严格防穿越（拒绝包含 ".."、绝对路径或反斜杠），返回 FILE*（fopen 同款用法）。
+void* dynapp_fopen_data(const char* rel_filename, const char* mode);
+
+// 沙箱路径合法性检查：
+//   write=1: 仅允许写入当前应用的 data 目录内；
+//   write=0: 允许读取应用自身 bundle、自身 data，以及公共字体/系统资源。
+int dynapp_is_path_allowed(const char* path, int write);
+
 #ifdef __cplusplus
 }
+
+// 固件内部调用：设置/清除当前活跃应用的 Bundle 路径
+void dynapp_set_active_bundle(const char* bundle_path);
+void dynapp_clear_active_bundle(void);
 #endif
+

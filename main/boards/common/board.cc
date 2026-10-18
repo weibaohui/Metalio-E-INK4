@@ -8,6 +8,7 @@
 #include <esp_ota_ops.h>
 #include <esp_chip_info.h>
 #include <esp_random.h>
+#include <driver/usb_serial_jtag.h>
 
 #define TAG "Board"
 
@@ -45,6 +46,15 @@ std::string Board::GenerateUuid() {
 }
 
 bool Board::GetBatteryLevel(int &level, bool& charging, bool& discharging) {
+    return false;
+}
+
+bool Board::IsUsbConnected() const {
+#if CONFIG_USJ_ENABLE_USB_SERIAL_JTAG
+    if (usb_serial_jtag_is_connected()) {
+        return true;
+    }
+#endif
     return false;
 }
 

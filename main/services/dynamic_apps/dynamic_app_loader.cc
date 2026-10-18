@@ -24,10 +24,12 @@
 
 #include <dirent.h>
 #include <sys/stat.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -117,6 +119,10 @@ const struct esp_elfsym g_metalio_dynapp_syms[] = {
     ESP_ELFSYM_EXPORT(dynapp_lv_async),
     ESP_ELFSYM_EXPORT(dynapp_screen_go_home),
     ESP_ELFSYM_EXPORT(dynapp_epd_full_refresh),
+    ESP_ELFSYM_EXPORT(dynapp_get_bundle_path),
+    ESP_ELFSYM_EXPORT(dynapp_get_data_path),
+    ESP_ELFSYM_EXPORT(dynapp_fopen_data),
+    ESP_ELFSYM_EXPORT(dynapp_is_path_allowed),
     ESP_ELFSYM_END
 };
 
@@ -207,26 +213,35 @@ bool ReadDesc(const char *path, void **out_handle, metalio_app_desc_t *out_desc)
 // 必须等到本轮删除完成（下一 LVGL 周期）再 dlclose。
 // 注：从删除事件到 async 回调仅隔一个 LVGL 周期（毫秒级），e-ink 上人类
 // 无法在该窗口内重新点开同一应用，无需在用计数。
+struct ScreenDeleteCtx {
+    std::string so_path;
+    std::string bundle_dir;
+};
+
+// 屏幕删除事件 → 投递 async 卸载。删除事件期间子对象析构仍引用 .so 代码，
+// 必须等到本轮删除完成（下一 LVGL 周期）再 dlclose。
 void OnDynScreenDelete(lv_event_t *e) {
-    auto *path = static_cast<std::string *>(lv_event_get_user_data(e));
+    auto *ctx = static_cast<ScreenDeleteCtx *>(lv_event_get_user_data(e));
     lv_async_call([](void *p) {
-        auto *pth = static_cast<std::string *>(p);
+        auto *c = static_cast<ScreenDeleteCtx *>(p);
         // dlopen 已加载的 .so 返回同句柄；dlclose 即真实卸载（esp_elf_deinit 释放代码段）。
-        void *h = dlopen(DlopenPath(*pth).c_str(), RTLD_NOW);
+        void *h = dlopen(DlopenPath(c->so_path).c_str(), RTLD_NOW);
         if (h != nullptr) {
             dlclose(h);
-            ESP_LOGI(TAG, "dynamic app unloaded: %s", pth->c_str());
+            ESP_LOGI(TAG, "dynamic app unloaded: %s", c->so_path.c_str());
         }
-        delete pth;
-    }, path);
+        dynapp_clear_active_bundle();
+        delete c;
+    }, ctx);
 }
 
-// 惰性动态应用模块：持有 manifest 元数据与 app.so 路径；点开时 dlopen 创建屏幕，
-// 屏幕销毁后 dlclose 卸载。无静态工厂（需实例状态），走 CreateUI 路径。
+// 惰性动态应用模块：持有 manifest 元数据、bundle 目录与可执行文件路径；点开时设置沙箱上下文并 dlopen 创建屏幕，
+// 屏幕销毁后 dlclose 卸载并清理沙箱上下文。
 class LazyDynamicAppModule : public AppModule {
 public:
-    LazyDynamicAppModule(std::string id, std::string name, std::string icon, std::string so_path)
-        : id_(std::move(id)), name_(std::move(name)), icon_(std::move(icon)), so_path_(std::move(so_path)) {}
+    LazyDynamicAppModule(std::string id, std::string name, std::string icon, std::string bundle_dir, std::string so_path)
+        : id_(std::move(id)), name_(std::move(name)), icon_(std::move(icon)),
+          bundle_dir_(std::move(bundle_dir)), so_path_(std::move(so_path)) {}
 
     const char *GetId() const override { return id_.c_str(); }
     const char *GetName() const override { return name_.c_str(); }
@@ -235,18 +250,26 @@ public:
     lv_obj_t *CreateUI(lv_obj_t * /*parent*/ = nullptr) override {
         void *handle = nullptr;
         metalio_app_desc_t desc = {};
+
+        // 激活当前应用沙箱上下文（bundle 路径及自动生成的 data 目录）
+        dynapp_set_active_bundle(bundle_dir_.c_str());
+
         if (!ReadDesc(DlopenPath(so_path_).c_str(), &handle, &desc)) {
+            dynapp_clear_active_bundle();
             return MakeFailScreen();
         }
         lv_obj_t *scr = static_cast<lv_obj_t *>(desc.create());
         if (scr == nullptr) {
             ESP_LOGE(TAG, "%s: create returned null", so_path_.c_str());
             dlclose(handle);
+            dynapp_clear_active_bundle();
             return MakeFailScreen();
         }
-        // 卸载钩子交给屏幕：树删除完成后 async dlclose
-        lv_obj_add_event_cb(scr, OnDynScreenDelete, LV_EVENT_DELETE, new std::string(so_path_));
-        ESP_LOGI(TAG, "dynamic app loaded: %s (%s)", name_.c_str(), so_path_.c_str());
+        // 卸载钩子交给屏幕：树删除完成后 async dlclose 并清理沙箱上下文
+        auto *del_ctx = new ScreenDeleteCtx{so_path_, bundle_dir_};
+        lv_obj_add_event_cb(scr, OnDynScreenDelete, LV_EVENT_DELETE, del_ctx);
+        ESP_LOGI(TAG, "dynamic app loaded: %s (%s, bundle: %s)",
+                 name_.c_str(), so_path_.c_str(), bundle_dir_.c_str());
         return scr;
     }
     ScreenFactory GetScreenFactory() const override { return nullptr; }
@@ -255,6 +278,7 @@ private:
     std::string id_;
     std::string name_;
     std::string icon_;
+    std::string bundle_dir_;
     std::string so_path_;
 };
 
@@ -275,14 +299,14 @@ std::string ReadFileText(const char *path) {
     return out;
 }
 
-// manifest 解析结果（abi/id/name 校验通过 + app.so 存在才有效）
+// manifest 解析结果（abi/id/name 校验通过 + 可执行文件存在才有效）
 struct ManifestInfo {
     bool valid = false;
     int abi = 0;
-    std::string id, name, icon_rel, version;
+    std::string id, name, icon_rel, version, executable;
 };
 
-// 读 manifest（无代码执行）：解析字段并校验 abi/id/name 与 app.so 存在性。
+// 读 manifest（无代码执行）：解析字段并校验 abi/id/name 与可执行文件存在性。
 bool ParseManifestDir(const std::string &dir_path, ManifestInfo &out) {
     const std::string manifest_path = dir_path + "/" + kManifestName;
     const std::string text = ReadFileText(manifest_path.c_str());
@@ -308,6 +332,8 @@ bool ParseManifestDir(const std::string &dir_path, ManifestInfo &out) {
             out.icon_rel = item->valuestring;
         } else if (strcmp(item->string, "version") == 0 && cJSON_IsString(item)) {
             out.version = item->valuestring;
+        } else if (strcmp(item->string, "executable") == 0 && cJSON_IsString(item)) {
+            out.executable = item->valuestring;
         } else if (strcmp(item->string, "abi") == 0 && cJSON_IsNumber(item)) {
             out.abi = static_cast<int>(item->valuedouble);
         }
@@ -329,12 +355,33 @@ bool ParseManifestDir(const std::string &dir_path, ManifestInfo &out) {
         return false;
     }
 
-    const std::string so_path = dir_path + "/" + kSoName;
+    // 寻找可执行文件：manifest 指定名 -> app.so -> <id>.so
+    std::string so_name = out.executable.empty() ? kSoName : out.executable;
+    std::string so_path = dir_path + "/" + so_name;
     struct stat st = {};
     if (stat(so_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
-        ESP_LOGE(TAG, "%s: %s missing, skip", manifest_path.c_str(), kSoName);
+        if (so_name != kSoName) {
+            std::string fallback = dir_path + "/" + kSoName;
+            if (stat(fallback.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+                so_path = fallback;
+            }
+        }
+    }
+    if (stat(so_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+        std::string fallback = dir_path + "/" + out.id + ".so";
+        if (stat(fallback.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+            so_path = fallback;
+        }
+    }
+    if (stat(so_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+        ESP_LOGE(TAG, "%s: executable %s missing, skip", manifest_path.c_str(), so_name.c_str());
         return false;
     }
+    out.executable = so_path;
+
+    // 自动确保应用私有 data 目录存在，重装/升级时绝不覆盖 data
+    SdEnsureDir((dir_path + "/data").c_str());
+
     out.valid = true;
     return true;
 }
@@ -356,10 +403,10 @@ int RegisterDir(const std::string &dir_path, const ManifestInfo &info) {
     }
 
     auto module = std::make_shared<LazyDynamicAppModule>(
-        info.id, info.name, icon, dir_path + "/" + kSoName);
+        info.id, info.name, icon, dir_path, info.executable);
     AppManager::GetInstance().RegisterApp(module);
-    ESP_LOGI(TAG, "dynamic app available: %s (%s) — lazy, loads on tap",
-             module->GetName(), module->GetId());
+    ESP_LOGI(TAG, "dynamic app available: %s (%s) [bundle: %s] — lazy, loads on tap",
+             module->GetName(), module->GetId(), dir_path.c_str());
     return 1;
 }
 
@@ -397,22 +444,40 @@ void ScanAndRegister() {
         return;
     }
 
-    int found = 0;
-    int registered_new = 0;
+    std::vector<std::string> dirs;
     struct dirent *ent;
     while ((ent = readdir(dir)) != nullptr) {
-        const std::string dir_path = std::string(SD_PATH_APPS) + "/" + ent->d_name;
-        struct stat st = {};
-        if (stat(dir_path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
             continue;
         }
-        registered_new += RegisterDirIfInstalled(dir_path);
-        ++found;
+        const std::string dir_path = std::string(SD_PATH_APPS) + "/" + ent->d_name;
+        struct stat st = {};
+        if (stat(dir_path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+            dirs.push_back(dir_path);
+        }
     }
     closedir(dir);
 
-    if (found > 0) {
-        ESP_LOGI(TAG, "dynamic app scan done: %d dirs under %s", found, SD_PATH_APPS);
+    // 优先排序：.app 规范后缀目录排在最前
+    std::sort(dirs.begin(), dirs.end(), [](const std::string &a, const std::string &b) {
+        auto has_app_ext = [](const std::string &s) {
+            return s.size() >= 4 && s.compare(s.size() - 4, 4, ".app") == 0;
+        };
+        const bool a_app = has_app_ext(a);
+        const bool b_app = has_app_ext(b);
+        if (a_app != b_app) {
+            return a_app > b_app;
+        }
+        return a < b;
+    });
+
+    int registered_new = 0;
+    for (const auto &d : dirs) {
+        registered_new += RegisterDirIfInstalled(d);
+    }
+
+    if (!dirs.empty()) {
+        ESP_LOGI(TAG, "dynamic app scan done: %u dirs under %s", (unsigned)dirs.size(), SD_PATH_APPS);
     }
     if (registered_new > 0) {
         // 有人正停在桌面时让新应用即时出现（内部走线程安全投递，不在首页则 no-op）
@@ -428,64 +493,79 @@ std::vector<DynPackage> ListPackages() {
     if (dir == nullptr) {
         return out;
     }
+    std::vector<std::string> dirs;
     struct dirent *ent;
     while ((ent = readdir(dir)) != nullptr) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+            continue;
+        }
         const std::string dir_path = std::string(SD_PATH_APPS) + "/" + ent->d_name;
         struct stat st = {};
-        if (stat(dir_path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
-            continue;
+        if (stat(dir_path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+            dirs.push_back(dir_path);
         }
+    }
+    closedir(dir);
+
+    // 优先排序：.app 规范后缀目录排在最前
+    std::sort(dirs.begin(), dirs.end(), [](const std::string &a, const std::string &b) {
+        auto has_app_ext = [](const std::string &s) {
+            return s.size() >= 4 && s.compare(s.size() - 4, 4, ".app") == 0;
+        };
+        const bool a_app = has_app_ext(a);
+        const bool b_app = has_app_ext(b);
+        if (a_app != b_app) {
+            return a_app > b_app;
+        }
+        return a < b;
+    });
+
+    std::vector<std::string> seen_ids;
+    for (const auto &d : dirs) {
         ManifestInfo info;
-        if (!ParseManifestDir(dir_path, info)) {
+        if (!ParseManifestDir(d, info)) {
             continue;
         }
+        bool seen = false;
+        for (const auto &sid : seen_ids) {
+            if (sid == info.id) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) {
+            continue;
+        }
+        seen_ids.push_back(info.id);
+
         DynPackage pkg;
-        pkg.dir = dir_path;
+        pkg.dir = d;
         pkg.id = info.id;
         pkg.name = info.name;
         pkg.version = info.version;
         pkg.installed = (AppManager::GetInstance().GetAppById(info.id.c_str()) != nullptr);
         out.push_back(std::move(pkg));
     }
-    closedir(dir);
     return out;
 }
 
 bool InstallPackage(const std::string& id) {
-    SdEnsureDir(SD_PATH_APPS);
-    DIR *dir = opendir(SD_PATH_APPS);
-    if (dir == nullptr) {
-        return false;
-    }
-    std::string dir_path;
-    struct dirent *ent;
-    while ((ent = readdir(dir)) != nullptr) {
-        const std::string candidate = std::string(SD_PATH_APPS) + "/" + ent->d_name;
-        struct stat st = {};
-        if (stat(candidate.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
-            continue;
-        }
-        ManifestInfo info;
-        if (ParseManifestDir(candidate, info) && info.id == id) {
-            dir_path = candidate;
-            break;
+    auto pkgs = ListPackages();
+    for (const auto &pkg : pkgs) {
+        if (pkg.id == id) {
+            ManifestInfo info;
+            if (!ParseManifestDir(pkg.dir, info)) {
+                return false;
+            }
+            RegisterDir(pkg.dir, info);
+            AsyncSettingsStore::GetInstance().SetBool("dynapp", ("in_" + info.id).c_str(), true);
+            ESP_LOGI(TAG, "package installed: %s (%s, bundle: %s)",
+                     info.name.c_str(), info.id.c_str(), pkg.dir.c_str());
+            return true;
         }
     }
-    closedir(dir);
-    if (dir_path.empty()) {
-        ESP_LOGW(TAG, "install: package %s not found on SD", id.c_str());
-        return false;
-    }
-
-    // 安装 = 按包元数据注册惰性入口（不 dlopen，代码在点开时才加载）+ 置安装标志
-    ManifestInfo info;
-    if (!ParseManifestDir(dir_path, info)) {
-        return false;
-    }
-    RegisterDir(dir_path, info);
-    AsyncSettingsStore::GetInstance().SetBool("dynapp", ("in_" + info.id).c_str(), true);
-    ESP_LOGI(TAG, "package installed: %s (%s)", info.name.c_str(), info.id.c_str());
-    return true;
+    ESP_LOGW(TAG, "install: package %s not found on SD", id.c_str());
+    return false;
 }
 
 bool UninstallPackage(const std::string& id) {

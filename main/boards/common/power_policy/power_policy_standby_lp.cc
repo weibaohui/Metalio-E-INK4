@@ -309,10 +309,19 @@ bool StandbyLpShouldContinue()
 
 bool RunStandbyLpMainLoop()
 {
+    bool usb_was_connected = pwr::IsUsbConnectedLocked();
     for (;;) {
         if (!StandbyLpShouldContinue()) {
             return false;
         }
+        const bool usb_now = pwr::IsUsbConnectedLocked();
+        if (!usb_was_connected && usb_now) {
+            ESP_LOGI(TAG, "USB plugged in during standby -> wake up");
+            pwr::RequestDismissStandbyOverlay();
+            return true;
+        }
+        usb_was_connected = usb_now;
+
         xSemaphoreTake(pwr::mu, portMAX_DELAY);
         if (pwr::StandbyUiLongEnoughLocked()) {
             pwr::RequestShutdownLocked();
@@ -326,8 +335,9 @@ bool RunStandbyLpMainLoop()
             return true;
         }
 
+        const bool use_light_sleep = pwr::kStandbyLpUseLightSleep && !usb_now;
         const bool key_done =
-            pwr::kStandbyLpUseLightSleep ? RunLightSleepSlice() : RunDelaySlice();
+            use_light_sleep ? RunLightSleepSlice() : RunDelaySlice();
         if (key_done) {
             return true;
         }
@@ -418,6 +428,10 @@ void ResetStandbyElapsedLocked()
 bool StandbyUiLongEnoughLocked()
 {
     if (standby_to_shutdown_sec <= 0) {
+        return false;
+    }
+    // 插着 USB 时禁止自动关机
+    if (IsUsbConnectedLocked()) {
         return false;
     }
     int64_t elapsed = standby_elapsed_us;
@@ -523,6 +537,10 @@ void RequestStandbyUiAsync()
 void RequestShutdownLocked()
 {
     if (shutdown_requested) {
+        return;
+    }
+    if (IsUsbConnectedLocked()) {
+        ESP_LOGI(TAG, "USB connected, suppress auto shutdown");
         return;
     }
     const int64_t elapsed_s =

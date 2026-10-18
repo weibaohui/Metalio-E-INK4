@@ -33,6 +33,7 @@
 #include <wifi_station.h>
 #include <esp_log.h>
 #include <esp_check.h>
+#include <driver/usb_serial_jtag.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <driver/i2c_master.h>
@@ -1033,6 +1034,23 @@ public:
     // 转发到 Bq27220Gauge；通知栏 UpdateStatusBar 会按 level/充电态刷新电池图标。
     virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
         return Bq27220Gauge::GetInstance().GetBatteryLevel(level, charging, discharging);
+    }
+
+    virtual bool IsUsbConnected() const override {
+#if CONFIG_USJ_ENABLE_USB_SERIAL_JTAG
+        if (usb_serial_jtag_is_connected()) {
+            return true;
+        }
+#endif
+        if (cx25601n_is_ready() && cx25601n_is_vbus_present()) {
+            return true;
+        }
+        int level = 0;
+        bool chg = false, dis = false;
+        if (Bq27220Gauge::GetInstance().GetBatteryLevel(level, chg, dis) && chg) {
+            return true;
+        }
+        return false;
     }
 
     virtual void PulseVibration() override { PulseVibrationMotor(); }
