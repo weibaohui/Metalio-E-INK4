@@ -487,7 +487,7 @@ lv_obj_t* SystemUpgradeScreen::Create() {
     auto* scaffold = EpdWidgetKit::EpdPageScaffold::Create({
         .title = "系统升级",
         .show_status_bar = true,
-        .show_back_btn = true,
+        .show_back_btn = false,
         .scrollable = true,
         .pad_h = 12,
         .pad_v = 10,

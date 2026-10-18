@@ -141,7 +141,9 @@ int dynapp_is_path_allowed(const char* path, int write) {
 
 #include "application.h"
 #include "board.h"
+#include "audio_codec.h"
 #include "boot_key_handler.h"
+#include "display/modal_manager.h"
 #include "display/screen/epd_widget_kit.h"
 #include "power_policy.h"
 #include "services/time_service.h"
@@ -155,10 +157,11 @@ void dynapp_power_sleep(void) {
 
 void dynapp_power_reboot(void) {
     ESP_LOGI(kShimTag, "dynapp power reboot");
-    Application::GetInstance().Schedule([]() {
+    xTaskCreate([](void*) {
         vTaskDelay(pdMS_TO_TICKS(300));
         Application::GetInstance().Reboot();
-    });
+        vTaskDelete(nullptr);
+    }, "reboot_task", 2048, nullptr, 5, nullptr);
 }
 
 void dynapp_power_shutdown(void) {
@@ -370,7 +373,9 @@ void dynapp_glm_start(void) {
 }
 
 void dynapp_glm_stop(void) {
-    GlmUsageService::GetInstance().Stop();
+    Application::GetInstance().Schedule([]() {
+        GlmUsageService::GetInstance().Stop();
+    });
 }
 
 // 备份恢复服务
@@ -526,7 +531,7 @@ int dynapp_get_ip_address(char* out_ip, size_t max_len) {
 }
 
 int dynapp_wifi_file_start(void) {
-    return wifi_file::WifiFileService::GetInstance().Start(8080) ? 1 : 0;
+    return wifi_file::WifiFileService::GetInstance().Start(80) ? 1 : 0;
 }
 
 void dynapp_wifi_file_stop(void) {
@@ -541,8 +546,17 @@ int dynapp_wifi_file_get_port(void) {
     return static_cast<int>(wifi_file::WifiFileService::GetInstance().GetPort());
 }
 
+int dynapp_wifi_file_get_url(char* out_url, size_t max_len) {
+    std::string url = wifi_file::WifiFileService::GetInstance().GetServerUrl();
+    if (out_url != nullptr && max_len > 0) {
+        strncpy(out_url, url.c_str(), max_len - 1);
+        out_url[max_len - 1] = '\0';
+    }
+    return url.empty() ? 0 : 1;
+}
+
 int dynapp_wifi_transfer_start(void) {
-    return wifi_transfer::WifiTransferService::GetInstance().Start(8080) ? 1 : 0;
+    return wifi_transfer::WifiTransferService::GetInstance().Start(80) ? 1 : 0;
 }
 
 void dynapp_wifi_transfer_stop(void) {
@@ -555,6 +569,75 @@ int dynapp_wifi_transfer_is_running(void) {
 
 int dynapp_wifi_transfer_get_port(void) {
     return static_cast<int>(wifi_transfer::WifiTransferService::GetInstance().GetPort());
+}
+
+int dynapp_wifi_transfer_get_url(char* out_url, size_t max_len) {
+    std::string url = wifi_transfer::WifiTransferService::GetInstance().GetServerUrl();
+    if (out_url != nullptr && max_len > 0) {
+        strncpy(out_url, url.c_str(), max_len - 1);
+        out_url[max_len - 1] = '\0';
+    }
+    return url.empty() ? 0 : 1;
+}
+
+static dynapp_upload_cb_t s_user_upload_cb = nullptr;
+static void* s_user_upload_ud = nullptr;
+
+void dynapp_wifi_transfer_set_callback(dynapp_upload_cb_t cb, void* user_data) {
+    s_user_upload_cb = cb;
+    s_user_upload_ud = user_data;
+    if (cb != nullptr) {
+        wifi_transfer::WifiTransferService::GetInstance().SetUploadCallback([](const wifi_transfer::UploadEvent& ev) {
+            if (s_user_upload_cb != nullptr) {
+                struct EvMsg {
+                    std::string fn;
+                    size_t sz;
+                };
+                auto* msg = new EvMsg{ev.filename, ev.size_bytes};
+                ScreenLvAsync([](void* p) {
+                    auto* m = static_cast<EvMsg*>(p);
+                    if (s_user_upload_cb != nullptr) {
+                        s_user_upload_cb(m->fn.c_str(), m->sz, s_user_upload_ud);
+                    }
+                    delete m;
+                }, msg);
+            }
+        });
+    } else {
+        wifi_transfer::WifiTransferService::GetInstance().SetUploadCallback(nullptr);
+    }
+}
+
+void dynapp_modal_alert(const char* title, const char* message, const char* ok_text) {
+    ModalManager::GetInstance().ShowAlert(title ? title : "提示", message ? message : "", ok_text ? ok_text : "我知道了");
+}
+
+void dynapp_modal_dialog(const char* title, const char* message, const char* ok_text, const char* cancel_text,
+                         void (*cb)(int confirmed, void* user_data), void* user_data) {
+    ModalManager::GetInstance().ShowDialog(
+        title ? title : "确认",
+        message ? message : "",
+        ok_text ? ok_text : "确定",
+        cancel_text ? cancel_text : "取消",
+        [cb, user_data](bool confirmed) {
+            if (cb) {
+                cb(confirmed ? 1 : 0, user_data);
+            }
+        });
+}
+
+int dynapp_radio_get_volume(void) {
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    return codec != nullptr ? codec->output_volume() : 70;
+}
+
+void dynapp_radio_set_volume(int volume) {
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    if (codec != nullptr) {
+        if (volume < 0) volume = 0;
+        if (volume > 100) volume = 100;
+        codec->SetOutputVolume(volume);
+    }
 }
 
 

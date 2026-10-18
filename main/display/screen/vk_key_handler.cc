@@ -134,7 +134,8 @@ void DispatchDefault(const char* key_name, const char* screen) {
             ESP_LOGI(TAG, "vk_home no-op (already home)");
             return;
         }
-        ScreenRequestHome();
+        ESP_LOGI(TAG, "vk_home -> navigate back");
+        ScreenNavigateBack();
         return;
     }
 

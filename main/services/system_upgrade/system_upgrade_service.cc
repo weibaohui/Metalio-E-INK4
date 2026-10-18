@@ -221,10 +221,11 @@ esp_err_t HandlePostOtaUpload(httpd_req_t* req) {
     httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"Firmware flashed successfully, rebooting...\"}");
 
     // 1.5 秒后安全重启进入新固件
-    Application::GetInstance().Schedule([]() {
+    xTaskCreate([](void*) {
         vTaskDelay(pdMS_TO_TICKS(1500));
         Application::GetInstance().Reboot();
-    });
+        vTaskDelete(nullptr);
+    }, "ota_reboot", 2048, nullptr, 5, nullptr);
 
     return ESP_OK;
 }

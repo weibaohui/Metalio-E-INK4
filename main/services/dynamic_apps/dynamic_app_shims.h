@@ -172,6 +172,19 @@ int dynapp_wifi_transfer_start(void);
 void dynapp_wifi_transfer_stop(void);
 int dynapp_wifi_transfer_is_running(void);
 int dynapp_wifi_transfer_get_port(void);
+int dynapp_wifi_transfer_get_url(char* out_url, size_t max_len);
+int dynapp_wifi_file_get_url(char* out_url, size_t max_len);
+typedef void (*dynapp_upload_cb_t)(const char* filename, size_t size_bytes, void* user_data);
+void dynapp_wifi_transfer_set_callback(dynapp_upload_cb_t cb, void* user_data);
+
+// 模态弹窗管理器
+void dynapp_modal_alert(const char* title, const char* message, const char* ok_text);
+void dynapp_modal_dialog(const char* title, const char* message, const char* ok_text, const char* cancel_text,
+                         void (*cb)(int confirmed, void* user_data), void* user_data);
+
+// 收音机音量接口
+int dynapp_radio_get_volume(void);
+void dynapp_radio_set_volume(int volume);
 
 #ifdef __cplusplus
 }

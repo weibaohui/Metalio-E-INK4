@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "display.h"
 #include "esp_lv_adapter.h"
@@ -97,6 +98,9 @@ public:
 
     // 下一帧 LVGL flush 走全刷，用于大字更新等场景，减少局刷残影。
     void RequestNextFullRefresh();
+
+    // 截取当前墨水屏帧缓冲并编码为标准单色 BMP 图片 (480x800, 1bpp)
+    bool GetScreenshotBmp(std::vector<uint8_t>& out_bmp);
 
     // 关机前调用 EPD Deep Sleep（0x10），需确保关机图已刷完。
     void SleepEpdForPowerOff();

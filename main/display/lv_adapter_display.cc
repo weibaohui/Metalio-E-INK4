@@ -1768,6 +1768,58 @@ void LVAdapterDisplay::RequestNextFullRefresh() {
     epd_flush_ctx_->force_next_full = true;
 }
 
+bool LVAdapterDisplay::GetScreenshotBmp(std::vector<uint8_t>& out_bmp) {
+    if (epd_flush_ctx_ == nullptr || epd_flush_ctx_->last_fb == nullptr) {
+        return false;
+    }
+    const int w = epd_flush_ctx_->panel_w ? epd_flush_ctx_->panel_w : 480;
+    const int h = epd_flush_ctx_->panel_h ? epd_flush_ctx_->panel_h : 800;
+    const size_t row_stride = (w + 7) / 8; // 60 bytes for 480
+    const size_t bmp_row_stride = (row_stride + 3) & ~3; // 4-byte aligned
+    const size_t pixel_bytes = bmp_row_stride * h;
+    const uint32_t offset = 14 + 40 + 8; // 62
+    const uint32_t file_size = offset + pixel_bytes;
+
+    out_bmp.assign(file_size, 0);
+    uint8_t* p = out_bmp.data();
+
+    // 1. BITMAPFILEHEADER (14 bytes)
+    p[0] = 'B';
+    p[1] = 'M';
+    *reinterpret_cast<uint32_t*>(p + 2) = file_size;
+    *reinterpret_cast<uint32_t*>(p + 6) = 0;
+    *reinterpret_cast<uint32_t*>(p + 10) = offset;
+
+    // 2. BITMAPINFOHEADER (40 bytes)
+    *reinterpret_cast<uint32_t*>(p + 14) = 40;
+    *reinterpret_cast<int32_t*>(p + 18) = w;
+    *reinterpret_cast<int32_t*>(p + 22) = -h;  // negative height = top-down DIB
+    *reinterpret_cast<uint16_t*>(p + 26) = 1;
+    *reinterpret_cast<uint16_t*>(p + 28) = 1;  // 1bpp
+    *reinterpret_cast<uint32_t*>(p + 30) = 0;  // BI_RGB
+    *reinterpret_cast<uint32_t*>(p + 34) = pixel_bytes;
+    *reinterpret_cast<int32_t*>(p + 38) = 2835;
+    *reinterpret_cast<int32_t*>(p + 42) = 2835;
+    *reinterpret_cast<uint32_t*>(p + 46) = 2;
+    *reinterpret_cast<uint32_t*>(p + 50) = 0;
+
+    // 3. Color palette (8 bytes)
+    p[54] = 0x00; p[55] = 0x00; p[56] = 0x00; p[57] = 0x00; // 0 = Black
+    p[58] = 0xFF; p[59] = 0xFF; p[60] = 0xFF; p[61] = 0x00; // 1 = White
+
+    // 4. Copy framebuffer data
+    uint8_t* dst = p + offset;
+    const uint8_t* src = epd_flush_ctx_->last_fb;
+    if (bmp_row_stride == row_stride) {
+        memcpy(dst, src, row_stride * h);
+    } else {
+        for (int y = 0; y < h; ++y) {
+            memcpy(dst + y * bmp_row_stride, src + y * row_stride, row_stride);
+        }
+    }
+    return true;
+}
+
 void LVAdapterDisplay::SleepEpdForPowerOff() {
     if (epd_flush_ctx_ == nullptr || epd_flush_ctx_->panel == nullptr) {
         return;

@@ -665,7 +665,7 @@ lv_obj_t* AiVoiceChatScreen::Create() {
         .title = "AI 语音对话",
         .show_header = true,
         .show_status_bar = true,
-        .show_back_btn = true,
+        .show_back_btn = false,
         .scrollable = false,
         .pad_h = 14,
         .pad_v = 8,

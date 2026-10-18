@@ -15,10 +15,10 @@ public:
 
     /**
      * @brief 启动 WiFi 文件管理 Web 服务
-     * @param port 监听端口，默认 8080
+     * @param port 监听端口，默认 80
      * @return true 启动成功，false 启动失败
      */
-    bool Start(uint16_t port = 8080);
+    bool Start(uint16_t port = 80);
 
     /**
      * @brief 停止 WiFi 文件管理 Web 服务
@@ -72,7 +72,7 @@ private:
     ~WifiFileService() { Stop(); }
 
     void* server_ = nullptr;
-    uint16_t port_ = 8080;
+    uint16_t port_ = 80;
     mutable std::mutex cb_mutex_;
     ActivityCallback activity_cb_;
 };

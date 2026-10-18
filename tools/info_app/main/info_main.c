@@ -151,7 +151,7 @@ static void on_back_clicked(lv_event_t *e) {
 
 static int info_on_vk_key(const char *key) {
     if (key == NULL) return 0;
-    if (strcmp(key, "home") == 0 || strcmp(key, "prev") == 0 || strcmp(key, "vk_prev") == 0) {
+    if (strcmp(key, "home") == 0 || strcmp(key, "vk_home") == 0 || strcmp(key, "prev") == 0 || strcmp(key, "vk_prev") == 0) {
         dynapp_screen_go_home();
         return 1;
     }
@@ -181,39 +181,24 @@ static void *info_create(void) {
     // 2. 虚拟键
     dynapp_vk_attach(scr, "info", info_create, info_on_vk_key);
 
-    // 3. 顶部 Header (返回按钮 + 标题 + 刷新按钮)
-    lv_obj_t *header = lv_obj_create(scr);
-    lv_obj_remove_style_all(header);
-    lv_obj_set_size(header, 480, 56);
-    lv_obj_set_pos(header, 0, 36);
+    // 3. 顶部操作行 (标题 + 刷新按钮，无返回按钮，由 vk_home 触控键返回)
+    lv_obj_t *top_bar = lv_obj_create(scr);
+    lv_obj_remove_style_all(top_bar);
+    lv_obj_set_size(top_bar, 456, 44);
+    lv_obj_set_pos(top_bar, 12, 38);
+    lv_obj_set_flex_flow(top_bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(top_bar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t *back_btn = lv_obj_create(header);
-    lv_obj_remove_style_all(back_btn);
-    lv_obj_set_size(back_btn, 64, 48);
-    lv_obj_set_pos(back_btn, 12, 4);
-    lv_obj_add_flag(back_btn, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(back_btn, on_back_clicked, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *back_lbl = lv_label_create(back_btn);
-    lv_label_set_text(back_lbl, "‹ 返回");
-    const lv_font_t *f22 = fontpack_lv_font_get(22, 2);
-    if (f22 == NULL) f22 = fontpack_lv_font_ui();
-    if (f22 != NULL) lv_obj_set_style_text_font(back_lbl, f22, 0);
-    lv_obj_set_style_text_color(back_lbl, lv_color_black(), 0);
-    lv_obj_center(back_lbl);
-
-    lv_obj_t *title_lbl = lv_label_create(header);
+    lv_obj_t *title_lbl = lv_label_create(top_bar);
     lv_label_set_text(title_lbl, "系统信息");
     const lv_font_t *f26 = fontpack_lv_font_get(26, 2);
     if (f26 == NULL) f26 = fontpack_lv_font_ui();
     if (f26 != NULL) lv_obj_set_style_text_font(title_lbl, f26, 0);
     lv_obj_set_style_text_color(title_lbl, lv_color_black(), 0);
-    lv_obj_align(title_lbl, LV_ALIGN_CENTER, 0, 0);
 
-    lv_obj_t *refresh_btn = lv_obj_create(header);
+    lv_obj_t *refresh_btn = lv_obj_create(top_bar);
     lv_obj_remove_style_all(refresh_btn);
-    lv_obj_set_size(refresh_btn, 72, 38);
-    lv_obj_align(refresh_btn, LV_ALIGN_RIGHT_MID, -12, 0);
+    lv_obj_set_size(refresh_btn, 76, 38);
     lv_obj_set_style_bg_color(refresh_btn, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(refresh_btn, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(refresh_btn, lv_color_black(), 0);
@@ -233,8 +218,8 @@ static void *info_create(void) {
     // 4. 滚动内容区域
     s_body = lv_obj_create(scr);
     lv_obj_remove_style_all(s_body);
-    lv_obj_set_size(s_body, 456, 696);
-    lv_obj_set_pos(s_body, 12, 96);
+    lv_obj_set_size(s_body, 456, 710);
+    lv_obj_set_pos(s_body, 12, 84);
     lv_obj_set_flex_flow(s_body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_body, 8, 0);
 
