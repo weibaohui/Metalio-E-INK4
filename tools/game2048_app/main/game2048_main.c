@@ -558,12 +558,7 @@ static void async_move_cb(void *arg) {
     handle_move(dir);
 }
 
-static void async_undo_cb(void *arg) {
-    if (core_undo()) {
-        redraw_board();
-    }
-}
-
+// vk_home 统一返回键：含结算弹窗在内的任意状态均直接安全退出应用回桌面
 static int game2048_on_vk_key(const char *key) {
     if (key == NULL || !s_alive) return 0;
     if (strcmp(key, "vk_prev") == 0) {
@@ -574,11 +569,7 @@ static int game2048_on_vk_key(const char *key) {
         dynapp_lv_async(async_move_cb, (void *)(intptr_t)DIR_RIGHT);
         return 1;
     }
-    if (strcmp(key, "vk_home") == 0) {
-        dynapp_lv_async(async_undo_cb, NULL);
-        return 1;
-    }
-    if (strcmp(key, "home") == 0 || strcmp(key, "prev") == 0) {
+    if (strcmp(key, "vk_home") == 0 || strcmp(key, "home") == 0 || strcmp(key, "prev") == 0) {
         save_best_score();
         dynapp_screen_go_home();
         return 1;
@@ -648,11 +639,6 @@ static lv_obj_t *make_score_box(lv_obj_t *parent, const char *title, lv_coord_t 
     lv_obj_align(v_lbl, LV_ALIGN_BOTTOM_MID, 0, -4);
 
     return v_lbl;
-}
-
-static void on_dir_btn_cb(lv_event_t *e) {
-    dir_t dir = (dir_t)(intptr_t)lv_event_get_user_data(e);
-    handle_move(dir);
 }
 
 // 屏幕创建
@@ -740,27 +726,7 @@ static void *game2048_create(void) {
         }
     }
 
-    // 6. 微型方向辅助键
-    lv_coord_t dpad_y = 568;
-    lv_obj_t *up_btn = make_btn(scr, "▲", 56, 40, on_dir_btn_cb, (void *)(intptr_t)DIR_UP);
-    lv_obj_set_pos(up_btn, 212, dpad_y);
-
-    lv_obj_t *left_btn = make_btn(scr, "◀", 56, 40, on_dir_btn_cb, (void *)(intptr_t)DIR_LEFT);
-    lv_obj_set_pos(left_btn, 148, dpad_y + 44);
-
-    lv_obj_t *hint = lv_label_create(scr);
-    lv_label_set_text(hint, "或滑动");
-    if (f18 != NULL) lv_obj_set_style_text_font(hint, f18, 0);
-    lv_obj_set_style_text_color(hint, lv_palette_darken(LV_PALETTE_GREY, 2), 0);
-    lv_obj_set_pos(hint, 216, dpad_y + 54);
-
-    lv_obj_t *right_btn = make_btn(scr, "▶", 56, 40, on_dir_btn_cb, (void *)(intptr_t)DIR_RIGHT);
-    lv_obj_set_pos(right_btn, 276, dpad_y + 44);
-
-    lv_obj_t *down_btn = make_btn(scr, "▼", 56, 40, on_dir_btn_cb, (void *)(intptr_t)DIR_DOWN);
-    lv_obj_set_pos(down_btn, 212, dpad_y + 88);
-
-    // 7. 底部按键行
+    // 6. 底部按键行
     lv_obj_t *row = lv_obj_create(scr);
     lv_obj_remove_style_all(row);
     lv_obj_set_size(row, 436, 56);
@@ -773,7 +739,7 @@ static void *game2048_create(void) {
     make_btn(row, "重开", 136, 56, on_btn_clicked, (void *)1);
     make_btn(row, "退出", 136, 56, on_btn_clicked, (void *)2);
 
-    // 8. 初始刷新
+    // 7. 初始刷新
     sync_best_label();
     redraw_board();
 
