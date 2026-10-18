@@ -374,6 +374,40 @@ void dynapp_glm_stop(void) {
 }
 
 // 备份恢复服务
+int dynapp_backup_is_sd_mounted(void) {
+    return backup_restore::NvsBackupService::GetInstance().IsSdMounted() ? 1 : 0;
+}
+
+int dynapp_backup_get_sd_capacity(char* out_free, size_t free_len, char* out_total, size_t total_len) {
+    std::string f, t;
+    if (backup_restore::NvsBackupService::GetInstance().GetSdCapacityText(f, t)) {
+        if (out_free && free_len > 0) { strncpy(out_free, f.c_str(), free_len - 1); out_free[free_len - 1] = '\0'; }
+        if (out_total && total_len > 0) { strncpy(out_total, t.c_str(), total_len - 1); out_total[total_len - 1] = '\0'; }
+        return 1;
+    }
+    return 0;
+}
+
+static std::vector<backup_restore::BackupFileInfo> s_backup_cache;
+
+int dynapp_backup_list_count(void) {
+    s_backup_cache = backup_restore::NvsBackupService::GetInstance().ListBackups();
+    return static_cast<int>(s_backup_cache.size());
+}
+
+int dynapp_backup_get_item(int index, dynapp_backup_info_t* out) {
+    if (out == nullptr || index < 0 || static_cast<size_t>(index) >= s_backup_cache.size()) return 0;
+    const auto& b = s_backup_cache[index];
+    strncpy(out->filename, b.filename.c_str(), sizeof(out->filename) - 1);
+    out->filename[sizeof(out->filename) - 1] = '\0';
+    strncpy(out->full_path, b.full_path.c_str(), sizeof(out->full_path) - 1);
+    out->full_path[sizeof(out->full_path) - 1] = '\0';
+    out->size_bytes = b.size_bytes;
+    out->mod_time = static_cast<int64_t>(b.mod_time);
+    out->entry_count = b.entry_count;
+    return 1;
+}
+
 int dynapp_backup_export(char* out_filename, size_t max_len) {
     auto res = backup_restore::NvsBackupService::GetInstance().ExportToSd();
     if (res.success && out_filename != nullptr && max_len > 0) {
@@ -399,6 +433,54 @@ int dynapp_backup_get_nvs_count(void) {
 }
 
 // 壁纸设置服务
+#include <dirent.h>
+#include <sys/stat.h>
+
+struct WallpaperFileItem {
+    std::string name;
+    std::string path;
+    size_t size_bytes = 0;
+};
+static std::vector<WallpaperFileItem> s_wallpaper_cache;
+
+int dynapp_wallpaper_list_count(void) {
+    s_wallpaper_cache.clear();
+    const char* dir_path = "/sdcard/metalio/e-ink/wallpaper";
+    DIR* dir = opendir(dir_path);
+    if (!dir) return 0;
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        if (entry->d_name[0] == '.') continue;
+        const char* dot = strrchr(entry->d_name, '.');
+        if (!dot) continue;
+        if (strcasecmp(dot, ".png") == 0 || strcasecmp(dot, ".jpg") == 0 ||
+            strcasecmp(dot, ".jpeg") == 0 || strcasecmp(dot, ".a2i1") == 0 ||
+            strcasecmp(dot, ".bin") == 0) {
+            WallpaperFileItem item;
+            item.name = entry->d_name;
+            item.path = std::string(dir_path) + "/" + entry->d_name;
+            struct stat st;
+            if (stat(item.path.c_str(), &st) == 0) {
+                item.size_bytes = st.st_size;
+            }
+            s_wallpaper_cache.push_back(item);
+        }
+    }
+    closedir(dir);
+    return static_cast<int>(s_wallpaper_cache.size());
+}
+
+int dynapp_wallpaper_get_item(int index, dynapp_wallpaper_info_t* out) {
+    if (out == nullptr || index < 0 || static_cast<size_t>(index) >= s_wallpaper_cache.size()) return 0;
+    const auto& w = s_wallpaper_cache[index];
+    strncpy(out->name, w.name.c_str(), sizeof(out->name) - 1);
+    out->name[sizeof(out->name) - 1] = '\0';
+    strncpy(out->path, w.path.c_str(), sizeof(out->path) - 1);
+    out->path[sizeof(out->path) - 1] = '\0';
+    out->size_bytes = w.size_bytes;
+    return 1;
+}
+
 int dynapp_wallpaper_get_standby(char* out_name, size_t max_len) {
     std::string s = wallpaper::GetStandbyFilename();
     if (out_name != nullptr && max_len > 0) {
