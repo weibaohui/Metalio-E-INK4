@@ -47,6 +47,7 @@ public:
 
     // 切换应用开关（更新 RAM 缓存并经 AsyncSettingsStore 防抖落盘）
     void SetAppEnabled(int index, bool enabled);
+    void SetAppEnabled(const char* id, bool enabled);
 
     // 注册所有已启用应用的 MCP 工具
     void RegisterEnabledMcpTools();

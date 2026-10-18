@@ -88,7 +88,8 @@ if [ ! -f "$SO_FILE" ]; then
 fi
 
 # 2. 组装 .app Bundle 输出到 bin/ 目录（排除于 git 之外）
-BUNDLE_DIR="$APP_DIR/bin/${APP_NAME}.app"
+OUT_DIR="$APP_DIR/bin"
+BUNDLE_DIR="$OUT_DIR/${APP_NAME}.app"
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/lib"
 cp "$SO_FILE" "$BUNDLE_DIR/lib/app.so"
@@ -130,11 +131,18 @@ done
 echo "==> Bundle 准备就绪: $BUNDLE_DIR"
 find "$BUNDLE_DIR" -type f
 
-# 3. 如果指定了上传 IP，则通过 HTTP MCP API 直推
+# 3. 打包为标准 .app.zip 独立分发安装包
+APP_ZIP="$OUT_DIR/${APP_NAME}.app.zip"
+rm -f "$APP_ZIP"
+(cd "$BUNDLE_DIR" && zip -r -q "$APP_ZIP" .)
+ZIP_BYTES="$(stat -f%z "$APP_ZIP" 2>/dev/null || wc -c < "$APP_ZIP")"
+echo "==> 独立应用安装包已生成: $APP_ZIP (${ZIP_BYTES} 字节)"
+
+# 4. 如果指定了上传 IP，则通过 HTTP 应用管理接口 /app/install 一键直推安装
 if [ -n "$UPLOAD_IP" ]; then
     echo ""
     echo "=============================================="
-    echo " 正在通过 WiFi 部署到设备 http://${UPLOAD_IP}:8080 ..."
+    echo " 正在通过 WiFi 安装/更新应用到设备 http://${UPLOAD_IP}:8080 ..."
     echo "=============================================="
 
     AUTH_HEADER=()
@@ -142,54 +150,30 @@ if [ -n "$UPLOAD_IP" ]; then
         AUTH_HEADER=(-H "Authorization: Bearer $PIN")
     fi
 
-    # 上传 manifest.json
-    echo "-> 上传 manifest.json..."
-    curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app" \
-        -H "X-Filename: manifest.json" \
+    # 优先使用全新 /app/install 一键安装包端点
+    echo "-> 上传应用安装包: $(basename "$APP_ZIP")..."
+    RESP=$(curl -s -X POST "http://${UPLOAD_IP}:8080/app/install" \
         "${AUTH_HEADER[@]}" \
-        --data-binary "@$BUNDLE_DIR/manifest.json"
-    echo ""
+        --data-binary "@$APP_ZIP") || true
 
-    # 上传 icon.png（若存在）
-    if [ -f "$BUNDLE_DIR/icon.png" ]; then
-        echo "-> 上传 icon.png..."
+    if echo "$RESP" | grep -q '"success":true'; then
+        echo "==> 部署成功！设备响应: $RESP"
+    else
+        echo "注意: /app/install 响应: $RESP，尝试回退兼容上传各组件..."
+        # 回退：上传 manifest.json
         curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app" \
-            -H "X-Filename: icon.png" \
-            "${AUTH_HEADER[@]}" \
-            --data-binary "@$BUNDLE_DIR/icon.png"
-        echo ""
-    fi
-
-    # 上传 README.md（若存在）
-    if [ -f "$BUNDLE_DIR/README.md" ]; then
-        echo "-> 上传 README.md..."
-        curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app" \
-            -H "X-Filename: README.md" \
-            "${AUTH_HEADER[@]}" \
-            --data-binary "@$BUNDLE_DIR/README.md"
-        echo ""
-    fi
-
-    # 上传示例文件（若存在）
-    for ex in "$BUNDLE_DIR"/*.example.*; do
-        if [ -f "$ex" ]; then
-            ex_name="$(basename "$ex")"
-            echo "-> 上传 $ex_name..."
+            -H "X-Filename: manifest.json" "${AUTH_HEADER[@]}" --data-binary "@$BUNDLE_DIR/manifest.json"
+        if [ -f "$BUNDLE_DIR/icon.png" ]; then
             curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app" \
-                -H "X-Filename: $ex_name" \
-                "${AUTH_HEADER[@]}" \
-                --data-binary "@$ex"
-            echo ""
+                -H "X-Filename: icon.png" "${AUTH_HEADER[@]}" --data-binary "@$BUNDLE_DIR/icon.png"
         fi
-    done
-
-    # 上传 lib/app.so
-    echo "-> 上传 lib/app.so..."
-    curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app/lib" \
-        -H "X-Filename: app.so" \
-        "${AUTH_HEADER[@]}" \
-        --data-binary "@$BUNDLE_DIR/lib/app.so"
-    echo ""
-
-    echo "==> 部署成功！应用已在桌面热更新注册完毕。"
+        if [ -f "$BUNDLE_DIR/README.md" ]; then
+            curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app" \
+                -H "X-Filename: README.md" "${AUTH_HEADER[@]}" --data-binary "@$BUNDLE_DIR/README.md"
+        fi
+        curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app/lib" \
+            -H "X-Filename: app.so" "${AUTH_HEADER[@]}" --data-binary "@$BUNDLE_DIR/lib/app.so"
+        echo "==> 兼容部署完成！"
+    fi
 fi
+

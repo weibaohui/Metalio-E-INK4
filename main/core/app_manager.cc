@@ -204,6 +204,14 @@ void AppManager::SetAppEnabled(int index, bool enabled) {
     ESP_LOGI(TAG, "app %s -> %s", modules_[index]->GetId(), enabled ? "on" : "off");
 }
 
+void AppManager::SetAppEnabled(const char* id, bool enabled) {
+    if (id == nullptr) return;
+    int idx = FindIndexById(id);
+    if (idx >= 0) {
+        SetAppEnabled(idx, enabled);
+    }
+}
+
 void AppManager::RegisterEnabledMcpTools() {
     for (const auto& module : modules_) {
         if (!IsAppEnabled(module->GetId())) {

@@ -391,6 +391,98 @@ esp_err_t FsDeleteHandler(httpd_req_t* req) {
     return ESP_OK;
 }
 
+esp_err_t AppInstallHandler(httpd_req_t* req) {
+    const std::string token = LocalMcpServer::GetInstance().GetPin();
+    if (!CheckAuthorization(req, token)) {
+        SetCommonHeaders(req);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "Authorization bearer token required");
+        return ESP_OK;
+    }
+
+    if (req->content_len == 0 || req->content_len > 25 * 1024 * 1024) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid content length (max 25MB)");
+        return ESP_FAIL;
+    }
+
+    SdEnsureDir(SD_APP_ROOT);
+    const std::string tmp_zip = std::string(SD_APP_ROOT) + "/app_install_upload.zip";
+    unlink(tmp_zip.c_str());
+
+    FILE* fp = fopen(tmp_zip.c_str(), "wb");
+    if (fp == nullptr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Cannot write to SD card");
+        return ESP_FAIL;
+    }
+
+    constexpr size_t kChunkSize = 16384;
+    void* chunk = heap_caps_malloc(kChunkSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    size_t chunk_cap = kChunkSize;
+    if (chunk == nullptr) {
+        chunk = malloc(4096);
+        chunk_cap = 4096;
+    }
+    if (chunk == nullptr) {
+        fclose(fp);
+        unlink(tmp_zip.c_str());
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    size_t total = 0;
+    int remaining = static_cast<int>(req->content_len);
+    bool ok = true;
+    while (remaining > 0) {
+        const int to_read = (remaining < static_cast<int>(chunk_cap)) ? remaining
+                                                                     : static_cast<int>(chunk_cap);
+        const int ret = httpd_req_recv(req, static_cast<char*>(chunk), to_read);
+        if (ret <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            ok = false;
+            break;
+        }
+        if (fwrite(chunk, 1, static_cast<size_t>(ret), fp) != static_cast<size_t>(ret)) {
+            ok = false;
+            break;
+        }
+        total += static_cast<size_t>(ret);
+        remaining -= ret;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    fclose(fp);
+    free(chunk);
+
+    if (!ok) {
+        unlink(tmp_zip.c_str());
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Upload interrupted");
+        return ESP_FAIL;
+    }
+
+    auto res = dynamic_apps::InstallFromZip(tmp_zip, true);
+    unlink(tmp_zip.c_str());
+
+    cJSON* rep = cJSON_CreateObject();
+    cJSON_AddBoolToObject(rep, "success", res.success);
+    if (res.success) {
+        cJSON_AddStringToObject(rep, "id", res.app_id.c_str());
+        cJSON_AddStringToObject(rep, "name", res.app_name.c_str());
+        cJSON_AddStringToObject(rep, "version", res.version.c_str());
+        cJSON_AddStringToObject(rep, "bundle", res.bundle_dir.c_str());
+        cJSON_AddStringToObject(rep, "message", "应用安装/更新成功，已在桌面热注册完毕");
+    } else {
+        cJSON_AddStringToObject(rep, "error", res.error_msg.c_str());
+    }
+    char* json_str = cJSON_PrintUnformatted(rep);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_str);
+    cJSON_free(json_str);
+    cJSON_Delete(rep);
+    return ESP_OK;
+}
+
 esp_err_t PostHandler(httpd_req_t* req) {
     // PIN 即 bearer token(6 位数字),从 RAM 缓存读(避免每次请求都开 NVS)。
     const std::string token = LocalMcpServer::GetInstance().GetPin();
@@ -591,6 +683,25 @@ void LocalMcpServer::Start() {
     fs_delete_uri.user_ctx = nullptr;
     if (httpd_register_uri_handler(server, &fs_delete_uri) != ESP_OK) {
         ESP_LOGE(TAG, "register /fs/delete failed");
+    }
+
+    // 独立应用安装端点：curl POST .app.zip 压缩包一键安装/更新
+    httpd_uri_t app_install_uri = {};
+    app_install_uri.uri = "/app/install";
+    app_install_uri.method = HTTP_POST;
+    app_install_uri.handler = AppInstallHandler;
+    app_install_uri.user_ctx = nullptr;
+    if (httpd_register_uri_handler(server, &app_install_uri) != ESP_OK) {
+        ESP_LOGE(TAG, "register /app/install failed");
+    }
+
+    httpd_uri_t app_upload_uri = {};
+    app_upload_uri.uri = "/app/upload";
+    app_upload_uri.method = HTTP_POST;
+    app_upload_uri.handler = AppInstallHandler;
+    app_upload_uri.user_ctx = nullptr;
+    if (httpd_register_uri_handler(server, &app_upload_uri) != ESP_OK) {
+        ESP_LOGE(TAG, "register /app/upload failed");
     }
 
     {
