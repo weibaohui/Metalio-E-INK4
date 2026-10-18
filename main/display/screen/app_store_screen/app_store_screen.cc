@@ -9,6 +9,7 @@
 #include <cstring>
 #include <vector>
 
+#include "core/haptic_feedback.h"
 #include "display/screen/epd_widget_kit.h"
 #include "display/screen/screen_common.h"
 #include "display/screen/home_screen/home_screen.h"
@@ -87,36 +88,46 @@ void RebuildList(lv_obj_t* body) {
 
         lv_obj_t* row = lv_obj_create(body);
         lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, lv_pct(100), 110);
+        lv_obj_set_size(row, lv_pct(100), 96);
         lv_obj_set_style_border_color(row, lv_color_black(), 0);
         lv_obj_set_style_border_width(row, 1, 0);
-        lv_obj_set_style_pad_all(row, 10, 0);
+        lv_obj_set_style_pad_all(row, 12, 0);
+        lv_obj_set_style_radius(row, 8, 0);
         disable_scroll(row);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
 
-        // 左列：名称 + 版本/状态
-        lv_obj_t* name = MakeText(row, pkg.name.c_str(), 25);
-        lv_obj_set_pos(name, 0, 0);
+        // 左列：名称 + 版本号
+        char title_str[128];
+        const char* ver = pkg.version.empty() ? "1.0.0" : pkg.version.c_str();
+        if (ver[0] == 'v' || ver[0] == 'V') {
+            snprintf(title_str, sizeof(title_str), "%s  %s", pkg.name.c_str(), ver);
+        } else {
+            snprintf(title_str, sizeof(title_str), "%s  v%s", pkg.name.c_str(), ver);
+        }
+        lv_obj_t* name_lbl = MakeText(row, title_str, 25);
+        lv_obj_align(name_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        // 次行：ID 和安装状态
         char meta[96];
-        snprintf(meta, sizeof(meta), "%s %s · %s",
-                 pkg.version.empty() ? "v?" : pkg.version.c_str(),
-                 pkg.installed ? "已安装" : "未安装",
-                 pkg.id.c_str());
+        snprintf(meta, sizeof(meta), "ID: %s  ·  %s",
+                 pkg.id.c_str(),
+                 pkg.installed ? "已安装" : "未安装");
         lv_obj_t* meta_lbl = MakeText(row, meta, 20);
-        lv_obj_set_pos(meta_lbl, 0, 38);
+        lv_obj_align(meta_lbl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
         lv_obj_set_style_text_color(meta_lbl, lv_palette_darken(LV_PALETTE_GREY, 2), 0);
 
         // 右侧按钮：已安装 → 卸载；未安装 → 安装
         lv_obj_t* btn = lv_obj_create(row);
         lv_obj_remove_style_all(btn);
-        lv_obj_set_size(btn, 128, 64);
+        lv_obj_set_size(btn, 110, 56);
         lv_obj_align(btn, LV_ALIGN_RIGHT_MID, 0, 0);
-        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_set_style_radius(btn, 6, 0);
         lv_obj_set_style_border_color(btn, lv_color_black(), 0);
         lv_obj_set_style_border_width(btn, 2, 0);
         lv_obj_set_style_bg_color(btn, pkg.installed ? lv_color_white() : lv_color_black(), 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
         lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        HapticAttachClick(btn);
         lv_obj_add_event_cb(btn, OnActionClicked, LV_EVENT_CLICKED,
                             reinterpret_cast<void*>(static_cast<intptr_t>(i)));
         lv_obj_t* btn_lbl = lv_label_create(btn);
@@ -151,7 +162,7 @@ lv_obj_t* AppStoreScreen::Create() {
     cfg.row_gap = 10;
     auto* scaffold = EpdWidgetKit::EpdPageScaffold::Create(cfg);
     s_scr = scaffold->GetScreen();
-    s_list_body = scaffold->GetBody();
+    s_list_body = scaffold->GetContentContainer();
     s_alive = true;
 
     lv_obj_add_event_cb(s_scr, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOAD_START, NULL);
