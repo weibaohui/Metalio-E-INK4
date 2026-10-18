@@ -89,8 +89,9 @@ fi
 
 # 2. 组装 .app Bundle 输出到 bin/ 目录（排除于 git 之外）
 BUNDLE_DIR="$APP_DIR/bin/${APP_NAME}.app"
-mkdir -p "$BUNDLE_DIR/bin"
-cp "$SO_FILE" "$BUNDLE_DIR/bin/app.so"
+rm -rf "$BUNDLE_DIR"
+mkdir -p "$BUNDLE_DIR/lib"
+cp "$SO_FILE" "$BUNDLE_DIR/lib/app.so"
 
 # 复制 manifest.json
 if [ -f "$APP_DIR/manifest.json" ]; then
@@ -101,7 +102,7 @@ elif [ ! -f "$BUNDLE_DIR/manifest.json" ]; then
   "id": "${APP_NAME}",
   "name": "${APP_NAME}",
   "icon": "icon.png",
-  "executable": "bin/app.so",
+  "executable": "lib/app.so",
   "abi": 1,
   "version": "1.0.0"
 }
@@ -147,12 +148,12 @@ if [ -n "$UPLOAD_IP" ]; then
         echo ""
     fi
 
-    # 上传 bin/app.so
-    echo "-> 上传 bin/app.so..."
-    curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app/bin" \
+    # 上传 lib/app.so
+    echo "-> 上传 lib/app.so..."
+    curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app/lib" \
         -H "X-Filename: app.so" \
         "${AUTH_HEADER[@]}" \
-        --data-binary "@$BUNDLE_DIR/bin/app.so"
+        --data-binary "@$BUNDLE_DIR/lib/app.so"
     echo ""
 
     echo "==> 部署成功！应用已在桌面热更新注册完毕。"
