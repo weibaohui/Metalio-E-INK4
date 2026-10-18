@@ -1,0 +1,10 @@
+{
+  "id": "sdkhello",
+  "name": "Hello SDK",
+  "icon": "icon.png",
+  "executable": "lib/app.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio SDK",
+  "description": "SDK 独立编译最小示例应用"
+}
