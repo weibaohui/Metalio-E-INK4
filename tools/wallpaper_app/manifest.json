@@ -1,9 +1,10 @@
 {
   "id": "wallpaper",
-  "name": "壁纸",
+  "name": "待机壁纸",
+  "icon": "icon.png",
+  "executable": "lib/app.so",
+  "abi": 1,
   "version": "1.0.0",
   "author": "Metalio",
-  "description": "待机壁纸挑选与设置",
-  "main": "lib/app.so",
-  "icon": "icon.png"
+  "description": "待机壁纸挑选与设置"
 }
