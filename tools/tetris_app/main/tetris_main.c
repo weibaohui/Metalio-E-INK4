@@ -198,7 +198,7 @@ static void core_cells(const int shape[TYPES][4][2] /*未用*/, int t, int r, in
 // ---- UI 状态 ----
 #define CELL_PX 30
 #define BOARD_X 22
-#define BOARD_Y 12
+#define BOARD_Y 50  // 状态栏高约 42px,棋盘整体下移让出,避免顶边与状态栏重叠
 #define SIDE_X 338
 #define BTN_H 60
 #define FULL_REFRESH_EVERY 10
@@ -752,17 +752,17 @@ static void* fangfang_create(void) {
         s_cur[i] = make_block(s_board);
     }
 
-    // 右栏：下一个 / 暂存（点击交换）/ 得分 / 行数 / 等级 / 最高
-    make_text(s_scr, "下一个", 25, SIDE_X, 8);
-    lv_obj_t* next_box = make_plain_box(s_scr, SIDE_X, 38, 110, 110, 2);
+    // 右栏：下一个 / 暂存（点击交换）/ 得分 / 行数 / 等级 / 最高（整体随棋盘下移 38px）
+    make_text(s_scr, "下一个", 25, SIDE_X, 46);
+    lv_obj_t* next_box = make_plain_box(s_scr, SIDE_X, 76, 110, 110, 2);
     for (int i = 0; i < 4; ++i) {
         s_next_pv[i] = make_block(next_box);
         lv_obj_set_size(s_next_pv[i], 20, 20);
         lv_obj_add_flag(s_next_pv[i], LV_OBJ_FLAG_HIDDEN);
     }
 
-    make_text(s_scr, "暂存", 25, SIDE_X, 162);
-    lv_obj_t* hold_box = make_plain_box(s_scr, SIDE_X, 192, 110, 110, 2);
+    make_text(s_scr, "暂存", 25, SIDE_X, 200);
+    lv_obj_t* hold_box = make_plain_box(s_scr, SIDE_X, 230, 110, 110, 2);
     lv_obj_add_flag(hold_box, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(hold_box, on_hold_box_clicked, LV_EVENT_CLICKED, NULL);
 
@@ -781,7 +781,7 @@ static void* fangfang_create(void) {
         lv_obj_add_flag(s_hold_pv[i], LV_OBJ_FLAG_HIDDEN);
     }
 
-    lv_coord_t row_y = 316;
+    lv_coord_t row_y = 354;
     s_score_lbl = make_text(s_scr, "0", 30, SIDE_X, row_y + 28);
     make_text(s_scr, "得分", 25, SIDE_X, row_y);
     row_y += 74;

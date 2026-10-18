@@ -152,6 +152,16 @@ void McpServer::AddCommonTools() {
             return true;
         });
 
+    AddTool("self.input.click", "Simulate a physical touch screen tap at coordinate (x, y) with optional duration_ms.",
+        PropertyList({
+            Property("x", kPropertyTypeInteger, "X coordinate on screen (0-479)"),
+            Property("y", kPropertyTypeInteger, "Y coordinate on screen (0-799, or 900 for virtual keys)"),
+            Property("duration_ms", kPropertyTypeInteger, "Optional touch duration in milliseconds (default: 60)")
+        }),
+        [](const PropertyList& properties) -> ReturnValue {
+            return true;
+        });
+
     // Restore the original tools list to the end of the tools list
     tools_.insert(tools_.end(), original_tools.begin(), original_tools.end());
 }
@@ -510,6 +520,30 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
             ReplyResult(id, "{\"content\":[{\"type\":\"text\",\"text\":\"Key dispatched\"}]}", response_sink);
             return;
         }
+    }
+
+    if (tool_name == "self.input.click") {
+        int x = -1;
+        int y = -1;
+        int duration_ms = 60;
+        auto x_val = cJSON_GetObjectItem(tool_arguments, "x");
+        auto y_val = cJSON_GetObjectItem(tool_arguments, "y");
+        auto dur_val = cJSON_GetObjectItem(tool_arguments, "duration_ms");
+        if (cJSON_IsNumber(x_val)) x = x_val->valueint;
+        if (cJSON_IsNumber(y_val)) y = y_val->valueint;
+        if (cJSON_IsNumber(dur_val)) duration_ms = dur_val->valueint;
+
+        if (x >= 0 && y >= 0) {
+            if (auto* disp = LVAdapterDisplay::Instance()) {
+                disp->InjectTouch(x, y, duration_ms);
+                char buf[128];
+                snprintf(buf, sizeof(buf), "{\"content\":[{\"type\":\"text\",\"text\":\"Click executed at (%d, %d)\"}]}", x, y);
+                ReplyResult(id, buf, response_sink);
+                return;
+            }
+        }
+        ReplyError(id, "Invalid or missing x, y coordinates", response_sink);
+        return;
     }
 
     PropertyList arguments = (*tool_iter)->properties();

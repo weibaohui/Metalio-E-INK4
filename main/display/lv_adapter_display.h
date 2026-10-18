@@ -105,6 +105,9 @@ public:
     // 关机前调用 EPD Deep Sleep（0x10），需确保关机图已刷完。
     void SleepEpdForPowerOff();
 
+    // 注入一次虚拟触控点击 (x, y)，模拟真实手指按下与抬起完整生命周期
+    bool InjectTouch(int x, int y, int duration_ms = 60);
+
     // CST816 硬件 RST 唤醒后，通知 esp_lv_adapter 重新读触摸（IRQ 路径）。
     void KickTouchInput();
 
