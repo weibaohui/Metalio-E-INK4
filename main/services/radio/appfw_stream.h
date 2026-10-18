@@ -43,6 +43,17 @@ typedef struct {
 // modem sleep 会把突发收包压到几 KB/s,HLS 直播段必断)。
 appfw_stream_err_t appfw_stream_open(appfw_stream_t **out, const appfw_stream_cfg_t *cfg);
 
+// 可中止版 open:cfg 同 open;live 出参在底层 http 客户端 init 成功后立刻指向
+// 句柄(早于 open 返回),供其他任务在阻塞期间调用 appfw_stream_abort() 打断。
+// open 返回时 live 置回 NULL——成功后句柄经 out 交还,失败时内部已释放。
+appfw_stream_err_t appfw_stream_open_abortable(appfw_stream_t **out, const appfw_stream_cfg_t *cfg,
+                                               appfw_stream_t **live);
+
+// 中止当前阻塞中的 open/read:从其他任务调用,关掉底层 socket 使阻塞调用立刻
+// 以错误返回。死流实测会高 CPU 空转卡在 open 里且不响应读写超时,这是唯一
+// 不靠强杀任务就能打断的手段。句柄生命周期仍归调用任务;close 后调用为空操作。
+void appfw_stream_abort(appfw_stream_t *s);
+
 // 读纯音频字节(ICY 已剥离)。>0=字节数;0=服务端暂时停推(HLS 新段已就绪
 // 或 http 分身刚重连,再读一次即可);<0=流已死(调用方按故障收尾)。
 int appfw_stream_read(appfw_stream_t *s, uint8_t *buf, int cap);

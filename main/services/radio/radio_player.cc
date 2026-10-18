@@ -56,6 +56,8 @@ struct PlayReq {
     uint64_t seq = 0;      // 请求序号:任务只执行最新一次
     bool stop = false;     // true=只停不播
     int catalog_index = -1;
+    bool allow_hop = true;   // 失败后允许自动跳下一台(内置目录台)
+    bool auto_hop = false;   // true=本请求是自动跳台产生(用户手点会重置跳台预算)
 };
 
 std::mutex s_req_mutex;
@@ -454,6 +456,42 @@ void StreamTitleCb(void* user, const char* title) {
     SetSnapTitle(title);
 }
 
+// 建连期间发布的流句柄:底层 http 客户端 init 成功后即非空(早于 open 返回)。
+// 停止/换台/重启路径经它从外部关 socket,打断阻塞中的建连。radio 任务单写,
+// 其他任务只读;指针宽度的读写在该平台天然原子。
+appfw_stream_t* s_open_live = nullptr;
+
+// 自动跳台剩余预算:连续失败跳台消耗,成功开播即恢复(防死台循环漫游)
+static int s_hop_budget = 3;
+
+// 尽力打断阻塞中的建连/读:appfw_stream_abort 从本任务关底层 socket,
+// 阻塞中的 open/read 会立刻以错误返回(卡死自愈的关键一环)。
+void AbortOpenStream() {
+    appfw_stream_t* s = s_open_live;
+    if (s != nullptr) {
+        appfw_stream_abort(s);
+    }
+}
+
+// ---- 建连子任务隔离:open 放独立任务跑,父任务限时等待 ----
+// 实测存在 open 内部高 CPU 空转且不受读写超时约束的死流(qtfm 系),一次卡死
+// 曾让整个收音任务永久失效(start/stop/退出全部失灵,仅重启可解)。子任务隔离
+// 后任何建连最多占用 ~13s,到点强杀(代价:泄漏少量网络资源,换整机不被拖死)。
+struct OpenJob {
+    const appfw_stream_cfg_t* cfg = nullptr;
+    appfw_stream_t* stream = nullptr;
+    appfw_stream_err_t err = APPFW_STREAM_ERR_CONNECT;
+    volatile bool done = false;
+};
+
+void OpenJobTask(void* arg) {
+    OpenJob* job = static_cast<OpenJob*>(arg);
+    job->err = appfw_stream_open_abortable(&job->stream, job->cfg, &s_open_live);
+    job->done = true;
+    // 不自删:由父任务统一 vTaskDeleteWithCaps 回收,避免完成/强删竞态
+    vTaskSuspend(NULL);
+}
+
 // 一轮完整收听;返回前 s_quit 或换台请求生效。
 // 返回 true=本轮因新请求被取代(不应重试);false=流自己断了(调用方可重试)。
 bool RunOneStream(const PlayReq& req, uint64_t seq) {
@@ -541,17 +579,64 @@ bool RunOneStream(const PlayReq& req, uint64_t seq) {
             .on_title = StreamTitleCb,
             .user = nullptr,
         };
-        const appfw_stream_err_t oerr = appfw_stream_open(&stream, &scfg);
+        OpenJob job;
+        job.cfg = &scfg;
+        TaskHandle_t conn_task = nullptr;
+        if (xTaskCreateWithCaps(OpenJobTask, "radio_conn", 8192, &job, 5, &conn_task,
+                                MALLOC_CAP_SPIRAM) != pdPASS) {
+            SetSnapState(RADIO_ERROR, "内存不足");
+            break;
+        }
+        // 分级止损等待:0-10s 正常轮询(停止/换台即时软中止);10s 软中止(关底层
+        // socket);13s 仍未完成 → 强杀子任务,本台不再自动重试/跳台
+        bool open_killed = false;
+        bool open_superseded = false;
+        int waited = 0;
+        while (!job.done && waited < 13000 && !s_quit.load()) {
+            {
+                std::lock_guard<std::mutex> lock(s_req_mutex);
+                open_superseded = (s_pending_valid || s_gen != req.seq);
+            }
+            if (open_superseded && waited >= 10000) break;
+            if (waited == 10000) AbortOpenStream();
+            vTaskDelay(pdMS_TO_TICKS(100));
+            waited += 100;
+        }
+        if (!job.done) {
+            open_killed = true;
+            vTaskDeleteWithCaps(conn_task);
+            conn_task = nullptr;
+            AbortOpenStream();   // 补一刀:泄漏的客户端句柄仍有效,尽量关掉回收 fd
+            s_open_live = nullptr;
+            if (!open_superseded) {
+                ESP_LOGE(TAG, "建连 13s 未完成,已强杀建连任务(泄漏少量网络资源)");
+                SetSnapState(RADIO_ERROR, "连接超时");
+            }
+            return true;   // 按被取代收尾:本台不再自动重试/跳台
+        }
+        vTaskDeleteWithCaps(conn_task);
+        conn_task = nullptr;
+        stream = job.stream;
+        const appfw_stream_err_t oerr = job.err;
         if (oerr != APPFW_STREAM_ERR_NONE) {
             ESP_LOGW(TAG, "建连失败 err=%d 内部剩余=%u 最大块=%u", (int)oerr,
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-            SetSnapState(RADIO_ERROR, oerr == APPFW_STREAM_ERR_URL ? "地址无效"
-                                     : oerr == APPFW_STREAM_ERR_HTTP ? "服务端拒绝"
-                                                                     : "连接失败");
+            // 乐观 UI 期间状态可能已被"已停止/新台名"改写:被取代的旧请求失败不上屏
+            bool taken_over = false;
+            {
+                std::lock_guard<std::mutex> lock(s_req_mutex);
+                taken_over = (s_pending_valid || s_pending.stop || s_gen != req.seq);
+            }
+            if (!taken_over) {
+                SetSnapState(RADIO_ERROR, oerr == APPFW_STREAM_ERR_URL ? "地址无效"
+                                         : oerr == APPFW_STREAM_ERR_HTTP ? "服务端拒绝"
+                                                                         : "连接失败");
+            }
             break;
         }
         SetSnapState(RADIO_PLAYING, nullptr);
+        s_hop_budget = 3;   // 成功开播即恢复自动跳台预算
         s_enhancer.OnStreamStart();   // 换台/开播/重连:淡入重置,避免音量突变(需求三.4)
         s_radio_stream_alive.store(true);
         s_radio_pcm_cv.notify_all();
@@ -714,6 +799,9 @@ void RadioTask(void*) {
         }
         // 台名/下标已在 radio_play_indexed() 里同步发布,这里不再覆盖:
         // 否则任务处理"旧"请求时会把界面刚显示的新台名改回旧的。
+        if (!req.auto_hop) {
+            s_hop_budget = 3;   // 用户手点的台:重置自动跳台预算
+        }
         bool superseded = RunOneStream(req, req.seq);
         if (!superseded && !s_quit.load() && retry < 3) {
             // CDN 掐断自动重连(与 aipassport-radio 同策略:断流短重连)
@@ -733,6 +821,22 @@ void RadioTask(void*) {
             continue;
         }
         retry = 0;
+        // 同台 3 次重连全败:内置目录台自动跳下一台(整段最多跳 s_hop_budget 台),
+        // 免得用户对着"出错"逐台手试。经 radio_play_indexed 投递,台名/状态即时跟随。
+        if (!superseded && !s_quit.load() && req.allow_hop &&
+            req.catalog_index >= 0 && s_hop_budget > 0) {
+            --s_hop_budget;
+            const int total = radio_catalog_count();
+            if (total > 1) {
+                const int next_idx = (req.catalog_index + 1) % total;
+                radio_station_t st;
+                if (radio_catalog_get(next_idx, &st)) {
+                    ESP_LOGW(TAG, "自动切下一台(预算余%d): %s", s_hop_budget, st.name);
+                    radio_play_indexed(st.name, st.url, next_idx);
+                    continue;
+                }
+            }
+        }
         if (!s_quit.load()) {
             // 非换台失败给个短暂停,避免错误流死循环打日志
             bool errored;
@@ -762,13 +866,18 @@ extern "C" int radio_player_start(void) {
     // 持锁等会死锁。
     if ((s_task != nullptr || s_play_task != nullptr) && s_quit.load()) {
         ESP_LOGI(TAG, "start: 上一个收音/播放任务正在退出,等待其收尾...");
+        AbortOpenStream();   // 帮卡在建连/读里的旧任务尽快解开(shutdown 已关过一次,补刀)
         int waited = 0;
-        while ((s_task != nullptr || s_play_task != nullptr) && waited < 3000) {
+        while ((s_task != nullptr || s_play_task != nullptr) && waited < 8000) {
             vTaskDelay(pdMS_TO_TICKS(50));
             waited += 50;
+            // 等待中每 2s 再补一刀:socket 对端半开时首次 close 可能不够
+            if ((waited % 2000) == 0) {
+                AbortOpenStream();
+            }
         }
         if (s_task != nullptr || s_play_task != nullptr) {
-            ESP_LOGE(TAG, "start: 旧任务 3s 未退出,放弃本次重建");
+            ESP_LOGE(TAG, "start: 旧任务 8s 未退出,放弃本次重建");
             return -1;
         }
         s_quit.store(false);
@@ -809,6 +918,9 @@ static std::string s_focus_resume_name;
 static std::string s_focus_resume_url;
 static int s_focus_resume_catalog_index = -1;
 
+// 停止的乐观 UI + 中止接线:立即把快照置为已停止并关掉在建连/读流里的 socket,
+// 让卡在阻塞调用里的收音任务尽快自行收尾。否则死流建连期间点"停止",界面会
+// 永远停在"连接中…"(实测)。任务随后读到 stop 标志,幂等收尾。
 static void RadioStopInternal() {
     std::lock_guard<std::mutex> lock(s_req_mutex);
     // 始终发一个"停"请求:代际前进可中止正在执行的流,也保证自己会被执行
@@ -821,6 +933,12 @@ static void RadioStopInternal() {
         s_radio_pcm_queue.clear();
     }
     s_radio_pcm_cv.notify_all();
+    AbortOpenStream();
+    SetSnapState(RADIO_STOPPED, nullptr);
+    {
+        std::lock_guard<std::mutex> lk(s_snap_mutex);
+        s_snap.catalog_index = -1;
+    }
 }
 
 static void RadioFocusCallback(AudioFocusState state) {

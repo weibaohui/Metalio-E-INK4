@@ -40,6 +40,7 @@ static radio_scope_t s_scope = SCOPE_BUILTIN;
 static int s_page = 0;
 static int s_volume = 70;
 static char s_cur_playing_name[RADIO_NAME_MAX] = "";
+static char s_list_playing[RADIO_NAME_MAX] = "";   // 列表 ● 标记当前渲染的播放台
 
 // 收藏夹 (保存电台名称)
 static char s_favs[MAX_FAVS][RADIO_NAME_MAX];
@@ -59,12 +60,9 @@ static const lv_font_t *get_font(int size, int weight) {
     return fontpack_lv_font_ui();
 }
 
-static void on_back_clicked(lv_event_t *e) {
-    (void)e;
-    dynapp_screen_go_home();
-}
-
 static void refresh_list(void);
+static int view_total_count(void);
+static void async_page_cb(void *arg);
 
 static int radio_on_vk_key(const char* key) {
     if (key != NULL) {
@@ -72,16 +70,13 @@ static int radio_on_vk_key(const char* key) {
             dynapp_screen_go_home();
             return 1;
         }
+        // 触摸键回调不在 LVGL 线程:列表重建必须经 dynapp_lv_async 投递
         if (strcmp(key, "vk_prev") == 0) {
-            if (s_page > 0) {
-                s_page--;
-                refresh_list();
-            }
+            dynapp_lv_async(async_page_cb, (void *)(intptr_t)-1);
             return 1;
         }
         if (strcmp(key, "vk_next") == 0) {
-            s_page++;
-            refresh_list();
+            dynapp_lv_async(async_page_cb, (void *)(intptr_t)+1);
             return 1;
         }
     }
@@ -281,6 +276,19 @@ static int view_total_count(void) {
     return s_fav_count;
 }
 
+// vk_prev/vk_next 翻页(带首尾回绕);经 dynapp_lv_async 在 LVGL 线程执行
+static void async_page_cb(void *arg) {
+    int delta = (int)(intptr_t)arg;
+    int total_pages = (view_total_count() + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
+    if (total_pages <= 0) total_pages = 1;
+    if (delta < 0) {
+        s_page = (s_page > 0) ? s_page - 1 : total_pages - 1;
+    } else {
+        s_page = (s_page + 1 < total_pages) ? s_page + 1 : 0;
+    }
+    refresh_list();
+}
+
 static int get_station_in_view(int view_idx, char *out_name, size_t name_sz, char *out_url, size_t url_sz, int *out_cat_idx) {
     if (s_scope == SCOPE_CUSTOM) {
         if (view_idx < 0 || view_idx >= s_custom_count) return 0;
@@ -401,13 +409,48 @@ static void on_page_prev(lv_event_t *e) {
     if (s_page > 0) {
         s_page--;
         refresh_list();
+        return;
+    }
+    // 首页再往前 → 回绕到末页
+    int total_pages = (view_total_count() + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
+    if (total_pages > 1) {
+        s_page = total_pages - 1;
+        refresh_list();
     }
 }
 
 static void on_page_next(lv_event_t *e) {
     (void)e;
-    s_page++;
-    refresh_list();
+    int total_pages = (view_total_count() + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
+    if (total_pages <= 0) total_pages = 1;
+    if (s_page + 1 < total_pages) {
+        s_page++;
+        refresh_list();
+        return;
+    }
+    // 末页再往后 → 回绕到首页
+    if (total_pages > 1) {
+        s_page = 0;
+        refresh_list();
+    }
+}
+
+// 点页码标签 → 跳到正在播放台所在页(找得到时)
+static void on_page_lbl_clicked(lv_event_t *e) {
+    (void)e;
+    if (s_cur_playing_name[0] == '\0') return;
+    int total = view_total_count();
+    for (int i = 0; i < total; ++i) {
+        char name[RADIO_NAME_MAX];
+        char url[RADIO_URL_MAX];
+        int cat_idx = -1;
+        if (get_station_in_view(i, name, sizeof(name), url, sizeof(url), &cat_idx) &&
+            strcmp(name, s_cur_playing_name) == 0) {
+            s_page = i / ROWS_PER_PAGE;
+            refresh_list();
+            return;
+        }
+    }
 }
 
 static void on_play_clicked(lv_event_t *e) {
@@ -476,11 +519,12 @@ static void on_fav_clicked(lv_event_t *e) {
 
 static void on_vol_down(lv_event_t *e) {
     (void)e;
-    if (s_volume > 0) {
-        s_volume -= 10;
-        if (s_volume < 0) s_volume = 0;
-        radio_set_volume(s_volume);
-        dynapp_radio_set_volume(s_volume);
+    int v = dynapp_radio_get_volume();   // 基于实时音量增减,不用失真缓存
+    if (v > 0) {
+        v -= 10;
+        if (v < 0) v = 0;
+        radio_set_volume(v);
+        s_volume = v;
         char buf[32];
         snprintf(buf, sizeof(buf), "音量 %d%%", s_volume);
         dynapp_toast_show(buf, 1000);
@@ -490,11 +534,12 @@ static void on_vol_down(lv_event_t *e) {
 
 static void on_vol_up(lv_event_t *e) {
     (void)e;
-    if (s_volume < 100) {
-        s_volume += 10;
-        if (s_volume > 100) s_volume = 100;
-        radio_set_volume(s_volume);
-        dynapp_radio_set_volume(s_volume);
+    int v = dynapp_radio_get_volume();
+    if (v < 100) {
+        v += 10;
+        if (v > 100) v = 100;
+        radio_set_volume(v);
+        s_volume = v;
         char buf[32];
         snprintf(buf, sizeof(buf), "音量 %d%%", s_volume);
         dynapp_toast_show(buf, 1000);
@@ -515,6 +560,9 @@ static void on_station_clicked(lv_event_t *e) {
 static void update_status_ui(void) {
     if (!s_scr || !lv_obj_is_valid(s_scr)) return;
 
+    // 音量以 codec 实际值为准:语音/MCP 等外部随时可能改音量,本地缓存会失真
+    s_volume = dynapp_radio_get_volume();
+
     radio_player_snap_t snap;
     radio_player_snapshot(&snap);
 
@@ -526,6 +574,16 @@ static void update_status_ui(void) {
         }
     } else {
         lv_label_set_text(s_st_name_lbl, "网络收音机");
+    }
+
+    // 播放台变化(开播/停止/切台) → 刷新列表,让 ● 标记实时跟随。
+    // 只在实际变化时重建,避免每秒无谓刷屏。
+    const char *now_station = (snap.state == RADIO_PLAYING || snap.state == RADIO_CONNECTING)
+                                  ? snap.station : "";
+    if (strcmp(s_list_playing, now_station) != 0) {
+        strncpy(s_list_playing, now_station, sizeof(s_list_playing) - 1);
+        s_list_playing[sizeof(s_list_playing) - 1] = '\0';
+        refresh_list();
     }
 
     if (s_st_title_lbl) {
@@ -619,7 +677,10 @@ static void refresh_list(void) {
             continue;
         }
 
-        bool is_playing = (snap.station[0] != '\0' && strcmp(snap.station, name_buf) == 0);
+        // ● 仅在播放/连接中才标:停止后 snap.station 不清空,纯名字比对会让
+        // 已停的台永远带标记
+        bool is_playing = ((snap.state == RADIO_PLAYING || snap.state == RADIO_CONNECTING) &&
+                           snap.station[0] != '\0' && strcmp(snap.station, name_buf) == 0);
         bool fav = is_fav(name_buf);
 
         lv_obj_t *row = lv_obj_create(s_list_box);
@@ -676,6 +737,7 @@ static void on_screen_deleted(lv_event_t *e) {
     s_page_lbl = NULL;
     s_list_box = NULL;
     s_footer_lbl = NULL;
+    s_list_playing[0] = '\0';
 
     radio_stop();
     radio_player_shutdown();
@@ -814,8 +876,11 @@ static void *radio_create(void) {
     lv_obj_set_style_text_align(s_page_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(s_page_lbl, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(s_page_lbl, lv_color_black(), 0);
+    // 点页码 → 跳到正在播放台所在页
+    lv_obj_add_flag(s_page_lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_page_lbl, on_page_lbl_clicked, LV_EVENT_CLICKED, NULL);
     make_btn(nav_bar, ">", 90, 44, on_page_next, NULL, NULL);
-    make_btn(nav_bar, "全部电台", 110, 44, on_scope_clicked, NULL, &s_scope_btn_lbl);
+    make_btn(nav_bar, "全部电台", 132, 44, on_scope_clicked, NULL, &s_scope_btn_lbl);
     update_scope_label();
 
     // 5. 电台列表容器 (10 行高度 356)
