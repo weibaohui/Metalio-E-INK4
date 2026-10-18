@@ -1,0 +1,9 @@
+{
+  "id": "wififile",
+  "name": "WiFi 文件",
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "局域网网页文件管理",
+  "main": "lib/app.so",
+  "icon": "icon.png"
+}
