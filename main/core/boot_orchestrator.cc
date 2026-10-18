@@ -3,6 +3,7 @@
 
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <esp_ota_ops.h>
 #include <functional>
 
 #include "application.h"
@@ -122,9 +123,11 @@ void BootOrchestrator::Run(Application& app) {
          }},
         {"boot_ready",
          [&] {
+             // 确认新固件自检通过并取消回滚（防止未标记有效被 bootloader 滚回旧版本）
+             esp_ota_mark_app_valid_cancel_rollback();
              app.SetBootReady(true);
              app.SetDeviceState(kDeviceStateIdle);
-             ESP_LOGI(TAG, "Boot complete");
+             ESP_LOGI(TAG, "Boot complete, confirmed OTA app valid");
          }},
     };
 
