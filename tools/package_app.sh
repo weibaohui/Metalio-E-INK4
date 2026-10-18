@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 # tools/package_app.sh —— 动态应用一键构建、打包与部署工具
 #
+# 架构规范：
+#   构建产物输出到 bin/ 目录（已被 .gitignore 排除，绝不提交进仓库）：
+#   <app_dir>/bin/<app_name>.app/
+#   ├── manifest.json
+#   ├── icon.png
+#   └── bin/
+#       └── app.so
+#
 # 用法:
 #   ./tools/package_app.sh <app_dir> [--upload <device_ip>] [--pin <pin>]
 #
 # 示例:
-#   # 仅本地构建出 .app Bundle 包
+#   # 仅本地构建出 .app Bundle 包（输出到 tools/hello_app/bin/hello.app）
 #   ./tools/package_app.sh tools/hello_app
 #
 #   # 构建并直接通过 WiFi 部署到设备
@@ -79,36 +87,35 @@ if [ ! -f "$SO_FILE" ]; then
     exit 1
 fi
 
-# 2. 组装 .app Bundle
-PKG_BUNDLE_DIR="$APP_DIR/pkg/${APP_NAME}.app"
-mkdir -p "$PKG_BUNDLE_DIR"
-cp "$SO_FILE" "$PKG_BUNDLE_DIR/app.so"
+# 2. 组装 .app Bundle 输出到 bin/ 目录（排除于 git 之外）
+BUNDLE_DIR="$APP_DIR/bin/${APP_NAME}.app"
+mkdir -p "$BUNDLE_DIR/bin"
+cp "$SO_FILE" "$BUNDLE_DIR/bin/app.so"
 
-# 检查 manifest.json
-if [ -f "$APP_DIR/pkg/${APP_NAME}/manifest.json" ] && [ ! -f "$PKG_BUNDLE_DIR/manifest.json" ]; then
-    cp "$APP_DIR/pkg/${APP_NAME}/manifest.json" "$PKG_BUNDLE_DIR/manifest.json"
-fi
-
-if [ ! -f "$PKG_BUNDLE_DIR/manifest.json" ]; then
-    cat <<EOF > "$PKG_BUNDLE_DIR/manifest.json"
+# 复制 manifest.json
+if [ -f "$APP_DIR/manifest.json" ]; then
+    cp "$APP_DIR/manifest.json" "$BUNDLE_DIR/manifest.json"
+elif [ ! -f "$BUNDLE_DIR/manifest.json" ]; then
+    cat <<EOF > "$BUNDLE_DIR/manifest.json"
 {
   "id": "${APP_NAME}",
   "name": "${APP_NAME}",
   "icon": "icon.png",
+  "executable": "bin/app.so",
   "abi": 1,
   "version": "1.0.0"
 }
 EOF
-    echo "已生成默认 manifest.json"
+    echo "已在构建输出中生成默认 manifest.json"
 fi
 
-# 检查 icon.png
-if [ -f "$APP_DIR/pkg/${APP_NAME}/icon.png" ] && [ ! -f "$PKG_BUNDLE_DIR/icon.png" ]; then
-    cp "$APP_DIR/pkg/${APP_NAME}/icon.png" "$PKG_BUNDLE_DIR/icon.png"
+# 复制 icon.png（若存在）
+if [ -f "$APP_DIR/icon.png" ]; then
+    cp "$APP_DIR/icon.png" "$BUNDLE_DIR/icon.png"
 fi
 
-echo "==> Bundle 准备就绪: $PKG_BUNDLE_DIR"
-ls -la "$PKG_BUNDLE_DIR"
+echo "==> Bundle 准备就绪: $BUNDLE_DIR"
+find "$BUNDLE_DIR" -type f
 
 # 3. 如果指定了上传 IP，则通过 HTTP MCP API 直推
 if [ -n "$UPLOAD_IP" ]; then
@@ -127,25 +134,25 @@ if [ -n "$UPLOAD_IP" ]; then
     curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app" \
         -H "X-Filename: manifest.json" \
         "${AUTH_HEADER[@]}" \
-        --data-binary "@$PKG_BUNDLE_DIR/manifest.json"
+        --data-binary "@$BUNDLE_DIR/manifest.json"
     echo ""
 
     # 上传 icon.png（若存在）
-    if [ -f "$PKG_BUNDLE_DIR/icon.png" ]; then
+    if [ -f "$BUNDLE_DIR/icon.png" ]; then
         echo "-> 上传 icon.png..."
         curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app" \
             -H "X-Filename: icon.png" \
             "${AUTH_HEADER[@]}" \
-            --data-binary "@$PKG_BUNDLE_DIR/icon.png"
+            --data-binary "@$BUNDLE_DIR/icon.png"
         echo ""
     fi
 
-    # 上传 app.so
-    echo "-> 上传 app.so..."
-    curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app" \
+    # 上传 bin/app.so
+    echo "-> 上传 bin/app.so..."
+    curl -s -f -X POST "http://${UPLOAD_IP}:8080/fs/upload?path=apps/${APP_NAME}.app/bin" \
         -H "X-Filename: app.so" \
         "${AUTH_HEADER[@]}" \
-        --data-binary "@$PKG_BUNDLE_DIR/app.so"
+        --data-binary "@$BUNDLE_DIR/bin/app.so"
     echo ""
 
     echo "==> 部署成功！应用已在桌面热更新注册完毕。"
