@@ -43,15 +43,12 @@ set(SOURCES "audio/audio_codec.cc"
             "services/radio/radio_mcp.cc"
             "services/wifi_transfer/wifi_transfer_service.cc"
             "services/wifi_transfer/book_mcp.cc"
-            "display/screen/wifi_transfer_screen/wifi_transfer_screen.cc"
             "services/wallpaper/wallpaper_active.cc"
             "display/screen/standby_screen/standby_wallpaper.cc"
             "display/screen/app_store_screen/app_store_screen.cc"
             "services/wifi_file/wifi_file_service.cc"
-            "display/screen/wifi_file_screen/wifi_file_screen.cc"
             "services/system_upgrade/system_upgrade_service.cc"
             "display/screen/system_upgrade_screen/system_upgrade_screen.cc"
-            "display/screen/radio_screen/radio_screen.cc"
             "display/screen/standby_screen/standby_screen.cc"
             "display/screen/standby_screen/standby_classic.cc"
             "display/screen/ota_upgrade_screen/ota_upgrade_screen.cc"
@@ -133,7 +130,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/book_screen" "display/screen/system_upgrade_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/screen/app_store_screen" "display/screen/wifi_file_screen" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services" "services/backup" "services/system_upgrade" "services/wallpaper" "services/wifi_file")
+set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/book_screen" "display/screen/system_upgrade_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/screen/app_store_screen" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services" "services/backup" "services/system_upgrade" "services/wallpaper" "services/wifi_file")
 
 # Add board common files explicitly (replaces GLOB to avoid cache issues and unwanted sources)
 list(APPEND SOURCES

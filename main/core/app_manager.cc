@@ -8,17 +8,14 @@
 #include "ai_voice_chat_screen/ai_voice_chat_screen.h"
 #include "app_store_screen/app_store_screen.h"
 #include "book_screen/book_screen.h"
-#include "radio_screen/radio_screen.h"
 #include "settings_screen/settings_screen.h"
 
 #include "services/ai_chat/ai_chat_service.h"
 #include "services/calendar/calendar_mcp.h"
 #include "services/radio/radio_mcp.h"
 #include "services/wifi_transfer/book_mcp.h"
-#include "wifi_transfer_screen/wifi_transfer_screen.h"
 #include "services/wifi_transfer/wifi_transfer_service.h"
 #include "system_upgrade_screen/system_upgrade_screen.h"
-#include "wifi_file_screen/wifi_file_screen.h"
 #include "services/wifi_file/wifi_file_service.h"
 
 #include <esp_log.h>
@@ -28,23 +25,10 @@ namespace {
 
 constexpr const char *TAG = "AppManager";
 
-void OnTransferPause() {
-    ESP_LOGI(TAG, "OnTransferPause: stopping wifi transfer service");
-    wifi_transfer::WifiTransferService::GetInstance().Stop();
-}
-
-void OnWifiFilePause() {
-    ESP_LOGI(TAG, "OnWifiFilePause: stopping wifi file service");
-    wifi_file::WifiFileService::GetInstance().Stop();
-}
-
-const char *AppNameRadio() { return "收音机"; }
 const char *AppNameBook() { return Lang::Strings::HOME_APP_BOOK; }
 const char *AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
 const char *AppNameAiChat() { return "AI 对话"; }
-const char *AppNameTransfer() { return "WiFi 传书"; }
 const char *AppNameUpgrade() { return "系统升级"; }
-const char *AppNameWifiFile() { return "WiFi 文件"; }
 const char *AppNameStore() { return "应用商店"; }
 
 } // namespace
@@ -60,19 +44,17 @@ AppManager::AppManager() {
 
 void AppManager::RegisterDefaultApps() {
     modules_.clear();
-    // 注册内置默认应用 (全部采用新架构 AppModule)
+    // 保持后台 MCP 服务注册
+    CalendarRegisterMcpTools();
+    RadioRegisterMcpTools();
+    BookRegisterMcpTools();
+
+    // 注册内置核心系统应用 (只保留 set, store, upgrade, book, aichat)
     RegisterApp(std::make_shared<StandardAppModule>(
         "book", "A:ic_app_home_book.spng", AppNameBook, BookScreen::Create, nullptr, false,
         BookScreen::OnResumeFromStandby, BookScreen::OnEnterStandby, nullptr));
     RegisterApp(std::make_shared<StandardAppModule>(
-        "radio", "A:ic_app_home_music.spng", AppNameRadio, RadioScreen::Create, RadioRegisterMcpTools, false));
-    CalendarRegisterMcpTools();
-    RegisterApp(std::make_shared<StandardAppModule>(
         "aichat", "A:ic_app_home_buddy.spng", AppNameAiChat, AiVoiceChatScreen::Create, AiChat_BootRegister, false));
-    RegisterApp(std::make_shared<StandardAppModule>(
-        "transfer", "A:ic_app_home_cloud.spng", AppNameTransfer, WifiTransferScreen::Create, BookRegisterMcpTools, false, nullptr, OnTransferPause, OnTransferPause));
-    RegisterApp(std::make_shared<StandardAppModule>(
-        "wififile", "A:ic_app_home_cloud.spng", AppNameWifiFile, WifiFileScreen::Create, nullptr, false, nullptr, OnWifiFilePause, OnWifiFilePause));
     RegisterApp(std::make_shared<StandardAppModule>(
         "store", "A:ic_app_home_cloud.spng", AppNameStore, AppStoreScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
