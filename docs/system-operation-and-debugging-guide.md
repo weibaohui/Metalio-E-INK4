@@ -148,6 +148,7 @@ while True:
 | **强制返回桌面** | `POST http://<ip>:8080/screen/home` | 无论处于何种界面/卡死界面，立即返回桌面 |
 | **启动指定应用** | `POST http://<ip>:8080/app/launch?id=power` | 启动 `power`、`upgrade`、`store`、`radio` 等 |
 | **注入虚拟按键** | `POST http://<ip>:8080/input/key?key=vk_home` | 注入 `vk_home`、`vk_prev`、`vk_next` 触控事件 |
+| **模拟屏幕点击** | `POST http://<ip>:8080/input/click?x=240&y=500` | 模拟真实手指按压与抬起，支持设定 `duration_ms` |
 | **全局深刷屏幕** | `POST http://<ip>:8080/screen/refresh` | 触发全刷，清除墨水屏残影 |
 | **SD 卡文件列表** | `GET http://<ip>:8080/fs/list?path=firmware` | 浏览 SD 卡指定目录下的文件与目录 |
 | **SD 卡文件下载** | `GET http://<ip>:8080/fs/download?path=...` | 从设备中拉取日志、存档或配置文件 |
@@ -160,7 +161,7 @@ idf.py -p /dev/cu.usbmodem* monitor
 
 ---
 
-## 四、 远程截屏与画面 90 度旋转规范
+## 四、 远程截屏与 PNG 正向转换规范
 
 ### 4.1 核心原理与旋转必要性
 > [!IMPORTANT]
@@ -169,37 +170,39 @@ idf.py -p /dev/cu.usbmodem* monitor
 > 2. **LVGL 软件旋转**：系统软件配置将逻辑视口旋转为 **480 × 800** 竖屏以符合用户手持方式。
 > 3. **底层显存镜像**：由 `/screen/screenshot` 导出的原生 1bpp 单色 BMP 是原始显存物理数据（800 × 480）。
 > 4. **显示校准规则**：因此，获取到的原始截屏图像**必须顺时针旋转 90 度（Rotate 90° Clockwise）**，才能得到宽高为 **480 × 800**、与用户手持设备完全一致的正向操作界面！
+> 5. **格式自动转为 PNG**：脚本自动将 BMP 点阵转码为超高压缩比的标准单色 PNG（~10-20KB），无需再手工转换。
 
-### 4.2 一键截屏脚本（已内置正向旋转）
+### 4.2 一键截屏脚本（默认输出正向 PNG）
 工程已提供开箱即用脚本 [`tools/screenshot.sh`](file:///Users/weibh/Desktop/Metalio-E-INK4/tools/screenshot.sh)：
 ```bash
-# 抓取当前屏幕并自动顺时针旋转 90 度输出为正向 480x800 图片
-./tools/screenshot.sh /tmp/my_screen.png
+# 抓取当前屏幕并自动顺时针旋转 90 度转换为正向 480x800 PNG 图像
+./tools/screenshot.sh
 
-# 指定设备 IP 与 PIN 码
-./tools/screenshot.sh /tmp/device_view.bmp --ip 192.168.0.84 --pin 444108
+# 默认保存至 /tmp/device_screenshot_upright.png，可直接在 IDE 或浏览器查看
+# 也可以指定输出路径或远程设备：
+./tools/screenshot.sh my_screen.png --ip 192.168.0.84 --pin 444108
 ```
 
 ### 4.3 命令行手动获取与校准
 若需在自己的脚本或流水线中手动操作：
 ```bash
-# 1. 下载原始数据 (800x480)
+# 1. 下载原始数据 (800x480 单色 BMP)
 curl -s -H "Authorization: Bearer 444108" http://192.168.0.84:8080/screen/screenshot -o /tmp/raw.bmp
 
-# 2. 顺时针旋转 90 度校准为竖屏 (480x800)
-# 方法 A：macOS 自带原生 sips 工具（超高速）
-sips -r 90 /tmp/raw.bmp --out /tmp/screen_upright.bmp
+# 2. 顺时针旋转 90 度并转换为 PNG (480x800)
+# 方法 A：macOS 自带原生 sips 工具（极速且画质完美）
+sips -r 90 /tmp/raw.bmp -s format png --out /tmp/screen_upright.png
 
 # 方法 B：Python PIL / Pillow
-python3 -c "from PIL import Image; Image.open('/tmp/raw.bmp').transpose(Image.ROTATE_270).save('/tmp/screen_upright.bmp')"
+python3 -c "from PIL import Image; Image.open('/tmp/raw.bmp').transpose(Image.ROTATE_270).save('/tmp/screen_upright.png', format='PNG')"
 
 # 方法 C：ImageMagick
-convert /tmp/raw.bmp -rotate 90 /tmp/screen_upright.bmp
+convert /tmp/raw.bmp -rotate 90 /tmp/screen_upright.png
 ```
 
 ### 4.4 截屏效果对比示例
 - **原始底层显存（横向逆时针）**：800 × 480 像素，阅读文字为横置。
-- **顺时针旋转 90 度后（正向竖屏）**：480 × 800 像素，顶部为状态栏（Wi-Fi、电量、时钟），主体为 3×3 桌面宫格或应用卡片，底部为页码原点，与眼睛所见真机完全一致。
+- **顺时针旋转 90 度后（正向竖屏 PNG）**：480 × 800 像素，顶部为状态栏（Wi-Fi、电量、时钟），主体为 3×3 桌面宫格或应用卡片，底部为页码原点，与眼睛所见真机完全一致。
 
 ---
 
@@ -207,10 +210,15 @@ convert /tmp/raw.bmp -rotate 90 /tmp/screen_upright.bmp
 
 | 脚本路径 | 核心功能与使用说明 |
 | :--- | :--- |
-| [`tools/screenshot.sh`](file:///Users/weibh/Desktop/Metalio-E-INK4/tools/screenshot.sh) | 远程截取墨水屏画面，自动顺时针旋转 90 度输出正向 480×800 图像 |
+| [`tools/screenshot.sh`](file:///Users/weibh/Desktop/Metalio-E-INK4/tools/screenshot.sh) | 远程截取墨水屏画面，自动顺时针旋转 90 度并输出高清正向 PNG 图像 |
+| [`tools/click.sh`](file:///Users/weibh/Desktop/Metalio-E-INK4/tools/click.sh) | 虚拟触控点击与长按脚本，模拟真实手指按压、马达早震与 LVGL 事件回调 |
 | [`tools/package_app.sh`](file:///Users/weibh/Desktop/Metalio-E-INK4/tools/package_app.sh) | 动态应用（.app）构建打包、生成 `manifest.json` 与一键 WiFi 热部署 |
 | [`tools/fontpack/`](file:///Users/weibh/Desktop/Metalio-E-INK4/tools/fontpack/) | 预渲染字库生成器，打包点阵字体包与 mmap 零拷贝加载 |
 | [`tools/ebook/`](file:///Users/weibh/Desktop/Metalio-E-INK4/tools/ebook/) | 电子书离线解析预处理引擎，生成目录、段落缓存与 A2I1 封面 |
+
+### 5.1 闭环自动化调试 Skill: `eink-screen-automation`
+项目内置了 AI 交互与自动化测试 Skill：[`.agents/skills/eink-screen-automation/SKILL.md`](file:///Users/weibh/Desktop/Metalio-E-INK4/.agents/skills/eink-screen-automation/SKILL.md)。
+通过该 Skill，AI Agent 可实现完全自主的「截屏查看 $\to$ 视觉元素识别与定位 $\to$ 注入点击交互 $\to$ 重新截屏核验 $\to$ 返回退出」全流程闭环调试。
 
 ---
 
