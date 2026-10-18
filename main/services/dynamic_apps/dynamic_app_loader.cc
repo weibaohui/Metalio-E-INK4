@@ -380,30 +380,12 @@ bool ParseManifestDir(const std::string &dir_path, ManifestInfo &out) {
         return false;
     }
 
-    // 寻找动态库文件：优先 lib/（符合 Unix/Linux/Android .so 共享库规范），兼容 bin/ 与根目录
-    std::vector<std::string> candidates;
-    if (!out.executable.empty()) {
-        candidates.push_back(dir_path + "/" + out.executable);
-        candidates.push_back(dir_path + "/lib/" + out.executable);
-        candidates.push_back(dir_path + "/bin/" + out.executable);
-    }
-    candidates.push_back(dir_path + "/lib/app.so");
-    candidates.push_back(dir_path + "/lib/" + out.id + ".so");
-    candidates.push_back(dir_path + "/bin/app.so");
-    candidates.push_back(dir_path + "/bin/" + out.id + ".so");
-    candidates.push_back(dir_path + "/app.so");
-    candidates.push_back(dir_path + "/" + out.id + ".so");
-
-    std::string so_path;
+    // 强制规范：动态库固定放置在 lib/app.so（或 manifest 显式指定的唯一路径），不设多层猜测兼容
+    const std::string so_rel = out.executable.empty() ? "lib/app.so" : out.executable;
+    const std::string so_path = dir_path + "/" + so_rel;
     struct stat st = {};
-    for (const auto &cand : candidates) {
-        if (stat(cand.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
-            so_path = cand;
-            break;
-        }
-    }
-    if (so_path.empty()) {
-        ESP_LOGE(TAG, "%s: executable missing (checked lib/app.so, bin/app.so, app.so), skip", manifest_path.c_str());
+    if (stat(so_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+        ESP_LOGE(TAG, "%s: mandatory executable '%s' not found, rejected", manifest_path.c_str(), so_path.c_str());
         return false;
     }
     out.executable = so_path;
