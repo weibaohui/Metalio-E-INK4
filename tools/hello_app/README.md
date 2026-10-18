@@ -1,33 +1,57 @@
-# hello_app —— 动态应用（.so）试点
+# hello_app —— 动态应用（.app Bundle）标准参考示范
 
-墨水屏免刷机动态加载的最小可运行样例：应用为 SD 卡上的一个目录
-（manifest.json + app.so + icon.png），点开才 dlopen，退出即 dlclose。
+本工程是 Metalio E-INK 动态应用（.app Bundle）的标准开发模板，展示了现代动态应用的核心规范：
+1. **.app Bundle 打包结构**与 `manifest.json` 元数据规范
+2. **系统状态栏**（时钟/电量/WiFi）与**虚拟按键**挂接
+3. **沙箱数据持久化**（`dynapp_fopen_data`），演示启动计数器在 `data/launch_count.txt` 中的存取
+4. 退出生命周期与资源清理
 
-## 应用包格式
+---
 
-拷入 SD 卡 `metalio/e-ink/apps/<dir>/`（电脑上看到的路径，无 sdcard 前缀）：
+## 1. 目录结构
 
+```text
+tools/hello_app/
+├── main/
+│   └── hello_main.c         # 纯 C + LVGL 源码
+├── pkg/
+│   └── hello.app/           # 生成的 Bundle 包
+│       ├── manifest.json    # 元数据清单
+│       ├── app.so           # 编译出的动态库
+│       ├── icon.png         # 70x70 图标
+│       └── data/            # 运行时私有持久化目录（重装不覆盖）
+│           └── launch_count.txt
+├── build_so.sh              # 底层编译脚本
+└── README.md
 ```
-metalio/e-ink/apps/hello/
-├── manifest.json   {id, name, icon?, abi, version?}
-├── app.so          代码
-└── icon.png        可选，70x70 黑白 PNG；缺省用内置图标
+
+---
+
+## 2. 快速开发与一键部署
+
+在工程根目录下执行统一打包工具 [`tools/package_app.sh`](file:///Users/weibh/Desktop/Metalio-E-INK4/tools/package_app.sh)：
+
+### 本地打包
+```bash
+./tools/package_app.sh tools/hello_app
 ```
+产物将生成在 `tools/hello_app/pkg/hello.app/` 目录下。
 
-- `id`：≤12 字符（NVS 开关键 en_<id>）；与内置应用同名时内置优先
-- `abi`：整数闸门，固件升级后不匹配的包在扫描阶段点名拒绝（不执行代码）
-- `icon`：目录内相对路径，经 LVGL POSIX FS（S: 盘符 → /sdcard）加载；
-  禁止 `..`、绝对路径；FS+PNG 解码路线未经真机验证，失败降级内置图标
-- 卸载 = 从卡上删目录；禁用 = 设置页应用开关（文件保留）
+### 通过 Wi-Fi 直接热部署到真机
+设备开机连上 Wi-Fi 后，执行：
+```bash
+./tools/package_app.sh tools/hello_app --upload 192.168.0.84 --pin 444108
+```
+- 无需插拔 SD 卡，无需连接 USB 线，无需编译整机固件。
+- 秒级上传并热重载，桌面即时出现应用图标。
 
-## 开发工作流
+---
 
-1. 写 `main/hello_main.c`（纯 C + LVGL；仅用固件符号表内的 API）：
-   - `metalio_app_entry(metalio_app_desc_t*)`：填 id/name/icon/create，必须无副作用
-   - create：`lv_obj_create(NULL)` 建屏；定时器在屏幕 `LV_EVENT_DELETE` 自行清理
-2. 出 .so：`bash build_so.sh`（编译参数取自固件 build/compile_commands.json，ABI 一致）
-3. 组包：app.so + manifest.json（abi 与固件 `METALIO_DYNAPP_ABI_VERSION` 一致）+ icon.png
-4. 拷卡 → 重启 → 桌面出现 → 点开
+## 3. 开发规范核心点
 
-新 .so 引用表外符号时，dlopen 在串口 `dlerror` 里点名缺失符号：
-把 `main/services/dynamic_apps/dynamic_app_loader.cc` 的符号表补上重编固件。
+1. **入口函数**：导出 `void metalio_app_entry(metalio_app_desc_t *out)`，纯填充元数据，不得产生副作用。
+2. **生命周期清理**：在屏幕的 `LV_EVENT_DELETE` 回调函数中释放所有自建定时器（`lv_timer` / `esp_timer`）与任务。
+3. **数据读写规范**：一律使用 `dynapp_fopen_data("xxx", "r"/"w")`，严禁硬编码绝对路径。
+4. **返回桌面**：调用 `dynapp_screen_go_home()`。
+
+详细架构设计与 API 参考手册请阅读：[docs/dynamic-apps.md](file:///Users/weibh/Desktop/Metalio-E-INK4/docs/dynamic-apps.md)。
