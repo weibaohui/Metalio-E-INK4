@@ -785,6 +785,9 @@ private:
             Settings settings("dbg", false);
             interval_sec = settings.GetInt("mon_iv", interval_sec);
         }
+        if (interval_sec <= 0) {
+            interval_sec = 10;
+        }
         s_monitor_interval_sec.store(interval_sec);
         // 栈放 PSRAM(统一入口 SpawnPsrWorker):本任务只读堆/电量/打日志,
         // 不碰 NVS/flash;4KB 内部栈在 DRAM 余量紧张时挤占无益。

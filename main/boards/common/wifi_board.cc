@@ -22,6 +22,7 @@
 #include <wifi_station.h>
 #include <ssid_manager.h>
 #include <esp_wifi.h>
+#include <esp_heap_caps.h>
 
 static const char *TAG = "WifiBoard";
 
@@ -442,6 +443,22 @@ std::string WifiBoard::GetDeviceStatusJson() {
         cJSON_AddNumberToObject(chip, "temperature", esp32temp);
         cJSON_AddItemToObject(root, "chip", chip);
     }
+
+    // Memory (Internal RAM & PSRAM)
+    auto memory = cJSON_CreateObject();
+    const size_t ram_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t ram_min = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t ram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const size_t psram_min = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    cJSON_AddNumberToObject(memory, "ram_free_bytes", ram_free);
+    cJSON_AddNumberToObject(memory, "ram_free_kb", ram_free / 1024);
+    cJSON_AddNumberToObject(memory, "ram_min_free_kb", ram_min / 1024);
+    cJSON_AddNumberToObject(memory, "ram_largest_block_kb", ram_largest / 1024);
+    cJSON_AddNumberToObject(memory, "psram_free_bytes", psram_free);
+    cJSON_AddNumberToObject(memory, "psram_free_kb", psram_free / 1024);
+    cJSON_AddNumberToObject(memory, "psram_min_free_kb", psram_min / 1024);
+    cJSON_AddItemToObject(root, "memory", memory);
 
     auto json_str = cJSON_PrintUnformatted(root);
     std::string json(json_str);
