@@ -34,16 +34,6 @@ static const lv_font_t *get_font(int size, int weight) {
     return f;
 }
 
-static void on_back_clicked(lv_event_t *e) {
-    (void)e;
-    dynapp_screen_go_home();
-}
-
-static void on_refresh_clicked(lv_event_t *e) {
-    (void)e;
-    dynapp_glm_request_refresh();
-}
-
 static void on_context_clicked(lv_event_t *e) {
     uintptr_t idx = (uintptr_t)lv_event_get_user_data(e);
     dynapp_glm_select_context((int)idx);
@@ -272,9 +262,7 @@ static void *glm_create(void) {
     dynapp_vk_attach(scr, "glm", glm_create, glm_on_vk_key);
 
     const lv_font_t *f_ui = fontpack_lv_font_ui();
-    const lv_font_t *f22 = get_font(22, 2);
     const lv_font_t *f25 = get_font(25, 2);
-    const lv_font_t *f26 = get_font(26, 2);
     const lv_font_t *f30 = get_font(30, 2);
 
     // 内容滚动容器 (无返回顶栏，由底部 vk_home 键统一控制返回)
@@ -284,35 +272,6 @@ static void *glm_create(void) {
     lv_obj_set_pos(s_body, 14, 42);
     lv_obj_set_flex_flow(s_body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_body, 10, 0);
-
-    // 顶部操作行 (标题 + 刷新按钮)
-    lv_obj_t *top_bar = lv_obj_create(s_body);
-    lv_obj_remove_style_all(top_bar);
-    lv_obj_set_size(top_bar, lv_pct(100), 44);
-    lv_obj_set_flex_flow(top_bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(top_bar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    lv_obj_t *hdr_lbl = lv_label_create(top_bar);
-    lv_label_set_text(hdr_lbl, "GLM 用量");
-    if (f26) lv_obj_set_style_text_font(hdr_lbl, f26, 0);
-    lv_obj_set_style_text_color(hdr_lbl, lv_color_black(), 0);
-
-    lv_obj_t *ref_btn = lv_obj_create(top_bar);
-    lv_obj_remove_style_all(ref_btn);
-    lv_obj_set_size(ref_btn, 76, 38);
-    lv_obj_set_style_bg_color(ref_btn, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(ref_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(ref_btn, lv_color_black(), 0);
-    lv_obj_set_style_border_width(ref_btn, 2, 0);
-    lv_obj_set_style_radius(ref_btn, 8, 0);
-    lv_obj_add_flag(ref_btn, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(ref_btn, on_refresh_clicked, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *ref_lbl = lv_label_create(ref_btn);
-    lv_label_set_text(ref_lbl, "刷新");
-    if (f_ui) lv_obj_set_style_text_font(ref_lbl, f_ui, 0);
-    lv_obj_set_style_text_color(ref_lbl, lv_color_black(), 0);
-    lv_obj_center(ref_lbl);
 
     // 多上下文水平滑动 Row
     s_context_row = lv_obj_create(s_body);
