@@ -8,6 +8,7 @@
 #include <esp_timer.h>
 #include <lvgl.h>
 
+#include "haptic_feedback.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
 #include "ota_confirm_dialog/ota_confirm_dialog.h"
 #include "screen_common.h"
@@ -122,6 +123,8 @@ void OnScreenLifecycleEvent(lv_event_t* e) {
     const char* name = static_cast<const char*>(lv_event_get_user_data(e));
     const lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_SCREEN_LOADED) {
+        // 底层统一:本屏全部可点控件自动挂震动(内置屏与动态app同一入口,免逐个接入)
+        HapticBindTree(static_cast<lv_obj_t*>(lv_event_get_target(e)));
         VkKey_OnScreenLifecycle(name, VK_SCREEN_LIFECYCLE_LOAD);
     } else if (code == LV_EVENT_SCREEN_UNLOADED) {
         VkKey_OnScreenLifecycle(name, VK_SCREEN_LIFECYCLE_UNLOAD);
