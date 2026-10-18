@@ -272,7 +272,7 @@ convert /tmp/raw.bmp -rotate 90 /tmp/screen_upright.png
 | `self.radio.prev` | 无 | 切换到上一个电台 |
 | `self.radio.random` | 无 | 随机选择一个电台播放 |
 | `self.radio.stop` | 无 | 停止音频流播放 |
-| `self.radio.set_volume` | `volume: int (0-100)` | 调节播放音量 |
+| `self.radio.set_volume` | `level: int (0-100)` | 调节播放音量 |
 | `self.radio.get_state` | 无 | 查询收音机运行状态、当前电台、缓冲状态 |
 | `self.radio.list` | `page: int, count: int` | 分页列出电台清单（内置 300+ 电台与外部自定义） |
 | `self.radio.search` | `keyword: string` | 搜索电台 |

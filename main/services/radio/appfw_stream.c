@@ -8,6 +8,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -137,6 +138,8 @@ static int hls_advance(appfw_stream_t *s)
 // ——首个响应是播放列表文本,留给 hls_advance 统一管理。
 static appfw_stream_err_t try_connect(appfw_stream_t *s, const char *url)
 {
+    const int64_t t0 = esp_timer_get_time();
+    ESP_LOGI(TAG, "建连开始: %.60s", url);
     const esp_http_client_config_t cfg = {
         .url = url,
         .user_agent = "AI-Passport-Radio/1.0",   // 别伪装浏览器:有的 CDN 对
@@ -156,14 +159,23 @@ static appfw_stream_err_t try_connect(appfw_stream_t *s, const char *url)
         s->client = NULL;
     }
     s->client = esp_http_client_init(&cfg);
-    if (!s->client) return APPFW_STREAM_ERR_CONNECT;
+    if (!s->client) {
+        ESP_LOGW(TAG, "建连失败: 客户端 init 失败 (%lld ms)",
+                 (long long)((esp_timer_get_time() - t0) / 1000));
+        return APPFW_STREAM_ERR_CONNECT;
+    }
     s->metaint_seen = 0;
-    if (s->hls) return APPFW_STREAM_ERR_NONE;
+    if (s->hls) {
+        ESP_LOGI(TAG, "建连完成(HLS 列表模式) %lld ms",
+                 (long long)((esp_timer_get_time() - t0) / 1000));
+        return APPFW_STREAM_ERR_NONE;
+    }
 
     int status = 0;
     for (int hop = 0; hop < 5; hop++) {
         if (esp_http_client_open(s->client, 0) != ESP_OK) {
-            ESP_LOGW(TAG, "打开流失败: %s", url);
+            ESP_LOGW(TAG, "打开流失败(%lld ms): %s",
+                     (long long)((esp_timer_get_time() - t0) / 1000), url);
             return APPFW_STREAM_ERR_CONNECT;
         }
         (void)esp_http_client_fetch_headers(s->client);
@@ -181,11 +193,13 @@ static appfw_stream_err_t try_connect(appfw_stream_t *s, const char *url)
         return APPFW_STREAM_ERR_HTTP;
     }
     appfw_icy_init(&s->icy, s->metaint_seen);
-    ESP_LOGI(TAG, "已连接, icy-metaint=%u", (unsigned)s->metaint_seen);
+    ESP_LOGI(TAG, "已连接 %lld ms, icy-metaint=%u",
+             (long long)((esp_timer_get_time() - t0) / 1000), (unsigned)s->metaint_seen);
     return APPFW_STREAM_ERR_NONE;
 }
 
-appfw_stream_err_t appfw_stream_open(appfw_stream_t **out, const appfw_stream_cfg_t *cfg)
+appfw_stream_err_t appfw_stream_open_abortable(appfw_stream_t **out, const appfw_stream_cfg_t *cfg,
+                                               appfw_stream_t **live)
 {
     if (!out || !cfg || !cfg->url) return APPFW_STREAM_ERR_URL;
     if (strncmp(cfg->url, "http://", 7) != 0 &&
@@ -196,6 +210,8 @@ appfw_stream_err_t appfw_stream_open(appfw_stream_t **out, const appfw_stream_cf
 
     appfw_stream_t *s = calloc(1, sizeof(*s));
     if (!s) return APPFW_STREAM_ERR_CONNECT;
+    // 句柄尽早发布:调用方在 open 阻塞期间即可 appfw_stream_abort() 打断
+    if (live) *live = s;
     snprintf(s->url, sizeof(s->url), "%s", cfg->url);
     s->playlist = cfg->playlist;
     s->playlist_cap = cfg->playlist_cap;
@@ -203,6 +219,7 @@ appfw_stream_err_t appfw_stream_open(appfw_stream_t **out, const appfw_stream_cf
     s->user = cfg->user;
     s->hls = appfw_hls_is_playlist_url(s->url);
     if (s->hls && !s->playlist) {
+        if (live) *live = NULL;
         free(s);
         return APPFW_STREAM_ERR_URL;
     }
@@ -223,11 +240,28 @@ appfw_stream_err_t appfw_stream_open(appfw_stream_t **out, const appfw_stream_cf
     }
     if (err != APPFW_STREAM_ERR_NONE) {
         if (s->client) esp_http_client_cleanup(s->client);
+        if (live) *live = NULL;
         free(s);
         return err;
     }
+    if (live) *live = NULL;   // 返回后句柄经 out 交付,中止责任回到调用方
     *out = s;
     return APPFW_STREAM_ERR_NONE;
+}
+
+appfw_stream_err_t appfw_stream_open(appfw_stream_t **out, const appfw_stream_cfg_t *cfg)
+{
+    return appfw_stream_open_abortable(out, cfg, NULL);
+}
+
+void appfw_stream_abort(appfw_stream_t *s)
+{
+    if (s == NULL || s->client == NULL) return;
+    // close 会关掉底层 socket,令阻塞中的 connect/read 立刻以错误返回。
+    // 注意 esp_http_client_cancel_request 带 state<CONNECTED 拒绝守卫,救不了
+    // 卡在建连里的调用,故直接用 close。
+    ESP_LOGW(TAG, "abort: 关底层 socket 打断阻塞中的建连/读流");
+    esp_http_client_close(s->client);
 }
 
 // 原始字节:直链一次读;HLS 完成段轮换(段尽回收连接换段、追新、3 轮取不
