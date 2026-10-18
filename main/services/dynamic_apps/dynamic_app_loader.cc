@@ -176,6 +176,7 @@ const struct esp_elfsym g_metalio_dynapp_syms[] = {
     ESP_ELFSYM_EXPORT(dynapp_cal_today),
     ESP_ELFSYM_EXPORT(dynapp_cal_has_event),
     ESP_ELFSYM_EXPORT(dynapp_cal_get_events_text),
+    ESP_ELFSYM_EXPORT(dynapp_cal_auto_refresh),
     ESP_ELFSYM_EXPORT(dynapp_glm_get_snapshot),
     ESP_ELFSYM_EXPORT(dynapp_glm_request_refresh),
     ESP_ELFSYM_EXPORT(dynapp_glm_select_context),

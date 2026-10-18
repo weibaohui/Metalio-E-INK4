@@ -1,0 +1,9 @@
+{
+  "id": "cal",
+  "name": "日历",
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "月历日程查看与管理",
+  "main": "lib/app.so",
+  "icon": "icon.png"
+}
