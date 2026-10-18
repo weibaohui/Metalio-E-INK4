@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,6 +60,83 @@ int dynapp_time_set_manual(int year, int month, int day, int hour, int minute);
 
 // 提示小浮窗 (EpdToast)
 void dynapp_toast_show(const char* message, uint32_t duration_ms);
+
+// 系统信息查询结构
+typedef struct {
+    size_t ram_free;
+    size_t ram_total;
+    size_t ram_largest;
+    size_t ram_min_free;
+    size_t psram_free;
+    size_t psram_total;
+    size_t psram_largest;
+    size_t psram_min_free;
+    uint64_t flash_size;
+    uint32_t app_part_size;
+    char app_part_label[16];
+    int sd_mounted;
+    uint64_t sd_total_bytes;
+    uint64_t sd_free_bytes;
+    uint32_t nvs_used;
+    uint32_t nvs_total;
+    uint32_t nvs_ns_count;
+    char chip_model[32];
+    char idf_ver[32];
+    char mac[20];
+    int64_t uptime_seconds;
+} dynapp_sysinfo_t;
+
+int dynapp_sysinfo_get(dynapp_sysinfo_t* out);
+
+// 日历日程服务
+int dynapp_cal_today(char* out_buf, size_t max_len);
+int dynapp_cal_has_event(const char* date);
+int dynapp_cal_get_events_text(const char* date, char* out_buf, size_t max_len);
+
+// GLM 用量服务
+typedef struct {
+    int configured;
+    int busy;
+    int last_ok;
+    int active_context;
+    int context_count;
+    char context_name[64];
+    int tokens_5h_pct;
+    int tokens_5h_remaining;
+    int tokens_week_pct;
+    int tokens_week_remaining;
+    char error[64];
+} dynapp_glm_snapshot_t;
+
+int dynapp_glm_get_snapshot(dynapp_glm_snapshot_t* out);
+void dynapp_glm_request_refresh(void);
+void dynapp_glm_select_context(int index);
+void dynapp_glm_start(void);
+void dynapp_glm_stop(void);
+
+// 备份恢复服务
+int dynapp_backup_export(char* out_filename, size_t max_len);
+int dynapp_backup_import(const char* filepath);
+int dynapp_backup_delete(const char* filepath);
+int dynapp_backup_get_nvs_count(void);
+
+// 壁纸设置服务
+int dynapp_wallpaper_get_standby(char* out_name, size_t max_len);
+int dynapp_wallpaper_set_standby(const char* path_or_name);
+int dynapp_wallpaper_clear_standby(void);
+
+// WiFi 局域网服务
+int dynapp_get_ip_address(char* out_ip, size_t max_len);
+
+int dynapp_wifi_file_start(void);
+void dynapp_wifi_file_stop(void);
+int dynapp_wifi_file_is_running(void);
+int dynapp_wifi_file_get_port(void);
+
+int dynapp_wifi_transfer_start(void);
+void dynapp_wifi_transfer_stop(void);
+int dynapp_wifi_transfer_is_running(void);
+int dynapp_wifi_transfer_get_port(void);
 
 #ifdef __cplusplus
 }
