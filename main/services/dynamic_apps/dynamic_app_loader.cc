@@ -26,10 +26,23 @@
 #include <sys/stat.h>
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <string>
 #include <vector>
+
+// libgcc intrinsics required by 64-bit int and double operations in dynamic apps
+extern "C" {
+void __divdf3(void);
+void __divdi3(void);
+void __floatundidf(void);
+void __moddi3(void);
+void __udivdi3(void);
+void __umoddi3(void);
+void __muldi3(void);
+}
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -113,6 +126,65 @@ const struct esp_elfsym g_metalio_dynapp_syms[] = {
     ESP_ELFSYM_EXPORT(lv_color_hex),
     ESP_ELFSYM_EXPORT(lv_pct),
     ESP_ELFSYM_EXPORT(lv_obj_delete),
+    ESP_ELFSYM_EXPORT(lv_obj_set_height),
+    ESP_ELFSYM_EXPORT(lv_obj_get_width),
+    ESP_ELFSYM_EXPORT(lv_obj_get_height),
+    ESP_ELFSYM_EXPORT(lv_obj_get_y),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_pad_left),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_pad_right),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_pad_top),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_pad_bottom),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_pad_column),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_margin_top),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_margin_bottom),
+    ESP_ELFSYM_EXPORT(lv_obj_set_style_margin_left),
+    ESP_ELFSYM_EXPORT(lv_obj_clean),
+    ESP_ELFSYM_EXPORT(lv_obj_is_valid),
+    ESP_ELFSYM_EXPORT(lv_obj_get_parent),
+    ESP_ELFSYM_EXPORT(lv_obj_get_child),
+    ESP_ELFSYM_EXPORT(lv_obj_get_child_count),
+    ESP_ELFSYM_EXPORT(lv_obj_scroll_to_view),
+    ESP_ELFSYM_EXPORT(lv_display_get_default),
+    ESP_ELFSYM_EXPORT(lv_display_get_horizontal_resolution),
+    ESP_ELFSYM_EXPORT(lv_display_get_vertical_resolution),
+    ESP_ELFSYM_EXPORT(lv_bar_create),
+    ESP_ELFSYM_EXPORT(lv_bar_set_range),
+    ESP_ELFSYM_EXPORT(lv_bar_set_value),
+    // libc 基础与内存
+    ESP_ELFSYM_EXPORT(malloc),
+    ESP_ELFSYM_EXPORT(free),
+    ESP_ELFSYM_EXPORT(calloc),
+    ESP_ELFSYM_EXPORT(realloc),
+    ESP_ELFSYM_EXPORT(memcpy),
+    ESP_ELFSYM_EXPORT(memset),
+    ESP_ELFSYM_EXPORT(memmove),
+    ESP_ELFSYM_EXPORT(memcmp),
+    ESP_ELFSYM_EXPORT(strlen),
+    ESP_ELFSYM_EXPORT(strcpy),
+    ESP_ELFSYM_EXPORT(strcat),
+    ESP_ELFSYM_EXPORT(strcmp),
+    ESP_ELFSYM_EXPORT(strchr),
+    ESP_ELFSYM_EXPORT(strrchr),
+    ESP_ELFSYM_EXPORT(strstr),
+    ESP_ELFSYM_EXPORT(strdup),
+    ESP_ELFSYM_EXPORT(strtol),
+    ESP_ELFSYM_EXPORT(atoi),
+    ESP_ELFSYM_EXPORT(sscanf),
+    ESP_ELFSYM_EXPORT(sprintf),
+    ESP_ELFSYM_EXPORT(rand),
+    ESP_ELFSYM_EXPORT(srand),
+    ESP_ELFSYM_EXPORT(time),
+    ESP_ELFSYM_EXPORT(localtime_r),
+    ESP_ELFSYM_EXPORT(gmtime_r),
+    ESP_ELFSYM_EXPORT(mktime),
+    // 编译器内建支持（64位整除/浮点转换等）
+    ESP_ELFSYM_EXPORT(__divdf3),
+    ESP_ELFSYM_EXPORT(__divdi3),
+    ESP_ELFSYM_EXPORT(__floatundidf),
+    ESP_ELFSYM_EXPORT(__moddi3),
+    ESP_ELFSYM_EXPORT(__udivdi3),
+    ESP_ELFSYM_EXPORT(__umoddi3),
+    ESP_ELFSYM_EXPORT(__muldi3),
     // libc 补充（组件 libc 表之外：SD 文件读写、snprintf/strncmp/strncpy、随机数）
     ESP_ELFSYM_EXPORT(snprintf),
     ESP_ELFSYM_EXPORT(strncmp),
@@ -154,11 +226,18 @@ const struct esp_elfsym g_metalio_dynapp_syms[] = {
     ESP_ELFSYM_EXPORT(cJSON_AddStringToObject),
     ESP_ELFSYM_EXPORT(cJSON_AddNumberToObject),
     ESP_ELFSYM_EXPORT(cJSON_AddBoolToObject),
+    ESP_ELFSYM_EXPORT(cJSON_GetObjectItem),
     ESP_ELFSYM_EXPORT(cJSON_GetObjectItemCaseSensitive),
     ESP_ELFSYM_EXPORT(cJSON_GetStringValue),
     ESP_ELFSYM_EXPORT(cJSON_IsString),
     ESP_ELFSYM_EXPORT(cJSON_IsNumber),
     ESP_ELFSYM_EXPORT(cJSON_IsBool),
+    ESP_ELFSYM_EXPORT(cJSON_IsArray),
+    ESP_ELFSYM_EXPORT(cJSON_GetArraySize),
+    ESP_ELFSYM_EXPORT(cJSON_GetArrayItem),
+    ESP_ELFSYM_EXPORT(cJSON_IsTrue),
+    ESP_ELFSYM_EXPORT(cJSON_IsNull),
+    ESP_ELFSYM_EXPORT(cJSON_AddItemToArray),
     // C ABI 垫片：C++ 固件设施的最小导出面
     ESP_ELFSYM_EXPORT(dynapp_screen_status_bar),
     ESP_ELFSYM_EXPORT(dynapp_vk_attach),
