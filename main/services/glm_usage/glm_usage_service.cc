@@ -168,7 +168,10 @@ bool HttpRequest(const std::string& url,
     api::HttpFetchOptions opts;
     opts.timeout_ms = kHttpTimeoutMs;
     opts.send_common_headers = false;
-    opts.tls_min_largest_block = 16 * 1024;
+    // glm 是 ICS 同类的短请求-响应:mbedtls(DYNAMIC_BUFFER+EXTERNAL_MEM)大缓冲
+    // 落 PSRAM,内部连续块需求即 ICS 实测 12KB。16KB 曾在最大块 14848 的常态
+    // 碎片化下被预检误拦("内部内存不足,暂无法 HTTPS")。
+    opts.tls_min_largest_block = 12 * 1024;
     api::HeaderList all_headers;
     all_headers.emplace_back("Accept", "application/json");
     for (const auto& header : headers) {
