@@ -8,6 +8,8 @@ components/*
 !components/esp_lvgl_port/**
 !components/reader_core/
 !components/reader_core/**
+!components/espressif__elf_loader/
+!components/espressif__elf_loader/**
 managed_components/
 build/
 .vscode/
