@@ -207,6 +207,12 @@ lv_obj_t* CreateTabButton(lv_obj_t* parent, const TabEntry& entry, int index) {
 }
 
 bool OnSettingsVkKey(const char* key_name) {
+    // 调试 Tab 内容多,墨水屏滚动慢:vk_prev/vk_next 按节翻页(见 settings_debug_tab)。
+    // 其余按键维持原行为(返回 false 由壳兜底,vk_home 走退出)。
+    if (s_ui.content_built && s_ui.active_tab >= 0 && s_ui.active_tab < kTabCount &&
+        kTabs[s_ui.active_tab].id == SettingsTab::kDebug) {
+        return SettingsDebugTab_OnVkKey(key_name);
+    }
     (void)key_name;
     return false;
 }
