@@ -70,7 +70,11 @@ public:
     // 由各 Screen 在 Create 时绑定当前页控件；切页时覆盖。
     void BindStatusWidgets(lv_obj_t* network, lv_obj_t* mute, lv_obj_t* volume, lv_obj_t* battery,
                            lv_obj_t* status, lv_obj_t* notification,
-                           lv_obj_t* low_battery_popup, lv_obj_t* battery_pct = nullptr);
+                           lv_obj_t* low_battery_popup, lv_obj_t* battery_pct = nullptr,
+                           lv_obj_t* owner_screen = nullptr);
+    // 绑定控件所在屏幕销毁时调用:仅当仍绑在该屏才清指针,防止切到
+    // 无状态栏页面(动态应用)后 UpdateStatusBar 踩悬空对象。
+    void UnbindStatusWidgetsForScreen(lv_obj_t* scr);
 
     /**
      * @brief 状态栏尚未绑定时排队通知；首次 BindStatusWidgets 后显示
@@ -132,6 +136,7 @@ private:
     lv_obj_t* battery_label_ = nullptr;
     lv_obj_t* battery_pct_label_ = nullptr;
     lv_obj_t* low_battery_popup_ = nullptr;
+    lv_obj_t* status_owner_screen_ = nullptr;  // 绑定控件所在屏幕;该屏销毁时据此解绑
 
     char status_title_prefix_[48] = {};
     char status_body_cache_[32] = {};  // 不含前缀的状态正文（如「待命」/「12:34」）

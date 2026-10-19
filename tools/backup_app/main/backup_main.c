@@ -57,6 +57,13 @@ static int backup_on_vk_key(const char* key) {
     return 0;
 }
 
+// LV_EVENT_DELETE 自动释放 user_data。禁写 (lv_event_cb_t)free:那样 LVGL
+// 删除对象时回调拿到的是 lv_event_t 本体,free 它等于喂给堆一个非法指针,
+// 实测导出成功后 refresh_list 删卡片即堆腐败崩机。
+static void free_user_data_cb(lv_event_t *e) {
+    free(lv_event_get_user_data(e));
+}
+
 static lv_obj_t *make_btn(lv_obj_t *parent, const char *txt, lv_coord_t w, lv_coord_t h, lv_event_cb_t cb, void *user_data, lv_obj_t **out_lbl) {
     lv_obj_t *btn = lv_obj_create(parent);
     lv_obj_remove_style_all(btn);
@@ -221,7 +228,7 @@ static void show_snapshot_modal(const dynapp_backup_info_t *item) {
         ctx_all->mask = 0x07; // ALL
         ctx_all->reboot = true;
         lv_obj_t *b1 = make_btn(modal, "● 恢复全部 (系统配置+应用数据+安装包)", lv_pct(100), 44, on_restore_action_clicked, ctx_all, NULL);
-        lv_obj_add_event_cb(b1, (lv_event_cb_t)free, LV_EVENT_DELETE, ctx_all);
+        lv_obj_add_event_cb(b1, free_user_data_cb, LV_EVENT_DELETE, ctx_all);
 
         // 2. 仅恢复应用数据
         restore_action_ctx_t *ctx_app = (restore_action_ctx_t *)malloc(sizeof(restore_action_ctx_t));
@@ -229,7 +236,7 @@ static void show_snapshot_modal(const dynapp_backup_info_t *item) {
         ctx_app->mask = 0x02; // APP_DATA
         ctx_app->reboot = false;
         lv_obj_t *b2 = make_btn(modal, "○ 仅恢复应用数据 (存档/收藏，不改网络)", lv_pct(100), 40, on_restore_action_clicked, ctx_app, NULL);
-        lv_obj_add_event_cb(b2, (lv_event_cb_t)free, LV_EVENT_DELETE, ctx_app);
+        lv_obj_add_event_cb(b2, free_user_data_cb, LV_EVENT_DELETE, ctx_app);
 
         // 3. 仅恢复系统配置
         restore_action_ctx_t *ctx_sys = (restore_action_ctx_t *)malloc(sizeof(restore_action_ctx_t));
@@ -237,21 +244,21 @@ static void show_snapshot_modal(const dynapp_backup_info_t *item) {
         ctx_sys->mask = 0x01; // SYSTEM
         ctx_sys->reboot = true;
         lv_obj_t *b3 = make_btn(modal, "○ 仅恢复系统配置 (Wi-Fi/音量/设置)", lv_pct(100), 40, on_restore_action_clicked, ctx_sys, NULL);
-        lv_obj_add_event_cb(b3, (lv_event_cb_t)free, LV_EVENT_DELETE, ctx_sys);
+        lv_obj_add_event_cb(b3, free_user_data_cb, LV_EVENT_DELETE, ctx_sys);
     } else if (item->backup_type == 1) { // 仅系统配置
         restore_action_ctx_t *ctx_sys = (restore_action_ctx_t *)malloc(sizeof(restore_action_ctx_t));
         strncpy(ctx_sys->path, item->full_path, sizeof(ctx_sys->path) - 1);
         ctx_sys->mask = 0x01;
         ctx_sys->reboot = true;
         lv_obj_t *b = make_btn(modal, "● 恢复系统配置 (完成后将重启)", lv_pct(100), 44, on_restore_action_clicked, ctx_sys, NULL);
-        lv_obj_add_event_cb(b, (lv_event_cb_t)free, LV_EVENT_DELETE, ctx_sys);
+        lv_obj_add_event_cb(b, free_user_data_cb, LV_EVENT_DELETE, ctx_sys);
     } else { // 仅应用数据
         restore_action_ctx_t *ctx_app = (restore_action_ctx_t *)malloc(sizeof(restore_action_ctx_t));
         strncpy(ctx_app->path, item->full_path, sizeof(ctx_app->path) - 1);
         ctx_app->mask = 0x02;
         ctx_app->reboot = false;
         lv_obj_t *b = make_btn(modal, "● 恢复应用数据与状态", lv_pct(100), 44, on_restore_action_clicked, ctx_app, NULL);
-        lv_obj_add_event_cb(b, (lv_event_cb_t)free, LV_EVENT_DELETE, ctx_app);
+        lv_obj_add_event_cb(b, free_user_data_cb, LV_EVENT_DELETE, ctx_app);
     }
 
     // 底部控制：[删除此快照] [关闭取消]
@@ -263,7 +270,7 @@ static void show_snapshot_modal(const dynapp_backup_info_t *item) {
 
     char *path_copy = strdup(item->full_path);
     lv_obj_t *del_btn = make_btn(btm, "删除快照", 120, 38, on_delete_action_clicked, path_copy, NULL);
-    lv_obj_add_event_cb(del_btn, (lv_event_cb_t)free, LV_EVENT_DELETE, path_copy);
+    lv_obj_add_event_cb(del_btn, free_user_data_cb, LV_EVENT_DELETE, path_copy);
 
     make_btn(btm, "关闭", 100, 38, (lv_event_cb_t)close_modal, NULL, NULL);
 }
@@ -357,7 +364,7 @@ static void refresh_list(void) {
         lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_add_event_cb(card, on_snapshot_row_clicked, LV_EVENT_CLICKED, item);
-        lv_obj_add_event_cb(card, (lv_event_cb_t)free, LV_EVENT_DELETE, item);
+        lv_obj_add_event_cb(card, free_user_data_cb, LV_EVENT_DELETE, item);
 
         // 第一行：[标签] + 时间
         lv_obj_t *r1 = lv_obj_create(card);

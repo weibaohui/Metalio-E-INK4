@@ -1616,7 +1616,9 @@ void LVAdapterDisplay::RestoreStatusWidgetsLocked() {
 
 void LVAdapterDisplay::BindStatusWidgets(lv_obj_t* network, lv_obj_t* mute, lv_obj_t* volume,
                                          lv_obj_t* battery, lv_obj_t* status, lv_obj_t* notification,
-                                         lv_obj_t* low_battery_popup, lv_obj_t* battery_pct) {
+                                         lv_obj_t* low_battery_popup, lv_obj_t* battery_pct,
+                                         lv_obj_t* owner_screen) {
+    status_owner_screen_ = owner_screen;
     network_label_ = network;
     mute_label_ = mute;
     volume_label_ = volume;
@@ -1646,6 +1648,23 @@ void LVAdapterDisplay::BindStatusWidgets(lv_obj_t* network, lv_obj_t* mute, lv_o
         pending_notification_[0] = '\0';
         pending_notification_ms_ = 0;
     }
+}
+
+void LVAdapterDisplay::UnbindStatusWidgetsForScreen(lv_obj_t* scr) {
+    // 仅当绑定的仍是该屏才清:换屏时序是"新屏先 Create/Bind、旧屏后 Delete",
+    // 若无条件清指针会把新屏的活绑定误杀。
+    if (status_owner_screen_ != scr) {
+        return;
+    }
+    status_owner_screen_ = nullptr;
+    network_label_ = nullptr;
+    status_label_ = nullptr;
+    notification_label_ = nullptr;
+    mute_label_ = nullptr;
+    volume_label_ = nullptr;
+    battery_label_ = nullptr;
+    battery_pct_label_ = nullptr;
+    low_battery_popup_ = nullptr;
 }
 
 void LVAdapterDisplay::QueueStatusNotification(const char* notification, int duration_ms) {

@@ -279,7 +279,16 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
 
     if (auto* disp = GetAdapterDisplay()) {
         disp->BindStatusWidgets(network_label, mute_label, volume_label, battery_label, status_label,
-                                nullptr, low_battery_popup, battery_pct_label);
+                                nullptr, low_battery_popup, battery_pct_label, scr);
+        // 屏幕销毁时解绑 Display 持有的控件指针:否则切到无状态栏的页面
+        // (动态应用,如备份恢复)后指针悬空,任何状态刷新(时钟/电量/触摸)
+        // 都会踩已释放对象崩机(实测 backup 页触摸即 LoadProhibited)。
+        lv_obj_add_event_cb(scr, [](lv_event_t* e) {
+            if (auto* disp = GetAdapterDisplay()) {
+                disp->UnbindStatusWidgetsForScreen(
+                    static_cast<lv_obj_t*>(lv_event_get_user_data(e)));
+            }
+        }, LV_EVENT_DELETE, scr);
     }
     return out;
 }

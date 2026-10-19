@@ -7,11 +7,54 @@
 #include <string>
 #include <esp_log.h>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
+
 #include "display/lv_adapter_display.h"
 #include "display/screen/screen_common.h"
 #include "display/screen/vk_key_handler.h"
 #include "reader/image_util.h"
 #include "sd_paths.h"
+
+// PSRAM 栈任务(含 LVGL worker,动态应用 create/按键回调都在其中)禁止任何
+// NVS/flash 访问:关 cache 窗口内跑 PSRAM 栈任务触发
+// spi_flash_disable_interrupts_caches_and_other_cpu 的
+// esp_task_stack_is_sane_cache_disabled() 断言崩机(实测 backup 统计入口)。
+// backup 系 shim 是同步语义:起内部栈临时任务执行,阻塞等结果。
+// SD 卡 I/O 走 SDMMC 控制器不关 cache,无需此包装。
+namespace {
+struct FlashSyncJob {
+    void (*fn)(void*);
+    void* arg;
+    SemaphoreHandle_t done;
+};
+
+void FlashSyncTrampoline(void* p) {
+    auto* job = static_cast<FlashSyncJob*>(p);
+    job->fn(job->arg);
+    xSemaphoreGive(job->done);
+    vTaskDelete(nullptr);
+}
+
+bool RunOnInternalStack(void (*fn)(void*), void* arg) {
+    FlashSyncJob job{fn, arg, xSemaphoreCreateBinary()};
+    if (job.done == nullptr) {
+        return false;
+    }
+    // 栈 12KB 内部 RAM:覆盖 NVS 遍历/快照 JSON/文件拷贝;失败即按 shim 失败
+    // 返回,由应用界面提示。
+    if (xTaskCreate(FlashSyncTrampoline, "dynapp_flash", 12288, &job,
+                    tskIDLE_PRIORITY + 3, nullptr) != pdPASS) {
+        vSemaphoreDelete(job.done);
+        return false;
+    }
+    // 整机快照含应用包克隆,慢 SD 上可能数分钟,等待上限放宽到 3 分钟。
+    xSemaphoreTake(job.done, pdMS_TO_TICKS(180000));
+    vSemaphoreDelete(job.done);
+    return true;
+}
+}  // namespace
 
 void* dynapp_screen_status_bar(void* scr) {
     if (scr == nullptr) {
@@ -394,12 +437,52 @@ int dynapp_backup_get_sd_capacity(char* out_free, size_t free_len, char* out_tot
     return 0;
 }
 
-int dynapp_backup_get_stats(int* out_system_nvs, int* out_app_nvs, int* out_installed_apps) {
+namespace {
+
+struct GetStatsArgs {
     int s = 0, a = 0, i = 0;
-    if (backup_restore::NvsBackupService::GetInstance().GetStats(s, a, i)) {
-        if (out_system_nvs) *out_system_nvs = s;
-        if (out_app_nvs) *out_app_nvs = a;
-        if (out_installed_apps) *out_installed_apps = i;
+    bool ok = false;
+};
+
+void GetStatsJob(void* p) {
+    auto* arg = static_cast<GetStatsArgs*>(p);
+    arg->ok = backup_restore::NvsBackupService::GetInstance().GetStats(arg->s, arg->a, arg->i);
+}
+
+struct ExportArgs {
+    int backup_type = 0;
+    backup_restore::ExportResult res;
+};
+
+void ExportJob(void* p) {
+    auto* arg = static_cast<ExportArgs*>(p);
+    arg->res = backup_restore::NvsBackupService::GetInstance().ExportToSd(arg->backup_type);
+}
+
+struct ImportArgs {
+    std::string snapshot_path;
+    int restore_mask = 0;
+    backup_restore::ImportResult res;
+};
+
+void ImportJob(void* p) {
+    auto* arg = static_cast<ImportArgs*>(p);
+    arg->res = backup_restore::NvsBackupService::GetInstance().ImportFromSd(arg->snapshot_path, arg->restore_mask);
+}
+
+}  // namespace
+
+int dynapp_backup_get_stats(int* out_system_nvs, int* out_app_nvs, int* out_installed_apps) {
+    GetStatsArgs args;
+    // NVS 遍历要走 flash 读,必须离开 PSRAM 栈任务(见 RunOnInternalStack)。
+    if (!RunOnInternalStack(GetStatsJob, &args)) {
+        ESP_LOGE("DynAppShim", "backup_get_stats: spawn internal-stack worker failed");
+        return 0;
+    }
+    if (args.ok) {
+        if (out_system_nvs) *out_system_nvs = args.s;
+        if (out_app_nvs) *out_app_nvs = args.a;
+        if (out_installed_apps) *out_installed_apps = args.i;
         return 1;
     }
     return 0;
@@ -433,18 +516,29 @@ int dynapp_backup_get_item(int index, dynapp_backup_info_t* out) {
 }
 
 int dynapp_backup_export(int backup_type, char* out_name, size_t max_len) {
-    auto res = backup_restore::NvsBackupService::GetInstance().ExportToSd(backup_type);
-    if (res.success && out_name != nullptr && max_len > 0) {
-        strncpy(out_name, res.filename.c_str(), max_len - 1);
+    ExportArgs args;
+    args.backup_type = backup_type;
+    if (!RunOnInternalStack(ExportJob, &args)) {
+        ESP_LOGE("DynAppShim", "backup_export: spawn internal-stack worker failed");
+        return 0;
+    }
+    if (args.res.success && out_name != nullptr && max_len > 0) {
+        strncpy(out_name, args.res.filename.c_str(), max_len - 1);
         out_name[max_len - 1] = '\0';
     }
-    return res.success ? 1 : 0;
+    return args.res.success ? 1 : 0;
 }
 
 int dynapp_backup_import(const char* snapshot_path, int restore_mask) {
     if (snapshot_path == nullptr) return 0;
-    auto res = backup_restore::NvsBackupService::GetInstance().ImportFromSd(snapshot_path, restore_mask);
-    return res.success ? 1 : 0;
+    ImportArgs args;
+    args.snapshot_path = snapshot_path;
+    args.restore_mask = restore_mask;
+    if (!RunOnInternalStack(ImportJob, &args)) {
+        ESP_LOGE("DynAppShim", "backup_import: spawn internal-stack worker failed");
+        return 0;
+    }
+    return args.res.success ? 1 : 0;
 }
 
 int dynapp_backup_delete(const char* snapshot_path) {
