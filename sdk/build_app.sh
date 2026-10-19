@@ -120,4 +120,13 @@ if [ -f "$SDK_ROOT/symbols.txt" ] && [ -x "$READELF" ]; then
     fi
 fi
 
+# ---- printf 格式检查:固件 libc 为 newlib NANO 格式,%lld/%llu 不支持 ----
+if grep -nE '%[0-9.]*ll[diouxX]' "$SRC" >/dev/null 2>&1; then
+    echo ""
+    echo "⚠️  警告: 源码使用了 long-long printf 格式(%lld/%llu 等):"
+    grep -nE '%[0-9.]*ll[diouxX]' "$SRC" | head -5
+    echo "  → 固件 libc 是 newlib NANO 格式,不支持 %lld/%llu,运行时会输出乱码"
+    echo "    (如 \"0ld\")。请改用 32 位 long/%ld,或自行拼字符串"
+fi
+
 echo "OK: $BUILD_DIR/${OUT}.so"

@@ -133,10 +133,11 @@ static void fill_body(void) {
     snprintf(line, sizeof(line), "Wi-Fi MAC 地址: %s", info.mac);
     make_info_label(s_body, line);
 
-    int64_t up = info.uptime_seconds;
-    snprintf(line, sizeof(line), "开机连续运行: %lld天 %02lld:%02lld:%02lld",
-             (long long)(up / 86400), (long long)((up / 3600) % 24),
-             (long long)((up / 60) % 60), (long long)(up % 60));
+    // 固件 libc 为 newlib NANO 格式(long-long printf 不支持,会打出 "0ld" 类残渣),
+    // 时间格式化一律用 32 位 long/%ld(秒级时间戳 32 位够用 136 年)。
+    long up = (long)info.uptime_seconds;
+    snprintf(line, sizeof(line), "开机连续运行: %ld天 %02ld:%02ld:%02ld",
+             up / 86400, (up / 3600) % 24, (up / 60) % 60, up % 60);
     make_info_label(s_body, line);
 }
 
