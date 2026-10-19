@@ -1,4 +1,10 @@
 // main/services/calendar/calendar_store.cc —— 见 calendar_store.h(需求一.4)。
+//
+// 并发模型(2026-10-19 重构):s_mutex 只保护 RAM 缓存与序列化,SD I/O 一律
+// 移到锁外由 s_io_mutex 串行化。此前 Persist* 在 s_mutex 内写 SD,日历 UI
+// 线程(逐格 has_event)与订阅刷新任务(FetchWorker 整组替换)谁赶上 SD 慢,
+// 就把 LVGL worker 一起冻住(实测翻页即死机)。序号(s_*_seq)防旧快照覆盖:
+// 锁内每次修改递增,写 SD 前发现序号已变即放弃(更新者会带最新数据重写)。
 #include "calendar_store.h"
 
 #include <algorithm>
@@ -25,10 +31,13 @@ constexpr const char* kEventsTmp  = SD_PATH_CALENDAR "/events.tmp";
 constexpr const char* kIcsFile = SD_PATH_CALENDAR "/ics_events.json";
 constexpr const char* kIcsTmp  = SD_PATH_CALENDAR "/ics_events.tmp";
 
-std::mutex s_mutex;
+std::mutex s_mutex;                       // 保护 RAM 缓存与序号(短临界区,无 I/O)
+std::mutex s_io_mutex;                    // 串行化 SD 写(tmp+rename 不交错)
 std::vector<CalendarEvent> s_events;      // 手动/MCP 日程 RAM 缓存(读全走这里)
 std::vector<CalendarEvent> s_ics_events;  // 订阅日历(ics)日程缓存
 bool s_loaded = false;
+uint64_t s_events_seq = 0;                // 手动日程每次 RAM 修改 +1
+uint64_t s_ics_seq = 0;                   // 订阅日程每次 RAM 修改 +1
 
 bool SdReady() { return SdCardManager::GetInstance().IsMounted(); }
 
@@ -91,8 +100,15 @@ void ParseInto(const std::string& json, std::vector<CalendarEvent>& out, bool fr
     cJSON_Delete(root);
 }
 
-// 原子写:tmp + rename(SD;无卡返回 false 但缓存已更新)。调用方须持 s_mutex。
-bool PersistTo(const char* tmp_path, const char* file_path, const std::vector<CalendarEvent>& events) {
+// SD 写(调用方不得持 s_mutex;s_io_mutex 串行化,tmp+rename 原子落盘)。
+// expect_seq:调用方锁内修改时的序号快照;不匹配说明已有更新版本,
+// 本轮旧快照放弃落盘(防止覆盖后写者的新数据)。
+bool WriteBodyTo(uint64_t expect_seq, uint64_t& current_seq,
+                 const char* tmp_path, const char* file_path, const std::string& body) {
+    std::lock_guard<std::mutex> io_lock(s_io_mutex);
+    if (current_seq != expect_seq) {
+        return true;   // 已被更新版本取代:跳过旧快照,不算失败
+    }
     if (!SdReady()) {
         ESP_LOGW(TAG, "无 SD 卡,日程仅存 RAM(重启不保留)");
         return false;
@@ -101,7 +117,6 @@ bool PersistTo(const char* tmp_path, const char* file_path, const std::vector<Ca
         ESP_LOGW(TAG, "calendar 目录创建失败");
         return false;
     }
-    const std::string body = Serialize(events);
     FILE* f = fopen(tmp_path, "wb");
     if (f == nullptr) {
         ESP_LOGW(TAG, "open tmp failed errno=%d", errno);
@@ -122,9 +137,6 @@ bool PersistTo(const char* tmp_path, const char* file_path, const std::vector<Ca
     }
     return true;
 }
-
-bool PersistLocked() { return PersistTo(kEventsTmp, kEventsFile, s_events); }
-bool PersistIcsLocked() { return PersistTo(kIcsTmp, kIcsFile, s_ics_events); }
 
 void LoadFileLocked(const char* path, std::vector<CalendarEvent>& out, bool from_ics) {
     struct stat st;
@@ -166,53 +178,92 @@ void CalendarStore_EnsureLoaded() {
 
 bool Calendar_AddEvent(const std::string& date, const std::string& time, const std::string& title) {
     if (!ValidDate(date) || !ValidTime(time) || title.empty()) return false;
-    std::lock_guard<std::mutex> lock(s_mutex);
-    LoadLocked();
-    CalendarEvent e{date, time, title};
-    s_events.push_back(e);
-    PersistLocked();
-    ESP_LOGI(TAG, "新增日程 %s %s %s", date.c_str(), time.c_str(), title.c_str());
-    return true;
+    std::string body;
+    uint64_t seq = 0;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        LoadLocked();
+        CalendarEvent e{date, time, title};
+        s_events.push_back(e);
+        body = Serialize(s_events);
+        seq = ++s_events_seq;
+    }
+    const bool ok = WriteBodyTo(seq, s_events_seq, kEventsTmp, kEventsFile, body);
+    ESP_LOGI(TAG, "新增日程 %s %s %s (%s)", date.c_str(), time.c_str(), title.c_str(),
+             ok ? "已落盘" : "落盘失败");
+    return true;   // RAM 已更新,SD 落盘失败不影响本次会话
 }
 
 int Calendar_ClearAll() {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    LoadLocked();
-    const int n = (int)s_events.size();
-    s_events.clear();
-    PersistLocked();
+    std::string body;
+    uint64_t seq = 0;
+    int n = 0;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        LoadLocked();
+        n = (int)s_events.size();
+        s_events.clear();
+        body = Serialize(s_events);
+        seq = ++s_events_seq;
+    }
+    WriteBodyTo(seq, s_events_seq, kEventsTmp, kEventsFile, body);
     return n;
 }
 
 int Calendar_RemoveForDate(const std::string& date) {
     if (!ValidDate(date)) return 0;
-    std::lock_guard<std::mutex> lock(s_mutex);
-    LoadLocked();
+    std::string body;
+    uint64_t seq = 0;
     int removed = 0;
-    for (auto it = s_events.begin(); it != s_events.end();) {
-        if (it->date == date) { it = s_events.erase(it); ++removed; }
-        else ++it;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        LoadLocked();
+        for (auto it = s_events.begin(); it != s_events.end();) {
+            if (it->date == date) { it = s_events.erase(it); ++removed; }
+            else ++it;
+        }
+        if (removed > 0) {
+            body = Serialize(s_events);
+            seq = ++s_events_seq;
+        }
     }
-    if (removed > 0) PersistLocked();
+    if (removed > 0) {
+        WriteBodyTo(seq, s_events_seq, kEventsTmp, kEventsFile, body);
+    }
     return removed;
 }
 
 int Calendar_ReplaceIcsEvents(std::vector<CalendarEvent>&& events) {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    LoadLocked();
-    for (auto& e : events) e.from_ics = true;
-    s_ics_events = std::move(events);
-    PersistIcsLocked();
-    ESP_LOGI(TAG, "订阅日程整组替换:%d 条", (int)s_ics_events.size());
-    return (int)s_ics_events.size();
+    std::string body;
+    uint64_t seq = 0;
+    int n = 0;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        LoadLocked();
+        for (auto& e : events) e.from_ics = true;
+        s_ics_events = std::move(events);
+        n = (int)s_ics_events.size();
+        body = Serialize(s_ics_events);
+        seq = ++s_ics_seq;
+    }
+    WriteBodyTo(seq, s_ics_seq, kIcsTmp, kIcsFile, body);
+    ESP_LOGI(TAG, "订阅日程整组替换:%d 条", n);
+    return n;
 }
 
 int Calendar_ClearIcsEvents() {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    LoadLocked();
-    const int n = (int)s_ics_events.size();
-    s_ics_events.clear();
-    PersistIcsLocked();
+    std::string body;
+    uint64_t seq = 0;
+    int n = 0;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        LoadLocked();
+        n = (int)s_ics_events.size();
+        s_ics_events.clear();
+        body = Serialize(s_ics_events);
+        seq = ++s_ics_seq;
+    }
+    WriteBodyTo(seq, s_ics_seq, kIcsTmp, kIcsFile, body);
     return n;
 }
 
@@ -275,5 +326,3 @@ std::string Calendar_Today() {
              local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
     return buf;
 }
-
-bool Calendar_HasValidDate() { return !Calendar_Today().empty(); }
