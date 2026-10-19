@@ -337,6 +337,7 @@ int dynapp_cal_has_event(const char* date) {
 
 int dynapp_cal_get_events_text(const char* date, char* out_buf, size_t max_len) {
     if (date == nullptr || out_buf == nullptr || max_len == 0) return 0;
+    ESP_LOGI("CalShim", "get_events_text %s task=%s", date, pcTaskGetName(nullptr));
     CalendarStore_EnsureLoaded();
     auto events = Calendar_GetForDate(date);
     std::string text = std::string(date) + " 日程(" + std::to_string(events.size()) + ")";

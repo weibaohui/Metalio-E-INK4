@@ -1738,7 +1738,7 @@ void LVAdapterDisplay::BeginStandbyEnterPaint() {
     ctx->defer_standby_paint = true;
     ctx->coalesce_pending = false;
     ctx->coalesce_kick_armed = false;
-    ESP_LOGI(TAG, "standby enter: defer paint until FULL");
+    ESP_LOGI(TAG, "standby enter: defer paint until FULL (task=%s)", pcTaskGetName(nullptr));
 }
 
 void LVAdapterDisplay::ParkEpdForStandby() {
