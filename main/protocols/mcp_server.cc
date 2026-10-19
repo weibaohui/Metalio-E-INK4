@@ -152,11 +152,14 @@ void McpServer::AddCommonTools() {
             return true;
         });
 
-    AddTool("self.input.click", "Simulate a physical touch screen tap at coordinate (x, y) with optional duration_ms.",
+    // 注意:整型属性的第三参是"默认值"不是描述文字——传字符串会污染 variant,
+    // tools/list 序列化 get<int> 时 bad_variant_access abort 整机
+    // (实测 AI 对话每次 tools/list 必崩)。字段说明并入工具 description。
+    AddTool("self.input.click", "Simulate a physical touch screen tap at coordinate (x, y) with optional duration_ms. x: 0-479; y: 0-799 screen area or 900 for bottom virtual keys; duration_ms defaults to 60.",
         PropertyList({
-            Property("x", kPropertyTypeInteger, "X coordinate on screen (0-479)"),
-            Property("y", kPropertyTypeInteger, "Y coordinate on screen (0-799, or 900 for virtual keys)"),
-            Property("duration_ms", kPropertyTypeInteger, "Optional touch duration in milliseconds (default: 60)")
+            Property("x", kPropertyTypeInteger, 0),
+            Property("y", kPropertyTypeInteger, 240),
+            Property("duration_ms", kPropertyTypeInteger, 60)
         }),
         [](const PropertyList& properties) -> ReturnValue {
             return true;
@@ -404,7 +407,10 @@ void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_o
         }
         
         // 添加tool前检查大小
+        ESP_LOGI(TAG, "tools/list serializing %s", (*it)->name().c_str());
         std::string tool_json = (*it)->to_json() + ",";
+        ESP_LOGI(TAG, "tools/list serialized %s len=%u", (*it)->name().c_str(),
+                 (unsigned)tool_json.length());
         if (json.length() + tool_json.length() + 30 > max_payload_size) {
             // 如果添加这个tool会超出大小限制，设置next_cursor并退出循环
             next_cursor = (*it)->name();
@@ -433,6 +439,7 @@ void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_o
         json += "],\"nextCursor\":\"" + next_cursor + "\"}";
     }
     
+    ESP_LOGI(TAG, "tools/list done len=%u next=%s", (unsigned)json.length(), next_cursor.c_str());
     ReplyResult(id, json, response_sink);
 }
 
