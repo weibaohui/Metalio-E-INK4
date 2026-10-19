@@ -34,14 +34,30 @@
 #include <vector>
 
 // libgcc intrinsics required by 64-bit int and double operations in dynamic apps
+// (双精度浮点全族导出:第三方应用做任何浮点运算都不再撞"符号缺失"墙)
 extern "C" {
+void __adddf3(void);
 void __divdf3(void);
 void __divdi3(void);
+void __eqdf2(void);
+void __extendsfdf2(void);
+void __floatsidf(void);
 void __floatundidf(void);
+void __floatunsidf(void);
+void __gedf2(void);
+void __gtdf2(void);
+void __ledf2(void);
+void __ltdf2(void);
 void __moddi3(void);
+void __muldf3(void);
+void __muldi3(void);
+void __nedf2(void);
+void __negdf2(void);
+void __powidf2(void);
+void __subdf3(void);
 void __udivdi3(void);
 void __umoddi3(void);
-void __muldi3(void);
+void __unorddf2(void);
 }
 
 #include <cJSON.h>
@@ -81,14 +97,31 @@ constexpr const char *kSoName = "app.so";
 // (lv_* / dynapp_* 前缀全量 + 基础库清单),禁止手改;重编固件后运行该脚本更新。
 // 表外符号 dlopen 时由 dlerror 点名。
 const struct esp_elfsym g_metalio_dynapp_syms[] = {
-    // libgcc 内建函数(64 位整数/浮点运算;extern 声明见文件头)
+    // libgcc 内建函数(64 位整数与双精度浮点全族;extern 声明见文件头)。
+    // 若某符号未被固件链接,固件链接期会报 undefined reference —— 按报错
+    // 从本清单与 gen_symbols.sh 的 LIBGCC_SYMBOLS 中同步剔除即可。
+    ESP_ELFSYM_EXPORT(__adddf3),
     ESP_ELFSYM_EXPORT(__divdf3),
     ESP_ELFSYM_EXPORT(__divdi3),
+    ESP_ELFSYM_EXPORT(__eqdf2),
+    ESP_ELFSYM_EXPORT(__extendsfdf2),
+    ESP_ELFSYM_EXPORT(__floatsidf),
     ESP_ELFSYM_EXPORT(__floatundidf),
+    ESP_ELFSYM_EXPORT(__floatunsidf),
+    ESP_ELFSYM_EXPORT(__gedf2),
+    ESP_ELFSYM_EXPORT(__gtdf2),
+    ESP_ELFSYM_EXPORT(__ledf2),
+    ESP_ELFSYM_EXPORT(__ltdf2),
     ESP_ELFSYM_EXPORT(__moddi3),
+    ESP_ELFSYM_EXPORT(__muldf3),
+    ESP_ELFSYM_EXPORT(__muldi3),
+    ESP_ELFSYM_EXPORT(__nedf2),
+    ESP_ELFSYM_EXPORT(__negdf2),
+    ESP_ELFSYM_EXPORT(__powidf2),
+    ESP_ELFSYM_EXPORT(__subdf3),
     ESP_ELFSYM_EXPORT(__udivdi3),
     ESP_ELFSYM_EXPORT(__umoddi3),
-    ESP_ELFSYM_EXPORT(__muldi3),
+    ESP_ELFSYM_EXPORT(__unorddf2),
 
     // ---- 以下为 scripts/gen_symbols.sh 自动生成内容,禁止手改 ----
 #include "generated_symbol_table.inc"

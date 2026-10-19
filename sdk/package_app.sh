@@ -58,17 +58,39 @@ OUT_DIR="$APP_DIR/bin"
 BUNDLE_DIR="$OUT_DIR/${APP_NAME}.app"
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/lib"
-cp "$SO_FILE" "$BUNDLE_DIR/lib/app.so"
+
+# manifest:读取 id 作为 .so 唯一名。esp_dlfcn 按基础文件名缓存已加载模块,
+# 所有应用都叫 lib/app.so 时,第二个应用 dlopen 会拿到第一个应用的缓存模块
+# (表现为"启动 A 却显示 B 的界面"),因此 .so 必须以应用 id 命名。
+APP_ID="$APP_NAME"
+if [ -f "$APP_DIR/manifest.json" ]; then
+    APP_ID="$(python3 -c "
+import json,sys
+try:
+    print(json.load(open('$APP_DIR/manifest.json')).get('id') or '$APP_NAME')
+except Exception:
+    print('$APP_NAME')
+" 2>/dev/null || echo "$APP_NAME")"
+fi
+SO_NAME="$APP_ID"
+
+cp "$SO_FILE" "$BUNDLE_DIR/lib/${SO_NAME}.so"
 
 if [ -f "$APP_DIR/manifest.json" ]; then
-    cp "$APP_DIR/manifest.json" "$BUNDLE_DIR/manifest.json"
+    python3 - "$APP_DIR/manifest.json" "$BUNDLE_DIR/manifest.json" "$SO_NAME" <<'PYEOF'
+import json, sys
+src, dst, so_name = sys.argv[1], sys.argv[2], sys.argv[3]
+m = json.load(open(src))
+m["executable"] = f"lib/{so_name}.so"   # 唯一 .so 名(防 dlfcn 按文件名缓存串台)
+json.dump(m, open(dst, "w"), indent=2, ensure_ascii=False)
+PYEOF
 else
     cat > "$BUNDLE_DIR/manifest.json" <<EOF
 {
-  "id": "${APP_NAME}",
+  "id": "${SO_NAME}",
   "name": "${APP_NAME}",
   "icon": "icon.png",
-  "executable": "lib/app.so",
+  "executable": "lib/${SO_NAME}.so",
   "abi": 1,
   "version": "1.0.0"
 }
@@ -77,7 +99,7 @@ EOF
 fi
 [ -f "$APP_DIR/icon.png" ] && cp "$APP_DIR/icon.png" "$BUNDLE_DIR/icon.png"
 
-echo "==> Bundle 准备就绪: $BUNDLE_DIR"
+echo "==> Bundle 准备就绪: $BUNDLE_DIR (lib/${SO_NAME}.so)"
 
 # 3. 打包 .app.zip
 APP_ZIP="$OUT_DIR/${APP_NAME}.app.zip"

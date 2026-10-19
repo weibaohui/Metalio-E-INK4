@@ -2,7 +2,7 @@
   "id": "power",
   "name": "电源管理",
   "icon": "icon.png",
-  "executable": "lib/app.so",
+  "executable": "lib/power.so",
   "abi": 1,
   "version": "1.0.0"
 }

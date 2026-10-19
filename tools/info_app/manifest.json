@@ -2,7 +2,7 @@
   "id": "info",
   "name": "系统信息",
   "icon": "icon.png",
-  "executable": "lib/app.so",
+  "executable": "lib/info.so",
   "abi": 1,
   "version": "1.0.0"
 }

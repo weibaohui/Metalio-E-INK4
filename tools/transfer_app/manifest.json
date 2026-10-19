@@ -2,7 +2,7 @@
   "id": "transfer",
   "name": "WiFi 传书",
   "icon": "icon.png",
-  "executable": "lib/app.so",
+  "executable": "lib/transfer.so",
   "abi": 1,
   "version": "1.0.0",
   "author": "Metalio",

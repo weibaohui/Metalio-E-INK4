@@ -49,10 +49,12 @@ lv_obj_set_style_margin_ver lv_obj_set_style_pad_ver lv_obj_set_style_pad_all
 lv_obj_clear_flag lv_obj_set_style_pad_hor
 """.split()
 
-# libgcc 内建函数(64 位整数/浮点运算):不生成进 .inc(加载器文件头以 extern
+# libgcc 内建函数(64 位整数/双精度浮点全族):不生成进 .inc(加载器文件头以 extern
 # 声明手写导出),但属于 ABI 的一部分,必须列进 symbols.txt
 LIBGCC_SYMBOLS = """
-__divdf3 __divdi3 __floatundidf __moddi3 __muldi3 __udivdi3 __umoddi3
+__adddf3 __divdf3 __divdi3 __eqdf2 __extendsfdf2 __floatsidf __floatundidf
+__floatunsidf __gedf2 __gtdf2 __ledf2 __ltdf2 __moddi3 __muldf3 __muldi3
+__nedf2 __negdf2 __powidf2 __subdf3 __udivdi3 __umoddi3 __unorddf2
 """.split()
 
 # 探测文件头:与 dynamic_app_loader.cc 取址上下文相同的包含集合

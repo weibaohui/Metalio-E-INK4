@@ -270,6 +270,9 @@ static void *time_create(void) {
     // 2. 虚拟键
     dynapp_vk_attach(scr, "time", time_create, time_on_vk_key);
 
+    // 日期/时区小标签字体(部分字号缺字形时返回 NULL,下方使用均带保护)
+    const lv_font_t *f22 = fontpack_lv_font_get(22, 2);
+
     // 3. 内容列容器 (无返回顶栏，由底部 vk_home 键统一控制返回)
     lv_obj_t *body = lv_obj_create(scr);
     lv_obj_remove_style_all(body);
