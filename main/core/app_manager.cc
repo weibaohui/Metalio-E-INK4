@@ -62,7 +62,7 @@ void AppManager::RegisterDefaultApps() {
     RegisterApp(std::make_shared<StandardAppModule>(
         "upgrade", "A:ic_app_home_setting.spng", AppNameUpgrade, SystemUpgradeScreen::Create, nullptr, false));
     RegisterApp(std::make_shared<StandardAppModule>(
-        "power", "A:ic_app_home_setting.spng", AppNamePower, PowerScreen::Create, nullptr, true));
+        "power", "A:ic_app_home_power.spng", AppNamePower, PowerScreen::Create, nullptr, true));
     RegisterApp(std::make_shared<StandardAppModule>(
         "set", "A:ic_app_home_setting.spng", AppNameSettings, SettingsScreen::Create, nullptr, true));
 }

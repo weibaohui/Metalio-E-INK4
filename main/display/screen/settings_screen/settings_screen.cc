@@ -7,7 +7,6 @@
 #include "power_policy.h"
 #include "screen_common.h"
 #include "settings_about_tab.h"
-#include "settings_apps_tab.h"
 #include "settings_bluetooth_tab.h"
 #include "settings_common.h"
 #include "settings_haptic_tab.h"
@@ -40,7 +39,6 @@ enum class SettingsTab : int {
     kStorage = 6,
     kBluetooth = 7,
     kTest = 8,
-    kApps = 10,
     kMcp = 11,
     kDebug = 12,
     kAbout = 13,  // 关于始终放最后
@@ -67,7 +65,6 @@ const char* TabNameBluetooth() { return Lang::Strings::SETTINGS_TAB_BLUETOOTH; }
 const char* TabNameTest() { return Lang::Strings::SETTINGS_TAB_TEST; }
 const char* TabNameMcp() { return "MCP"; }  // 新 Tab 暂不走 i18n(避免重新生成语言表)
 const char* TabNameDebug() { return Lang::Strings::SETTINGS_TAB_DEBUG; }
-const char* TabNameApps() { return "应用"; }  // 新 Tab 暂不走 i18n(避免重新生成语言表)
 const char* TabNameAbout() { return Lang::Strings::SETTINGS_TAB_ABOUT; }
 
 // 关于 Tab 必须保持为数组最后一项
@@ -82,7 +79,6 @@ constexpr TabEntry kTabs[] = {
      SettingsBluetoothTab_OnActivated, SettingsBluetoothTab_OnDeactivated},
     {SettingsTab::kTest, TabNameTest, SettingsTestTab_Build, SettingsTestTab_Reset,
      SettingsTestTab_OnActivated, SettingsTestTab_OnDeactivated},
-    {SettingsTab::kApps, TabNameApps, SettingsAppsTab_Build, SettingsAppsTab_Reset, nullptr, nullptr},
     {SettingsTab::kMcp, TabNameMcp, SettingsMcpTab_Build, SettingsMcpTab_Reset, nullptr, nullptr},
     {SettingsTab::kDebug, TabNameDebug, SettingsDebugTab_Build, SettingsDebugTab_Reset, nullptr, nullptr},
     {SettingsTab::kAbout, TabNameAbout, SettingsAboutTab_Build, SettingsAboutTab_Reset, nullptr, nullptr},
