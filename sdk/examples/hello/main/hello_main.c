@@ -24,7 +24,7 @@ static void *hello_create(void) {
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
     dynapp_screen_status_bar(scr);
-    dynapp_vk_attach(scr, "sdkhello", hello_create, hello_on_vk_key);
+    dynapp_vk_attach(scr, "hello", hello_create, hello_on_vk_key);
 
     lv_obj_t *lbl = lv_label_create(scr);
     lv_label_set_text(lbl, "Hello Metalio!\n\n这是一个用 SDK 独立编译的\n第三方动态应用示例。");
@@ -44,7 +44,7 @@ static void *hello_create(void) {
 // 固件 dlsym("metalio_app_entry") 的入口:填 desc 后返回(无副作用)
 void metalio_app_entry(metalio_app_desc_t *out) {
     out->abi_version = METALIO_DYNAPP_ABI_VERSION;
-    out->id = "sdkhello";
+    out->id = "hello";
     out->name = "Hello SDK";
     out->icon = "icon.png";
     out->create = hello_create;

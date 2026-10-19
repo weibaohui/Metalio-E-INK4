@@ -2,7 +2,7 @@
   "id": "backup",
   "name": "备份恢复",
   "icon": "icon.png",
-  "executable": "lib/app.so",
+  "executable": "lib/backup.so",
   "abi": 1,
   "version": "1.0.0",
   "author": "Metalio",

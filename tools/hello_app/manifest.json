@@ -2,7 +2,7 @@
   "id": "hello",
   "name": "Hello",
   "icon": "icon.png",
-  "executable": "lib/app.so",
+  "executable": "lib/hello.so",
   "abi": 1,
   "version": "1.0.0"
 }

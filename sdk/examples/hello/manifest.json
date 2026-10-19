@@ -1,5 +1,5 @@
 {
-  "id": "sdkhello",
+  "id": "hello",
   "name": "Hello SDK",
   "icon": "icon.png",
   "executable": "lib/app.so",

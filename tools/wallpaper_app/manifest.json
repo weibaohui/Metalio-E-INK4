@@ -2,7 +2,7 @@
   "id": "wallpaper",
   "name": "待机壁纸",
   "icon": "icon.png",
-  "executable": "lib/app.so",
+  "executable": "lib/wallpaper.so",
   "abi": 1,
   "version": "1.0.0",
   "author": "Metalio",

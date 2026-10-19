@@ -4,13 +4,28 @@
 # (ABI 稳定政策: 签名只增不改;破坏签名须递增 METALIO_DYNAPP_ABI_VERSION)
 
 # ==== libgcc 内建函数(64 位整数/浮点运算) ====
+__adddf3
 __divdf3
 __divdi3
+__eqdf2
+__extendsfdf2
+__floatsidf
 __floatundidf
+__floatunsidf
+__gedf2
+__gtdf2
+__ledf2
+__ltdf2
 __moddi3
+__muldf3
 __muldi3
+__nedf2
+__negdf2
+__powidf2
+__subdf3
 __udivdi3
 __umoddi3
+__unorddf2
 
 # ==== LVGL 图形库(lv_* 前缀全量,动态应用的全部工具箱) ====
 lv_anim_delete

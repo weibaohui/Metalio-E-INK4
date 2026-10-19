@@ -21,8 +21,10 @@ mkdir -p "$STAGE/include/metalio" "$STAGE/include/fontpack" "$STAGE/include/lvgl
 # 1. 契约与服务头(SDK 唯一事实源)
 cp "$ROOT/sdk/include/metalio/"*.h "$STAGE/include/metalio/"
 cp "$ROOT/sdk/include/fontpack/fontpack_lvgl.h" "$STAGE/include/fontpack/"
-# 1b. ESP-IDF 公共头(应用合法使用:esp_random 硬件随机数等)
-cp "$ROOT/sdk/include/esp_random.h" "$STAGE/include/"
+# 1b. ESP-IDF 公共头与服务公共头(应用合法使用:esp_random/cJSON/radio 播放与目录)
+cp "$ROOT/sdk/include/esp_random.h" "$ROOT/sdk/include/cJSON.h" "$STAGE/include/"
+mkdir -p "$STAGE/include/services/radio"
+cp "$ROOT/sdk/include/services/radio/radio_player.h" "$ROOT/sdk/include/services/radio/radio_catalog.h" "$STAGE/include/services/radio/"
 
 # 2. 旧式引用转发头(存量应用 #include "dynamic_app_abi.h" 等也能编译)
 cat > "$STAGE/include/dynamic_app_abi.h" <<'EOF'

@@ -2,7 +2,7 @@
   "id": "tetris",
   "name": "方块战争",
   "icon": "icon.png",
-  "executable": "lib/app.so",
+  "executable": "lib/tetris.so",
   "abi": 1,
   "version": "1.0.0"
 }
