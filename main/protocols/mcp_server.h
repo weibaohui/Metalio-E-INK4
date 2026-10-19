@@ -2,6 +2,8 @@
 #define MCP_SERVER_H
 
 #include <string>
+#include <cstdlib>
+#include <esp_log.h>
 #include <vector>
 #include <map>
 #include <functional>
@@ -123,15 +125,35 @@ public:
     std::string to_json() const {
         cJSON *json = cJSON_CreateObject();
         
+        // 序列化必须永不抛出:value<int>() 系是 std::get,variant 里装的不是
+        // 期望类型会 bad_variant_access → 未捕获 → abort 整机重启(实测
+        // tools/list 序列化时崩机,LLM 工具桥每次 tools/list 必触发)。
+        // 故全部用 get_if 防御式取值;类型不符时降级转换并点名自首。
         if (type_ == kPropertyTypeBoolean) {
             cJSON_AddStringToObject(json, "type", "boolean");
             if (has_default_value_) {
-                cJSON_AddBoolToObject(json, "default", value<bool>());
+                if (auto* v = std::get_if<bool>(&value_)) {
+                    cJSON_AddBoolToObject(json, "default", *v);
+                } else {
+                    ESP_LOGE("McpProp", "property %s: boolean 默认值类型不符,按 false 序列化", name_.c_str());
+                    cJSON_AddBoolToObject(json, "default", false);
+                }
             }
         } else if (type_ == kPropertyTypeInteger) {
             cJSON_AddStringToObject(json, "type", "integer");
             if (has_default_value_) {
-                cJSON_AddNumberToObject(json, "default", value<int>());
+                if (auto* v = std::get_if<int>(&value_)) {
+                    cJSON_AddNumberToObject(json, "default", *v);
+                } else if (auto* s = std::get_if<std::string>(&value_)) {
+                    ESP_LOGE("McpProp", "property %s: integer 默认值装的是 string(\"%s\"),降级 atoi", name_.c_str(), s->c_str());
+                    cJSON_AddNumberToObject(json, "default", atoi(s->c_str()));
+                } else if (auto* b = std::get_if<bool>(&value_)) {
+                    ESP_LOGE("McpProp", "property %s: integer 默认值装的是 bool,降级 0/1", name_.c_str());
+                    cJSON_AddNumberToObject(json, "default", *b ? 1 : 0);
+                } else {
+                    ESP_LOGE("McpProp", "property %s: integer 默认值类型未知,按 0 序列化", name_.c_str());
+                    cJSON_AddNumberToObject(json, "default", 0);
+                }
             }
             if (min_value_.has_value()) {
                 cJSON_AddNumberToObject(json, "minimum", min_value_.value());
@@ -142,7 +164,12 @@ public:
         } else if (type_ == kPropertyTypeString) {
             cJSON_AddStringToObject(json, "type", "string");
             if (has_default_value_) {
-                cJSON_AddStringToObject(json, "default", value<std::string>().c_str());
+                if (auto* v = std::get_if<std::string>(&value_)) {
+                    cJSON_AddStringToObject(json, "default", v->c_str());
+                } else {
+                    ESP_LOGE("McpProp", "property %s: string 默认值类型不符,按空串序列化", name_.c_str());
+                    cJSON_AddStringToObject(json, "default", "");
+                }
             }
         }
         
