@@ -21,14 +21,17 @@ DEFAULT_PIN="444108"
 
 if [ $# -lt 2 ]; then
     echo "用法: $0 <x> <y> [duration_ms] [--ip <ip>] [--pin <pin>]"
-    echo "说明: x (0-479), y (0-799 为屏幕区域, 900 为盖板底部虚拟按键)"
+    echo "说明: 注入坐标 = 当前屏幕 LVGL 逻辑坐标。桌面页 800x480 横屏,与截图像素 1:1;"
+    echo "      动态应用页为 480x800 竖屏逻辑(其内容在截图里旋转了 90°),须按应用源码布局坐标注入,"
+    echo "      从截图像素反推: app_x = 479 - 截图行, app_y = 截图列。盖板虚拟按键请用 /input/key"
     exit 1
 fi
 
 X="$1"
 Y="$2"
-DUR="${3:-60}"
 shift 2 || true
+
+DUR=60
 if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then
     DUR="$1"
     shift
