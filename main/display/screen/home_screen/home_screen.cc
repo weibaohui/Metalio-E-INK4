@@ -1,4 +1,5 @@
 #include "home_screen.h"
+#include "ic_app_home_store.h"
 
 #include "app_manager.h"
 #include "application.h"
@@ -407,7 +408,11 @@ namespace
         lv_obj_set_user_data(cell, &entry);
         lv_obj_add_event_cb(cell, OnAppClicked, LV_EVENT_CLICKED, &entry);
         lv_obj_t *icon = lv_image_create(cell);
-        lv_image_set_src(icon, entry.GetIconPath());
+        if (std::strcmp(entry.GetId(), "store") == 0) {
+            lv_image_set_src(icon, &ic_app_home_store_dsc);
+        } else {
+            lv_image_set_src(icon, entry.GetIconPath());
+        }
         lv_obj_set_size(icon, kIconSize, kIconSize);
         lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, HOME_APP_CARD_ICON_PAD_TOP);
         lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
