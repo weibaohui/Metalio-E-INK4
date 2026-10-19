@@ -6,6 +6,8 @@
 
 #include <esp_log.h>
 #include <esp_timer.h>
+
+#include <esp_lv_adapter.h>
 #include <lvgl.h>
 
 #include "haptic_feedback.h"
@@ -266,7 +268,18 @@ void VkKey_Dispatch(const char* key_name) {
 
     if (auto* e = FindRegistry(screen)) {
         if (e->on_key != nullptr) {
-            const bool consumed = e->on_key(key_name);
+            // 应用回调几乎必然操作 LVGL,而本派发运行在触摸喂入任务上;
+            // 裸调与 lvgl worker 渲染并发,事件链/对象树即损坏(实测日历
+            // vk_next LoadProhibited、商店页同类崩溃、待机覆盖层挂死)。
+            // 统一拿适配器锁与 worker 串行:期间 UI 暂停,时长=处理器耗时。
+            const bool consumed = [&]() {
+                if (esp_lv_adapter_lock(-1) == ESP_OK) {
+                    const bool c = e->on_key(key_name);
+                    esp_lv_adapter_unlock();
+                    return c;
+                }
+                return e->on_key(key_name);
+            }();
             const int us = static_cast<int>(esp_timer_get_time() - t0);
             ESP_LOGI(TAG, "%s handler %s in %d us (screen=%s)", key_name,
                      consumed ? "consumed" : "fallthrough", us, screen);
@@ -300,9 +313,19 @@ bool VkKey_OnLongPress(const char* key_name) {
     const char* screen = StackTop();
     ESP_LOGI(TAG, "%s long-press on screen=%s", key_name, screen);
     if (auto* e = FindRegistry(screen)) {
-        if (e->on_key_long_press != nullptr && e->on_key_long_press(key_name)) {
-            ESP_LOGI(TAG, "%s long-press handled by screen=%s", key_name, screen);
-            return true;
+        // 同 VkKey_Dispatch:长按回调同样可能操作 LVGL,须与 worker 串行
+        if (e->on_key_long_press != nullptr) {
+            bool handled = false;
+            if (esp_lv_adapter_lock(-1) == ESP_OK) {
+                handled = e->on_key_long_press(key_name);
+                esp_lv_adapter_unlock();
+            } else {
+                handled = e->on_key_long_press(key_name);
+            }
+            if (handled) {
+                ESP_LOGI(TAG, "%s long-press handled by screen=%s", key_name, screen);
+                return true;
+            }
         }
     }
     // 默认：长按 vk_home 一键回系统首页（页未消费时；OTA 已拦截）
@@ -332,9 +355,19 @@ bool VkKey_OnPressUp(const char* key_name) {
     const char* screen = StackTop();
     ESP_LOGD(TAG, "%s press-up on screen=%s", key_name, screen);
     if (auto* e = FindRegistry(screen)) {
-        if (e->on_key_press_up != nullptr && e->on_key_press_up(key_name)) {
-            ESP_LOGI(TAG, "%s press-up handled by screen=%s", key_name, screen);
-            return true;
+        // 同 VkKey_Dispatch:松手回调也可能操作 LVGL,与 worker 串行
+        if (e->on_key_press_up != nullptr) {
+            bool handled = false;
+            if (esp_lv_adapter_lock(-1) == ESP_OK) {
+                handled = e->on_key_press_up(key_name);
+                esp_lv_adapter_unlock();
+            } else {
+                handled = e->on_key_press_up(key_name);
+            }
+            if (handled) {
+                ESP_LOGI(TAG, "%s press-up handled by screen=%s", key_name, screen);
+                return true;
+            }
         }
     }
     return false;
