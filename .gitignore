@@ -44,3 +44,8 @@ sdk/build/
 sdk/include/lvgl/
 sdk/examples/*/build/
 sdk/examples/*/bin/
+
+# 固件构建产物（本地归档，不入库）
+firmware/
+daily-builds/
+metalio-e-ink4.bin
