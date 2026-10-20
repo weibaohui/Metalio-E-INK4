@@ -1,0 +1,10 @@
+{
+  "id": "minesweeper",
+  "name": "扫雷",
+  "icon": "icon.png",
+  "executable": "lib/minesweeper.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "回合制扫雷，一步一刷，适配墨水屏低刷新率特性"
+}
