@@ -56,6 +56,21 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
   .file-table tr:hover { background: #f8f9fa; }
   .file-name { display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; color: #000; word-break: break-all; }
   .file-name:hover { text-decoration: underline; }
+  /* 名称下方的日期小字:窄屏时显示(独立的「修改日期」列会被隐藏) */
+  .file-sub { display: none; font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+  .page-size { font-family: inherit; font-size: 12px; font-weight: 600; padding: 6px 8px; border: 2px solid var(--border); border-radius: 8px; background: #fff; color: #000; cursor: pointer; }
+  /* 窄屏(手机):固定列合计 340px 会在 375px 屏上把名称列挤成 3px,
+     这里隐藏日期列、把日期收到名称下方,并压缩其余固定列 */
+  @media (max-width: 560px) {
+    .file-table th.col-date, .file-table td.col-date { display: none; }
+    .file-sub { display: block; }
+    .file-table th:nth-child(2) { width: 64px; }
+    .file-table th:nth-child(4) { width: 96px; }
+    .file-table th, .file-table td { padding: 9px 5px; }
+    .file-actions { gap: 4px; }
+    .btn-sm { padding: 4px 7px; font-size: 11px; }
+    .file-size { font-size: 11px; }
+  }
   .file-icon { font-size: 18px; flex-shrink: 0; }
   .file-size { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .file-date { color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -90,6 +105,12 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
         <button class="btn btn-outline btn-sm" id="btnMkdir" onclick="promptMkdir()">📁 新建文件夹</button>
       </div>
       <div>
+        <select id="pageSizeSel" class="page-size" onchange="onPageSizeChange(this.value)" title="每页条数">
+          <option value="20">20 条/页</option>
+          <option value="50">50 条/页</option>
+          <option value="100">100 条/页</option>
+          <option value="all">全部</option>
+        </select>
         <button class="btn btn-sm" onclick="document.getElementById('fileInput').click()">📤 上传文件</button>
         <input type="file" id="fileInput" multiple style="display:none;" onchange="handleFileSelect(this.files)">
       </div>
@@ -112,7 +133,7 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
           <tr>
             <th>名称</th>
             <th style="width: 90px;">大小</th>
-            <th style="width: 140px;">修改日期</th>
+            <th style="width: 140px;" class="col-date">修改日期</th>
             <th style="width: 110px; text-align: right;">操作</th>
           </tr>
         </thead>
@@ -166,6 +187,25 @@ let roots = { books: '/metalio/e-ink/books', wallpaper: '/metalio/e-ink/wallpape
 let currentPage = 1;              // 当前页（1 起）
 let totalPages = 1;               // 总页数
 let totalItems = 0;               // 目录总条目数
+let pageSize = 20;                // 每页条数；0 = 全部
+const kPageSizeKey = 'metalio_wifi_page_size';
+
+// 每页条数：localStorage 记住选择（0 表示"全部"）
+function loadPageSize() {
+  try {
+    const v = localStorage.getItem(kPageSizeKey);
+    if (v === 'all') pageSize = 0;
+    else if (v) pageSize = parseInt(v, 10) || 20;
+  } catch (e) { /* 隐私模式等场景忽略 */ }
+  const sel = document.getElementById('pageSizeSel');
+  if (sel) sel.value = pageSize === 0 ? 'all' : String(pageSize);
+}
+
+function onPageSizeChange(v) {
+  pageSize = (v === 'all') ? 0 : (parseInt(v, 10) || 20);
+  try { localStorage.setItem(kPageSizeKey, v); } catch (e) { /* ignore */ }
+  loadDir(currentPath, 1);
+}
 
 function cfg() { return MODE_CFG[mode]; }
 
@@ -282,7 +322,9 @@ async function loadDir(path, page) {
   tbody.innerHTML = '<tr><td colspan="4" class="empty-tip">正在读取目录...</td></tr>';
 
   try {
-    const res = await fetch('/api/fs/list?path=' + encodeURIComponent(path) + '&page=' + page);
+    const sizeQ = (pageSize === 0) ? '&all=1' : '&per_page=' + pageSize;
+    const res = await fetch('/api/fs/list?path=' + encodeURIComponent(path) +
+                            '&page=' + page + sizeQ);
     if (!res.ok) throw new Error('读取目录失败');
     const data = await res.json();
 
@@ -313,6 +355,13 @@ async function loadDir(path, page) {
           nameDiv.onclick = () => downloadFile(item.name);
         }
         tdName.appendChild(nameDiv);
+
+        // 日期小字(窄屏时显示,替代被隐藏的日期列)
+        const sub = document.createElement('div');
+        sub.className = 'file-sub';
+        sub.innerText = item.date || '';
+        tdName.appendChild(sub);
+
         tr.appendChild(tdName);
 
         // 大小
@@ -321,9 +370,9 @@ async function loadDir(path, page) {
         tdSize.innerText = item.is_dir ? '--' : formatSize(item.size);
         tr.appendChild(tdSize);
 
-        // 日期
+        // 日期(窄屏隐藏)
         const tdDate = document.createElement('td');
-        tdDate.className = 'file-date';
+        tdDate.className = 'file-date col-date';
         tdDate.innerText = item.date || '--';
         tr.appendChild(tdDate);
 
@@ -521,6 +570,7 @@ dz.addEventListener('drop', (e) => {
 
 // 初始化:先取图书库/壁纸库路径,再切到传书页签
 window.onload = async () => {
+  loadPageSize();
   await loadRoots();
   switchMode('books');
 };

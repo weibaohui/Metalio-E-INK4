@@ -32,9 +32,11 @@ namespace {
 constexpr const char* TAG = "WifiFileSvc";
 constexpr const char* kSdMountRoot = "/sdcard";
 
-// 列表分页：默认每页 50 项，单页上限 200 项；单次扫描条目上限 5000，
-// 超出部分以 truncated 标记返回（防止极端目录把 httpd 任务拖死）
-constexpr int kDefaultPerPage = 50;
+// 列表分页：默认每页 20 项，单页上限 200 项；单次扫描条目上限 5000，
+// 超出部分以 truncated 标记返回（防止极端目录把 httpd 任务拖死）。
+// 默认 20 的依据：手机端一行约 50px，一屏只看得到 9 行，20 项 ≈ 两屏多，
+// 滚起来不累；翻页是一次本地请求，开销远低于长列表的滚动与渲染。
+constexpr int kDefaultPerPage = 20;
 constexpr int kMaxPerPage = 200;
 constexpr size_t kMaxScanEntries = 5000;
 
