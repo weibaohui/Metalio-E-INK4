@@ -30,7 +30,9 @@ struct VkKeyScreenDesc {
 };
 
 // 页面生命周期：压栈、出栈和前台页名查询。
-void VkKey_OnScreenLifecycle(const char* name, vk_screen_lifecycle_t event);
+// screen 为该生命周期事件对应的屏幕对象：同 app 重开时旧屏会先于新屏卸载，
+// AppManager 靠它区分"当前屏"与"同 app 的旧屏"。
+void VkKey_OnScreenLifecycle(const char* name, vk_screen_lifecycle_t event, lv_obj_t* screen);
 const char* VkKey_ActiveScreen();
 ScreenFactory VkKey_GetScreenFactory(const char* name);
 void VkKey_SetScreenFactory(const char* name, ScreenFactory factory);

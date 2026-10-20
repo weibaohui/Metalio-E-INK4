@@ -124,12 +124,13 @@ void UpsertRegistry(const char* name, const VkKeyScreenDesc& desc) {
 void OnScreenLifecycleEvent(lv_event_t* e) {
     const char* name = static_cast<const char*>(lv_event_get_user_data(e));
     const lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t* screen = static_cast<lv_obj_t*>(lv_event_get_target(e));
     if (code == LV_EVENT_SCREEN_LOADED) {
         // 底层统一:本屏全部可点控件自动挂震动(内置屏与动态app同一入口,免逐个接入)
-        HapticBindTree(static_cast<lv_obj_t*>(lv_event_get_target(e)));
-        VkKey_OnScreenLifecycle(name, VK_SCREEN_LIFECYCLE_LOAD);
+        HapticBindTree(screen);
+        VkKey_OnScreenLifecycle(name, VK_SCREEN_LIFECYCLE_LOAD, screen);
     } else if (code == LV_EVENT_SCREEN_UNLOADED) {
-        VkKey_OnScreenLifecycle(name, VK_SCREEN_LIFECYCLE_UNLOAD);
+        VkKey_OnScreenLifecycle(name, VK_SCREEN_LIFECYCLE_UNLOAD, screen);
     }
 }
 
@@ -164,7 +165,7 @@ void DispatchDefault(const char* key_name, const char* screen) {
 
 }  // namespace
 
-void VkKey_OnScreenLifecycle(const char* name, vk_screen_lifecycle_t event) {
+void VkKey_OnScreenLifecycle(const char* name, vk_screen_lifecycle_t event, lv_obj_t* screen) {
     if (name == nullptr || name[0] == '\0') {
         name = kNoneScreen;
     }
@@ -172,14 +173,14 @@ void VkKey_OnScreenLifecycle(const char* name, vk_screen_lifecycle_t event) {
     if (event == VK_SCREEN_LIFECYCLE_LOAD) {
         StackPush(name);
         ESP_LOGD(TAG, "active_screen -> %s (load %s, depth=%d)", StackTop(), name, s_depth);
-        AppManager::GetInstance().DispatchScreenLifecycle(name, true);
+        AppManager::GetInstance().DispatchScreenLifecycle(name, true, screen);
         return;
     }
 
     StackRemoveTopmost(name);
     ESP_LOGD(TAG, "active_screen -> %s (unload %s, depth=%d)", StackTop(), name, s_depth);
     VkPageRepeatStop();
-    AppManager::GetInstance().DispatchScreenLifecycle(name, false);
+    AppManager::GetInstance().DispatchScreenLifecycle(name, false, screen);
 }
 
 const char* VkKey_ActiveScreen() {

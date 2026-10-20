@@ -29,7 +29,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -221,19 +223,63 @@ struct ScreenDeleteCtx {
     std::string bundle_dir;
 };
 
+// 同一 .so 可能同时挂着多个屏：应用被"重开"时旧屏尚未删完，新屏已经建好。
+// esp_elf 的 dlclose 是真卸载（释放代码段），此时旧屏一删就把新屏的事件回调
+// 指向了已释放的代码 → 新屏变僵尸（点击无响应、存档写不进去）。
+// 故按 .so 路径统计仍存活的屏数，只有最后一个屏消失才允许卸载。
+namespace {
+
+std::mutex g_live_mutex;
+std::map<std::string, int> g_live_screens;
+
+void LiveScreenAdd(const std::string& so_path) {
+    std::lock_guard<std::mutex> lk(g_live_mutex);
+    g_live_screens[so_path]++;
+}
+
+// 减计数并返回剩余存活屏数（0 = 该 .so 已无屏）。
+int LiveScreenDrop(const std::string& so_path) {
+    std::lock_guard<std::mutex> lk(g_live_mutex);
+    auto it = g_live_screens.find(so_path);
+    if (it == g_live_screens.end()) {
+        return 0;
+    }
+    if (--it->second <= 0) {
+        g_live_screens.erase(it);
+        return 0;
+    }
+    return it->second;
+}
+
+}  // namespace
+
 // 屏幕删除事件 → 投递 async 卸载。删除事件期间子对象析构仍引用 .so 代码，
 // 必须等到本轮删除完成（下一 LVGL 周期）再 dlclose。
 void OnDynScreenDelete(lv_event_t *e) {
     auto *ctx = static_cast<ScreenDeleteCtx *>(lv_event_get_user_data(e));
     lv_async_call([](void *p) {
         auto *c = static_cast<ScreenDeleteCtx *>(p);
+        // 还有别的屏活着（同 app 重开）→ 不能卸载 .so，也不能动沙箱上下文
+        const int left = LiveScreenDrop(c->so_path);
+        if (left > 0) {
+            ESP_LOGI(TAG, "dynamic app kept loaded (%d screen(s) alive): %s", left, c->so_path.c_str());
+            delete c;
+            return;
+        }
         // dlopen 已加载的 .so 返回同句柄；dlclose 即真实卸载（esp_elf_deinit 释放代码段）。
         void *h = dlopen(DlopenPath(c->so_path).c_str(), RTLD_NOW);
         if (h != nullptr) {
             dlclose(h);
             ESP_LOGI(TAG, "dynamic app unloaded: %s", c->so_path.c_str());
         }
-        dynapp_clear_active_bundle();
+        // 沙箱上下文(bundle/data 路径)是全局的：切到别的动态应用后已被新 app 改写。
+        // 此时若无条件清空，新 app 就失去自己的 data 目录（存档一律写不进去）。
+        const char *cur = dynapp_get_bundle_path();
+        if (cur != nullptr && cur[0] != '\0' && c->bundle_dir == cur) {
+            dynapp_clear_active_bundle();
+        } else {
+            ESP_LOGI(TAG, "bundle context kept (owned by %s)", (cur != nullptr && cur[0] != '\0') ? cur : "(none)");
+        }
         delete c;
     }, ctx);
 }
@@ -269,6 +315,7 @@ public:
             return MakeFailScreen();
         }
         // 卸载钩子交给屏幕：树删除完成后 async dlclose 并清理沙箱上下文
+        LiveScreenAdd(so_path_);
         auto *del_ctx = new ScreenDeleteCtx{so_path_, bundle_dir_};
         lv_obj_add_event_cb(scr, OnDynScreenDelete, LV_EVENT_DELETE, del_ctx);
         ESP_LOGI(TAG, "dynamic app loaded: %s (%s, bundle: %s)",

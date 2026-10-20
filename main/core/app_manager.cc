@@ -265,7 +265,7 @@ void AppManager::LaunchApp(const char* id) {
     }
 }
 
-void AppManager::DispatchScreenLifecycle(const char* screen_id, bool loaded) {
+void AppManager::DispatchScreenLifecycle(const char* screen_id, bool loaded, void* screen) {
     if (screen_id == nullptr) return;
 
     // 规范化 screen_id 到 app_id（处理子页面或历史别名）
@@ -288,11 +288,29 @@ void AppManager::DispatchScreenLifecycle(const char* screen_id, bool loaded) {
         }
         active_app_ = app;
         if (active_app_) {
+            // 记录该 app 当前在屏的屏幕：同 app 重开时旧屏卸载不得销毁本 app
+            if (screen != nullptr) {
+                app_screens_[app_id] = screen;
+            }
             ESP_LOGI(TAG, "lifecycle: resume app %s", active_app_->GetId());
             active_app_->OnResume();
         }
     } else {
-        if (active_app_ && active_app_ == app) {
+        // 只有"该 app 当前在屏的屏幕"被卸载，才销毁这个 app。
+        // 同 app 重开时（新屏已加载、旧屏随后卸载）旧屏卸载必须放过，
+        // 否则旧屏的卸载回调会把刚建好的新屏连同它的 .so 一起废掉：
+        // 新屏的事件回调指向已释放代码、bundle 上下文被清 → 僵尸屏
+        //（点了没反应、存档写不进去）。
+        bool is_current = true;
+        auto it = app_screens_.find(app_id);
+        if (it != app_screens_.end()) {
+            if (screen != nullptr && it->second != screen) {
+                is_current = false;  // 卸载的是同 app 的旧屏，当前屏仍在
+            } else {
+                app_screens_.erase(it);
+            }
+        }
+        if (active_app_ && active_app_ == app && is_current) {
             ESP_LOGI(TAG, "lifecycle: pause & destroy app %s", active_app_->GetId());
             active_app_->OnPause();
             active_app_->OnDestroy();

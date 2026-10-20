@@ -3,6 +3,8 @@
 #include "app_module.h"
 #include <vector>
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <cstdint>
 
 /**
@@ -57,7 +59,8 @@ public:
     void LaunchApp(const char* id);
 
     // 页面生命周期分发调度 (由 VkKeyHandler 在屏幕加载/卸载时驱动 AppModule 生命周期)
-    void DispatchScreenLifecycle(const char* screen_id, bool loaded);
+    // screen 为该事件对应的屏幕对象，用于区分同 app 重开时的"当前屏"与"旧屏"
+    void DispatchScreenLifecycle(const char* screen_id, bool loaded, void* screen);
     std::shared_ptr<AppModule> GetActiveApp() const { return active_app_; }
 
 private:
@@ -72,6 +75,8 @@ private:
 
     std::vector<std::shared_ptr<AppModule>> modules_;
     std::shared_ptr<AppModule> active_app_ = nullptr;
+    // 每个 app 当前在屏的屏幕对象：同 app 重开时旧屏卸载不得销毁该 app
+    std::unordered_map<std::string, void*> app_screens_;
     uint32_t enabled_mask_ = 0xFFFFFFFF;
     bool toggles_loaded_ = false;
 };
