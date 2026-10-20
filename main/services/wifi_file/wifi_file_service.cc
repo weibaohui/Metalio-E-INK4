@@ -93,6 +93,39 @@ void EnsureDirTree(const std::string& abs_dir) {
     }
 }
 
+// 递归删除文件/目录树。depth 仅用于防御异常深的目录(FAT32 无符号链接,
+// 正常不会触发),避免极端情况下无限递归。
+bool RemoveTree(const std::string& path, int depth) {
+    if (depth > 32) return false;
+
+    struct stat st {};
+    if (stat(path.c_str(), &st) != 0) return false;
+
+    if (!S_ISDIR(st.st_mode)) {
+        return unlink(path.c_str()) == 0;
+    }
+
+    DIR* d = opendir(path.c_str());
+    if (d == nullptr) return false;
+
+    bool ok = true;
+    struct dirent* ent = nullptr;
+    while ((ent = readdir(d)) != nullptr) {
+        if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0) {
+            continue;
+        }
+        if (!RemoveTree(path + "/" + ent->d_name, depth + 1)) {
+            ok = false;
+        }
+    }
+    closedir(d);
+
+    if (rmdir(path.c_str()) != 0) {
+        ok = false;
+    }
+    return ok;
+}
+
 // HTTP Handler: GET /
 esp_err_t HandleGetIndex(httpd_req_t* req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -338,7 +371,9 @@ esp_err_t HandlePostDelete(httpd_req_t* req) {
 
     int ret = 0;
     if (S_ISDIR(st.st_mode)) {
-        ret = rmdir(target.c_str());
+        // 目录必须递归删除——Web 端的确认框承诺「彻底删除」,
+        // 而 rmdir 只能删空目录,非空目录会直接失败
+        ret = RemoveTree(target, 0) ? 0 : -1;
     } else {
         ret = unlink(target.c_str());
     }

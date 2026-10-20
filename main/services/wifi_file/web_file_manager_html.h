@@ -331,9 +331,13 @@ function downloadFile(name) {
 
 async function deleteItem(name, isDir) {
   const itemType = isDir ? '文件夹' : '文件';
-  if (!confirm(`确定要彻底删除此${itemType}【${name}】吗？`)) return;
-
   const target = currentPath === '/' ? '/' + name : currentPath + '/' + name;
+  if (isDir) {
+    if (!confirm(`确定要彻底删除文件夹【${target}】吗？\n\n该文件夹及其全部内容都会被递归删除,且无法恢复!`)) return;
+  } else {
+    if (!confirm(`确定要彻底删除此${itemType}【${name}】吗？`)) return;
+  }
+
   try {
     const res = await fetch('/api/fs/delete?path=' + encodeURIComponent(target), { method: 'POST' });
     const data = await res.json();
