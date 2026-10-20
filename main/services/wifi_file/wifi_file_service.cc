@@ -649,7 +649,12 @@ std::string WifiFileService::GetServerUrl() const {
         return "";
     }
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "http://%s:%u/", ip.c_str(), port_);
+    if (port_ == 80) {
+        // 默认端口不显示，地址更干净
+        std::snprintf(buf, sizeof(buf), "http://%s/", ip.c_str());
+    } else {
+        std::snprintf(buf, sizeof(buf), "http://%s:%u/", ip.c_str(), port_);
+    }
     return buf;
 }
 

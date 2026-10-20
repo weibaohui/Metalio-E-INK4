@@ -288,13 +288,36 @@ const lv_font_t* fontpack_lv_font_get(uint16_t size, uint16_t bpp) {
     if (!fontpack_lv_ensure_ready()) {
         return nullptr;
     }
-    // 冒烟：确认该规格在包内
+    // 冒烟：必须含汉字字形。fontpack 里 18@2 / 28@2 / 36@2 是纯数学符号包
+    // （各 333 字、零汉字），它们只满足「有 ASCII」——若放行，所有中文会渲染成
+    // 空白、只剩 ASCII 露出来（曾导致「服务未运行 (请点击下方启动)」只显示 "()"）。
     GlyphInfo g{};
-    if (!get_glyph(0x4E2Du /* 中 */, size, bpp, &g) && !get_glyph(0x0041u /* A */, size, bpp, &g)) {
-        ESP_LOGW(TAG, "no glyphs for size=%u bpp=%u", size, bpp);
+    if (get_glyph(0x4E2Du /* 中 */, size, bpp, &g)) {
+        FontpackLvFont* slot = FindOrCreate(size, bpp);
+        if (slot != nullptr) {
+            return &slot->lv;
+        }
+    }
+    // 该规格无汉字（或规格不存在）→ 回退全局 UI 字体 25@2。
+    // 25@2 自身不可用时返回 nullptr，交调用方兜底。
+    if (size == 25 && bpp == 2) {
+        ESP_LOGW(TAG, "fontpack has no CJK glyphs for size=%u bpp=%u", size, bpp);
         return nullptr;
     }
-    FontpackLvFont* slot = FindOrCreate(size, bpp);
+    return fontpack_lv_font_get(25, 2);
+}
+
+const lv_font_t* fontpack_lv_font_math(uint16_t size) {
+    if (!fontpack_lv_ensure_ready()) {
+        return nullptr;
+    }
+    // 数学包固定 2bpp；用 ASCII 做存在性探测（数学包里没有汉字）
+    constexpr uint16_t kMathBpp = 2;
+    GlyphInfo g{};
+    if (!get_glyph(0x0041u /* A */, size, kMathBpp, &g)) {
+        return nullptr;
+    }
+    FontpackLvFont* slot = FindOrCreate(size, kMathBpp);
     return slot != nullptr ? &slot->lv : nullptr;
 }
 

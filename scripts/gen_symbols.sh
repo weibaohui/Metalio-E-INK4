@@ -33,7 +33,7 @@ cJSON_CreateNumber cJSON_CreateObject cJSON_CreateString cJSON_Delete
 cJSON_GetArrayItem cJSON_GetArraySize cJSON_GetObjectItem cJSON_GetObjectItemCaseSensitive
 cJSON_GetStringValue cJSON_IsArray cJSON_IsBool cJSON_IsNull cJSON_IsNumber
 cJSON_IsString cJSON_IsTrue cJSON_Parse cJSON_Print cJSON_PrintUnformatted
-esp_random fclose fflush fgets fontpack_lv_font_get fontpack_lv_font_ui fopen
+esp_random fclose fflush fgets fontpack_lv_font_get fontpack_lv_font_math fontpack_lv_font_ui fopen
 fprintf fputs fread free fscanf fseek ftell fwrite gmtime_r localtime_r
 malloc memcmp memcpy memmove memset mktime
 radio_catalog_count radio_catalog_get radio_play radio_play_indexed

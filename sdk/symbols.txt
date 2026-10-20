@@ -837,6 +837,7 @@ fclose
 fflush
 fgets
 fontpack_lv_font_get
+fontpack_lv_font_math
 fontpack_lv_font_ui
 fopen
 fprintf

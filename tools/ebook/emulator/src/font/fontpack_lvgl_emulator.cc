@@ -224,11 +224,30 @@ const lv_font_t* fontpack_lv_font_get(uint16_t size, uint16_t bpp) {
     if (!fontpack_lv_ensure_ready()) {
         return nullptr;
     }
+    // 只返回含汉字的字体（18/28/36@2 是纯数学符号包，放行会让中文渲染成空白）
     GlyphInfo g{};
-    if (!get_glyph(0x4E2Du, size, bpp, &g) && !get_glyph(0x0041u, size, bpp, &g)) {
+    if (get_glyph(0x4E2Du, size, bpp, &g)) {
+        FontpackLvFont* slot = FindOrCreate(size, bpp);
+        if (slot != nullptr) {
+            return &slot->lv;
+        }
+    }
+    if (size == 25 && bpp == 2) {
         return nullptr;
     }
-    FontpackLvFont* slot = FindOrCreate(size, bpp);
+    return fontpack_lv_font_get(25, 2);
+}
+
+const lv_font_t* fontpack_lv_font_math(uint16_t size) {
+    if (!fontpack_lv_ensure_ready()) {
+        return nullptr;
+    }
+    constexpr uint16_t kMathBpp = 2;
+    GlyphInfo g{};
+    if (!get_glyph(0x0041u, size, kMathBpp, &g)) {
+        return nullptr;
+    }
+    FontpackLvFont* slot = FindOrCreate(size, kMathBpp);
     return slot != nullptr ? &slot->lv : nullptr;
 }
 

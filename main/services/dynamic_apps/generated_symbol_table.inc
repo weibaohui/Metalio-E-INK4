@@ -811,6 +811,7 @@
     ESP_ELFSYM_EXPORT(fflush),
     ESP_ELFSYM_EXPORT(fgets),
     ESP_ELFSYM_EXPORT(fontpack_lv_font_get),
+    ESP_ELFSYM_EXPORT(fontpack_lv_font_math),
     ESP_ELFSYM_EXPORT(fontpack_lv_font_ui),
     ESP_ELFSYM_EXPORT(fopen),
     ESP_ELFSYM_EXPORT(fprintf),
