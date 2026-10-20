@@ -1877,6 +1877,25 @@ bool LVAdapterDisplay::InjectTouch(int x, int y, int duration_ms) {
     ESP_LOGI(TAG, "InjectTouch x=%d y=%d dur=%dms (%d ticks)", x, y, duration_ms, actual_ticks);
 
     if (s_touch_feed_task != nullptr) {
+        // 等待上一轮注入彻底喂完再注入新的。
+        // 触摸喂任务每轮要先做一次 I2C 物理触摸轮询，10ms 的节拍实际可能拖到几十
+        // 毫秒，固定 wait_ms 的估算并不准 —— 序列还没喂完时新的注入会直接覆盖
+        // remaining_ticks，前一次的 press 序列被截断，LVGL 读不到 release，
+        // 后续 press 被当成手指移动 → CLICKED 事件丢失（连点时稳定丢操作）。
+        const int wait_prev_ms = 1500;
+        const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(wait_prev_ms);
+        for (;;) {
+            portENTER_CRITICAL(&s_touch_inject_mux);
+            const bool prev_done = !s_touch_inject.active;
+            portEXIT_CRITICAL(&s_touch_inject_mux);
+            if (prev_done) break;
+            if ((int)(xTaskGetTickCount() - deadline) >= 0) {
+                ESP_LOGW(TAG, "InjectTouch: previous inject still active after %dms", wait_prev_ms);
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+
         portENTER_CRITICAL(&s_touch_inject_mux);
         s_touch_inject.x = x;
         s_touch_inject.y = y;
@@ -1884,9 +1903,19 @@ bool LVAdapterDisplay::InjectTouch(int x, int y, int duration_ms) {
         s_touch_inject.active = true;
         portEXIT_CRITICAL(&s_touch_inject_mux);
 
-        // 等待整个按下与抬起周期完成
-        const int wait_ms = (actual_ticks + 2) * kTouchFeedPeriodMs + 20;
-        vTaskDelay(pdMS_TO_TICKS(wait_ms));
+        // 等待整个按下与抬起周期真正喂完
+        const TickType_t seq_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(wait_prev_ms);
+        for (;;) {
+            portENTER_CRITICAL(&s_touch_inject_mux);
+            const bool done = !s_touch_inject.active;
+            portEXIT_CRITICAL(&s_touch_inject_mux);
+            if (done) break;
+            if ((int)(xTaskGetTickCount() - seq_deadline) >= 0) {
+                ESP_LOGW(TAG, "InjectTouch: inject sequence timeout");
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
         return true;
     } else {
         TouchFeedHandleSample(1, x, y);
