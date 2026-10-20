@@ -62,6 +62,9 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
   .file-actions { display: flex; gap: 6px; justify-content: flex-end; }
   .empty-tip { text-align: center; padding: 36px 12px; color: var(--muted); font-size: 14px; }
   .storage-bar { font-size: 13px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; padding-top: 8px; border-top: 1px solid #e9ecef; }
+  .pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #e9ecef; }
+  .pager-label { font-size: 13px; font-weight: 600; color: var(--muted); min-width: 120px; text-align: center; }
+  .btn[disabled] { opacity: 0.35; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -119,6 +122,12 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
       </table>
     </div>
 
+    <div class="pager" id="pager">
+      <button class="btn btn-outline btn-sm" id="btnPrev" onclick="gotoPage(currentPage - 1)">‹ 上一页</button>
+      <span class="pager-label" id="pagerLabel">第 1 / 1 页</span>
+      <button class="btn btn-outline btn-sm" id="btnNext" onclick="gotoPage(currentPage + 1)">下一页 ›</button>
+    </div>
+
     <div class="storage-bar" id="storageBar">
       <span id="storageInfo">正在获取存储空间...</span>
       <button class="btn btn-outline btn-sm" onclick="refreshCurrentDir()">刷新</button>
@@ -154,6 +163,9 @@ const MODE_CFG = {
 let mode = 'books';               // 'books' 传书 | 'wallpaper' 壁纸 | 'fs' 全盘文件管理
 let currentPath = '/';
 let roots = { books: '/metalio/e-ink/books', wallpaper: '/metalio/e-ink/wallpaper' };
+let currentPage = 1;              // 当前页（1 起）
+let totalPages = 1;               // 总页数
+let totalItems = 0;               // 目录总条目数
 
 function cfg() { return MODE_CFG[mode]; }
 
@@ -261,16 +273,24 @@ function renderBreadcrumbs(path) {
   });
 }
 
-async function loadDir(path) {
+async function loadDir(path, page) {
   currentPath = path;
+  if (page === undefined || page === null) page = 1;
+  if (page < 1) page = 1;
   renderBreadcrumbs(path);
   const tbody = document.getElementById('fileList');
   tbody.innerHTML = '<tr><td colspan="4" class="empty-tip">正在读取目录...</td></tr>';
 
   try {
-    const res = await fetch('/api/fs/list?path=' + encodeURIComponent(path));
+    const res = await fetch('/api/fs/list?path=' + encodeURIComponent(path) + '&page=' + page);
     if (!res.ok) throw new Error('读取目录失败');
     const data = await res.json();
+
+    // 服务端会把越界页码回退到最后一页，这里同步回来
+    currentPage = data.page || 1;
+    totalPages = data.total_pages || 1;
+    totalItems = data.total || 0;
+    renderPager();
 
     if (!data.items || data.items.length === 0) {
       tbody.innerHTML = '<tr><td colspan="4" class="empty-tip">' + cfg().empty + '</td></tr>';
@@ -337,6 +357,8 @@ async function loadDir(path) {
     }
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="4" class="empty-tip" style="color:var(--danger)">加载失败: ${err.message}</td></tr>`;
+    totalPages = 1; totalItems = 0; currentPage = 1;
+    renderPager();
   }
 }
 
@@ -344,11 +366,33 @@ function goUp() {
   if (cfg().dir || currentPath === '/') return;
   const parts = currentPath.split('/').filter(p => p.length > 0);
   parts.pop();
-  loadDir(parts.length === 0 ? '/' : '/' + parts.join('/'));
+  loadDir(parts.length === 0 ? '/' : '/' + parts.join('/'), 1);
 }
 
 function refreshCurrentDir() {
-  loadDir(currentPath);
+  loadDir(currentPath, currentPage);
+}
+
+// 翻页
+function gotoPage(n) {
+  if (n < 1 || n > totalPages || n === currentPage) return;
+  loadDir(currentPath, n);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderPager() {
+  const label = document.getElementById('pagerLabel');
+  const prev = document.getElementById('btnPrev');
+  const next = document.getElementById('btnNext');
+  if (!label || !prev || !next) return;
+
+  if (totalItems === 0) {
+    label.innerText = '共 0 项';
+  } else {
+    label.innerText = '第 ' + currentPage + ' / ' + totalPages + ' 页 · 共 ' + totalItems + ' 项';
+  }
+  prev.disabled = (currentPage <= 1);
+  next.disabled = (currentPage >= totalPages);
 }
 
 function downloadFile(name) {

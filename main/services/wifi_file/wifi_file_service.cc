@@ -32,6 +32,12 @@ namespace {
 constexpr const char* TAG = "WifiFileSvc";
 constexpr const char* kSdMountRoot = "/sdcard";
 
+// 列表分页：默认每页 50 项，单页上限 200 项；单次扫描条目上限 5000，
+// 超出部分以 truncated 标记返回（防止极端目录把 httpd 任务拖死）
+constexpr int kDefaultPerPage = 50;
+constexpr int kMaxPerPage = 200;
+constexpr size_t kMaxScanEntries = 5000;
+
 using fs_utils::IsUnderDir;
 using fs_utils::SanitizeFilename;
 using fs_utils::UrlDecode;
@@ -148,16 +154,36 @@ esp_err_t HandleGetRoots(httpd_req_t* req) {
     return res;
 }
 
-// HTTP Handler: GET /api/fs/list?path=...
+// HTTP Handler: GET /api/fs/list?path=...&page=N&per_page=M&all=1
+//
+// 分页:Web 端文件管理默认按页返回。整目录一次性序列化有两个问题——
+// 响应体随条目数线性膨胀,且每个条目都要做一次 FAT32 stat(慢 SD 上尤其明显)。
+// 传 all=1 可取全量(脚本/兼容旧行为用);扫描条目数有上限,超出以 truncated 标记。
 esp_err_t HandleGetList(httpd_req_t* req) {
     char query[512] = {};
     std::string rel_path = "/";
+    int page = 1;
+    int per_page = kDefaultPerPage;
+    bool want_all = false;
+
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
         char pval[256] = {};
         if (httpd_query_key_value(query, "path", pval, sizeof(pval)) == ESP_OK) {
             rel_path = pval;
         }
+        if (httpd_query_key_value(query, "page", pval, sizeof(pval)) == ESP_OK) {
+            page = std::atoi(pval);
+        }
+        if (httpd_query_key_value(query, "per_page", pval, sizeof(pval)) == ESP_OK) {
+            per_page = std::atoi(pval);
+        }
+        if (httpd_query_key_value(query, "all", pval, sizeof(pval)) == ESP_OK) {
+            want_all = (std::strcmp(pval, "0") != 0);
+        }
     }
+    if (page < 1) page = 1;
+    if (per_page < 1) per_page = kDefaultPerPage;
+    if (per_page > kMaxPerPage) per_page = kMaxPerPage;
 
     std::string full_dir = SafeSdPath(rel_path);
     cJSON* root = cJSON_CreateObject();
@@ -168,6 +194,9 @@ esp_err_t HandleGetList(httpd_req_t* req) {
     cJSON_AddStringToObject(root, "path", display_path.c_str());
 
     cJSON* arr = cJSON_AddArrayToObject(root, "items");
+
+    size_t total = 0;
+    bool truncated = false;
 
     DIR* d = opendir(full_dir.c_str());
     if (d != nullptr) {
@@ -182,6 +211,10 @@ esp_err_t HandleGetList(httpd_req_t* req) {
         dirent* ent = nullptr;
         while ((ent = readdir(d)) != nullptr) {
             if (ent->d_name[0] == '.') continue;
+            if (items.size() >= kMaxScanEntries) {
+                truncated = true;
+                break;
+            }
             std::string item_full = full_dir + "/" + ent->d_name;
             struct stat st {};
             if (stat(item_full.c_str(), &st) == 0) {
@@ -208,7 +241,25 @@ esp_err_t HandleGetList(httpd_req_t* req) {
             return a.name < b.name;
         });
 
-        for (const auto& it : items) {
+        total = items.size();
+
+        // 切片：只序列化当前页，响应体大小与目录总条目数解耦
+        size_t start = 0;
+        size_t end = total;
+        if (!want_all) {
+            const size_t pp = static_cast<size_t>(per_page);
+            const size_t max_page = (total + pp - 1) / pp;
+            if (max_page > 0 && static_cast<size_t>(page) > max_page) {
+                page = static_cast<int>(max_page);  // 页码越界回退到最后一页
+            }
+            start = (static_cast<size_t>(page) - 1) * pp;
+            if (start > total) start = total;
+            end = start + pp;
+            if (end > total) end = total;
+        }
+
+        for (size_t i = start; i < end; ++i) {
+            const auto& it = items[i];
             cJSON* obj = cJSON_CreateObject();
             cJSON_AddStringToObject(obj, "name", it.name.c_str());
             cJSON_AddBoolToObject(obj, "is_dir", it.is_dir);
@@ -217,6 +268,15 @@ esp_err_t HandleGetList(httpd_req_t* req) {
             cJSON_AddItemToArray(arr, obj);
         }
     }
+
+    // 分页元信息：前端据此渲染翻页控件
+    const size_t eff_per_page = want_all ? (total > 0 ? total : 1) : static_cast<size_t>(per_page);
+    const size_t total_pages = (total + eff_per_page - 1) / eff_per_page;
+    cJSON_AddNumberToObject(root, "total", static_cast<double>(total));
+    cJSON_AddNumberToObject(root, "page", want_all ? 1 : page);
+    cJSON_AddNumberToObject(root, "per_page", static_cast<double>(eff_per_page));
+    cJSON_AddNumberToObject(root, "total_pages", static_cast<double>(total_pages > 0 ? total_pages : 1));
+    cJSON_AddBoolToObject(root, "truncated", truncated);
 
     // SD 卡容量
     FATFS* fs = nullptr;
