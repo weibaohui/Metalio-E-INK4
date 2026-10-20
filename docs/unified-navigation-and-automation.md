@@ -45,8 +45,8 @@ flowchart TD
   - `time_app`（时间与网络对时）：移除 Header，直接以系统时钟卡片开篇。
   - `cal_app`（日历）：移除 Header，使用内置的月份与翻页控制栏。
   - `backup_app`（备份与恢复）：移除 Header，弹窗状态下 `vk_home` 优先关闭弹窗，二次按下退回桌面。
-  - `transfer_app`（WiFi 传书）：移除 Header，卡片直连状态栏。
-  - `wififile_app`（WiFi 文件管理）：移除 Header。
+  - `wififile_app`（WiFi 传输）：移除 Header。已并入原 `transfer_app`（WiFi 传书）的能力，
+    设备端卡片直连状态栏，Web 端为「传书 / 文件管理」双页签。
   - `wallpaper_app`（壁纸设置）：移除 Header，单张壁纸预览模式下 `vk_home` 返回壁纸列表，列表中 `vk_home` 返回桌面。
   - `power_app`（电源管理）：同步移除 Header。
 

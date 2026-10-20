@@ -33,7 +33,7 @@ cJSON_CreateNumber cJSON_CreateObject cJSON_CreateString cJSON_Delete
 cJSON_GetArrayItem cJSON_GetArraySize cJSON_GetObjectItem cJSON_GetObjectItemCaseSensitive
 cJSON_GetStringValue cJSON_IsArray cJSON_IsBool cJSON_IsNull cJSON_IsNumber
 cJSON_IsString cJSON_IsTrue cJSON_Parse cJSON_Print cJSON_PrintUnformatted
-esp_random fclose fflush fgets fontpack_lv_font_get fontpack_lv_font_ui fopen
+esp_random fclose fflush fgets fontpack_lv_font_get fontpack_lv_font_math fontpack_lv_font_ui fopen
 fprintf fputs fread free fscanf fseek ftell fwrite gmtime_r localtime_r
 malloc memcmp memcpy memmove memset mktime
 radio_catalog_count radio_catalog_get radio_play radio_play_indexed
@@ -123,6 +123,31 @@ def elf_symbols(nm_path):
     return syms
 
 
+def sdk_declared_dynapp_symbols():
+    """从 SDK 公共头(services.h)的 extern "C" 块里提取 dynapp_* 函数名。
+
+    为什么需要这一层:新增的垫片函数在固件内部无人引用,链接器 --gc-sections
+    会把它从 ELF 里裁掉;而导出表又是从 ELF 反推的,于是新符号永远进不了
+    导出表(鸡生蛋)。SDK 头是 ABI 的唯一事实源,这里以头文件为准补齐候选,
+    再交给编译器取址探测裁决——头里声明了却没实现的符号会在固件链接时报错,
+    这正是我们想要的强制约束。
+    """
+    header = os.path.join(ROOT, "sdk", "include", "metalio", "services.h")
+    if not os.path.isfile(header):
+        return set()
+    lines = open(header, encoding="utf-8").read().splitlines()
+    try:
+        start = next(i for i, l in enumerate(lines) if l.strip() == 'extern "C" {')
+    except StopIteration:
+        return set()
+    # extern "C" 块以「整行只有一个 }」结束;块内的结构体收尾都是 `} xxx_t;`
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].strip() == "}"), len(lines))
+    block = "\n".join(lines[start:end])
+    # 只认「标识符紧跟左括号」= 函数声明;typedef 名后面跟的是 `)` 或 `;`
+    return {m.group(1) for m in re.finditer(r"\b(dynapp_[A-Za-z0-9_]+)\s*\(", block)}
+
+
 def probe_compile(cxx, flags, candidates, probe_dir):
     """用与加载器相同的参数编译探测文件,返回编译器判定"未声明"的符号集。"""
     src = os.path.join(probe_dir, "probe.cc")
@@ -148,7 +173,15 @@ def main():
 
     lv_candidates = sorted({s for s in defined if s.startswith("lv_")} |
                            {s for s in LEGACY_LV_SYMBOLS})
-    dynapp_candidates = sorted(s for s in defined if s.startswith("dynapp_"))
+    # SDK 头声明的 dynapp_* 全量并入候选(ELF 里被 gc-sections 裁掉的也在内)
+    sdk_dynapp = sdk_declared_dynapp_symbols()
+    elf_dynapp = {s for s in defined if s.startswith("dynapp_")}
+    dynapp_candidates = sorted(elf_dynapp | sdk_dynapp)
+    only_in_sdk = sorted(sdk_dynapp - elf_dynapp)
+    if only_in_sdk:
+        print(f"提示: {len(only_in_sdk)} 个 SDK 头声明的符号本次未出现在固件 ELF "
+              f"(链接器 gc-sections 裁掉或尚未实现),仍按头文件纳入导出候选: "
+              f"{only_in_sdk}")
     all_candidates = lv_candidates + dynapp_candidates + list(BASE_SYMBOLS)
 
     rejected = []

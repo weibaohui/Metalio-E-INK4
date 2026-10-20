@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Blank or verify string literals in main/cloudzao_endpoints.c (open-source gate)."""
+"""Blank or verify string literals in the cloudzao_endpoints.c source (open-source gate)."""
 from __future__ import annotations
 
 import argparse
@@ -9,8 +9,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PATH = ROOT / "main" / "cloudzao_endpoints.c"
-REL = "main/cloudzao_endpoints.c"
+# 该文件在 main/ 与 main/protocols/ 之间挪动过(dd319fc 布局重构),而本脚本
+# 一直硬编码旧路径 —— 路径失效后 --check 直接 "missing ... " 退出 1,
+# 让 CI 的开源门禁在每个 PR 上都 fail,却看不出是路径问题。
+# 改为按候选顺序探测,今后再搬目录也不会静默失效。
+_CANDIDATE_RELS = (
+    "main/protocols/cloudzao_endpoints.c",
+    "main/cloudzao_endpoints.c",
+)
+REL = next((c for c in _CANDIDATE_RELS if (ROOT / c).is_file()), _CANDIDATE_RELS[0])
+PATH = ROOT / REL
 NON_EMPTY = re.compile(r'=\s*"[^"]+"')
 ZERO = "0" * 40
 

@@ -83,9 +83,11 @@ static void glyph_metrics(const lv_font_t *font, uint32_t cp, int16_t *adv, int1
 
 static const lv_font_t *math_font(uint16_t size)
 {
-    const lv_font_t *f = fontpack_lv_font_get(size, A2UI_MATH_BPP);
+    /* 数学字体走专用接口：fontpack 的 18/28/36@2 是纯符号包，
+       fontpack_lv_font_get 只返回含汉字的字体，取不到数学规格。 */
+    const lv_font_t *f = fontpack_lv_font_math(size);
     if (!f) {
-        f = fontpack_lv_font_get(A2UI_MATH_SIZE_TEXT, A2UI_MATH_BPP);
+        f = fontpack_lv_font_math(A2UI_MATH_SIZE_TEXT);
     }
     if (!f) {
         f = fontpack_lv_font_ui();

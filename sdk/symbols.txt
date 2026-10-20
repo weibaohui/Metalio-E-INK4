@@ -794,6 +794,7 @@ dynapp_wallpaper_set_standby
 dynapp_wifi_file_get_port
 dynapp_wifi_file_get_url
 dynapp_wifi_file_is_running
+dynapp_wifi_file_set_callback
 dynapp_wifi_file_start
 dynapp_wifi_file_stop
 dynapp_wifi_transfer_get_port
@@ -836,6 +837,7 @@ fclose
 fflush
 fgets
 fontpack_lv_font_get
+fontpack_lv_font_math
 fontpack_lv_font_ui
 fopen
 fprintf

@@ -2,12 +2,13 @@
 
 namespace wifi_file {
 
+// WiFi 传输 Web 端:传书(直传设备书库) + 全盘文件管理,双页签合一。
 const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Metalio E-INK4 · SD 文件管理</title>
+<title>Metalio E-INK4 · WiFi 传输</title>
 <style>
   :root {
     --bg: #f8f9fa;
@@ -23,6 +24,10 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
   header { text-align: center; padding: 20px 0 16px; border-bottom: 2px solid var(--border); margin-bottom: 16px; }
   h1 { font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
   .badge { display: inline-block; padding: 3px 10px; background: #000; color: #fff; border-radius: 16px; font-size: 12px; margin-top: 6px; }
+  .tabs { display: flex; gap: 0; border: 2px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 16px; background: var(--card); }
+  .tab-btn { flex: 1; padding: 11px 8px; font-size: 15px; font-weight: 700; background: var(--card); color: var(--text); border: none; cursor: pointer; font-family: inherit; }
+  .tab-btn + .tab-btn { border-left: 2px solid var(--border); }
+  .tab-btn.active { background: #000; color: #fff; }
   .card { background: var(--card); border: 2px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: 2px 2px 0px rgba(0,0,0,0.08); }
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 12px; }
   .btn { display: inline-flex; align-items: center; justify-content: center; background: #000; color: #fff; border: 2px solid #000; padding: 7px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: none; transition: background 0.15s; }
@@ -51,40 +56,73 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
   .file-table tr:hover { background: #f8f9fa; }
   .file-name { display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; color: #000; word-break: break-all; }
   .file-name:hover { text-decoration: underline; }
+  /* 名称下方的日期小字:窄屏时显示(独立的「修改日期」列会被隐藏) */
+  .file-sub { display: none; font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+  .page-size { font-family: inherit; font-size: 12px; font-weight: 600; padding: 6px 8px; border: 2px solid var(--border); border-radius: 8px; background: #fff; color: #000; cursor: pointer; }
+  /* 窄屏(手机):固定列合计 340px 会在 375px 屏上把名称列挤成 3px,
+     这里隐藏日期列、把日期收到名称下方,并压缩其余固定列 */
+  @media (max-width: 560px) {
+    .file-table th.col-date, .file-table td.col-date { display: none; }
+    .file-sub { display: block; }
+    .file-table th:nth-child(2) { width: 56px; }
+    .file-table th:nth-child(4) { width: 80px; }
+    .file-table th, .file-table td { padding: 9px 4px; }
+    .file-actions { gap: 3px; }
+    .btn-sm { padding: 4px 6px; font-size: 10px; }
+    .file-size { font-size: 11px; }
+    .file-name { font-size: 12px; }
+    .dropzone { padding: 16px 10px; }
+    .dropzone-icon { font-size: 24px; }
+  }
   .file-icon { font-size: 18px; flex-shrink: 0; }
   .file-size { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .file-date { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .file-actions { display: flex; gap: 6px; justify-content: flex-end; }
   .empty-tip { text-align: center; padding: 36px 12px; color: var(--muted); font-size: 14px; }
   .storage-bar { font-size: 13px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; padding-top: 8px; border-top: 1px solid #e9ecef; }
+  .pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #e9ecef; }
+  .pager-label { font-size: 13px; font-weight: 600; color: var(--muted); min-width: 120px; text-align: center; }
+  .btn[disabled] { opacity: 0.35; pointer-events: none; }
 </style>
 </head>
 <body>
   <header>
-    <h1>💾 Metalio E-INK4 · SD 文件管理</h1>
-    <div class="badge">全盘访问 · 极速上传下载</div>
+    <h1>📡 Metalio E-INK4 · WiFi 传输</h1>
+    <div class="badge">传书入库 · 全盘文件管理</div>
   </header>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-mode="books" onclick="switchMode('books')">📖 传书</button>
+    <button class="tab-btn" data-mode="wallpaper" onclick="switchMode('wallpaper')">🖼️ 壁纸</button>
+    <button class="tab-btn" data-mode="fs" onclick="switchMode('fs')">💾 文件管理</button>
+  </div>
 
   <div class="card">
     <div class="breadcrumbs" id="breadcrumbs">
-      <span class="breadcrumb-item" onclick="loadDir('/')">根目录</span>
+      <span class="breadcrumb-cur">书库</span>
     </div>
 
     <div class="toolbar">
       <div style="display: flex; gap: 8px;">
-        <button class="btn btn-outline btn-sm" onclick="goUp()">⬆ 返回上级</button>
-        <button class="btn btn-outline btn-sm" onclick="promptMkdir()">📁 新建文件夹</button>
+        <button class="btn btn-outline btn-sm" id="btnUp" onclick="goUp()">⬆ 返回上级</button>
+        <button class="btn btn-outline btn-sm" id="btnMkdir" onclick="promptMkdir()">📁 新建文件夹</button>
       </div>
       <div>
+        <select id="pageSizeSel" class="page-size" onchange="onPageSizeChange(this.value)" title="每页条数">
+          <option value="20">20 条/页</option>
+          <option value="50">50 条/页</option>
+          <option value="100">100 条/页</option>
+          <option value="all">全部</option>
+        </select>
         <button class="btn btn-sm" onclick="document.getElementById('fileInput').click()">📤 上传文件</button>
         <input type="file" id="fileInput" multiple style="display:none;" onchange="handleFileSelect(this.files)">
       </div>
     </div>
 
     <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
-      <div class="dropzone-icon">📂</div>
-      <div style="font-weight:600; font-size:14px;">点击选择或拖放文件到此处</div>
-      <div class="dropzone-tip">支持任意文件，直传存入当前目录</div>
+      <div class="dropzone-icon" id="dzIcon">📂</div>
+      <div style="font-weight:600; font-size:14px;" id="dzTitle">点击选择或拖放文件到此处</div>
+      <div class="dropzone-tip" id="dzTip">传书到设备书库,传完立即可用阅读器打开</div>
     </div>
 
     <div class="progress-wrap" id="progressWrap">
@@ -98,7 +136,7 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
           <tr>
             <th>名称</th>
             <th style="width: 90px;">大小</th>
-            <th style="width: 140px;">修改日期</th>
+            <th style="width: 140px;" class="col-date">修改日期</th>
             <th style="width: 110px; text-align: right;">操作</th>
           </tr>
         </thead>
@@ -108,6 +146,12 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
       </table>
     </div>
 
+    <div class="pager" id="pager">
+      <button class="btn btn-outline btn-sm" id="btnPrev" onclick="gotoPage(currentPage - 1)">‹ 上一页</button>
+      <span class="pager-label" id="pagerLabel">第 1 / 1 页</span>
+      <button class="btn btn-outline btn-sm" id="btnNext" onclick="gotoPage(currentPage + 1)">下一页 ›</button>
+    </div>
+
     <div class="storage-bar" id="storageBar">
       <span id="storageInfo">正在获取存储空间...</span>
       <button class="btn btn-outline btn-sm" onclick="refreshCurrentDir()">刷新</button>
@@ -115,7 +159,58 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
   </div>
 
 <script>
+const BOOK_EXTS = ['txt', 'epub', 'ebook', 'pdf'];
+const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'a2i1', 'bin'];
+
+// 三个页签共用一套列表/上传逻辑,差异只在目标目录、允许的扩展名与文案
+const MODE_CFG = {
+  books: {
+    dir: 'books', exts: BOOK_EXTS, icon: '📖',
+    title: '点击选择或拖放书籍到此处(可多选)',
+    tip: '传书到设备书库,传完立即可用阅读器打开 (.txt/.epub/.ebook/.pdf)',
+    crumb: '📖 设备书库', empty: '书库暂无书籍,拖一本书进来试试'
+  },
+  wallpaper: {
+    dir: 'wallpaper', exts: IMAGE_EXTS, icon: '🖼️',
+    title: '点击选择或拖放图片到此处(可多选)',
+    tip: '传壁纸到设备壁纸库,再打开设备「待机壁纸」应用挑选 (.png/.jpg/.a2i1)',
+    crumb: '🖼️ 设备壁纸库', empty: '壁纸库暂无图片,拖一张进来试试'
+  },
+  fs: {
+    dir: null, exts: null, icon: '📂',
+    title: '点击选择或拖放文件到此处',
+    tip: '支持任意文件,直传存入当前目录',
+    crumb: null, empty: '此目录为空'
+  }
+};
+
+let mode = 'books';               // 'books' 传书 | 'wallpaper' 壁纸 | 'fs' 全盘文件管理
 let currentPath = '/';
+let roots = { books: '/metalio/e-ink/books', wallpaper: '/metalio/e-ink/wallpaper' };
+let currentPage = 1;              // 当前页（1 起）
+let totalPages = 1;               // 总页数
+let totalItems = 0;               // 目录总条目数
+let pageSize = 20;                // 每页条数；0 = 全部
+const kPageSizeKey = 'metalio_wifi_page_size';
+
+// 每页条数：localStorage 记住选择（0 表示"全部"）
+function loadPageSize() {
+  try {
+    const v = localStorage.getItem(kPageSizeKey);
+    if (v === 'all') pageSize = 0;
+    else if (v) pageSize = parseInt(v, 10) || 20;
+  } catch (e) { /* 隐私模式等场景忽略 */ }
+  const sel = document.getElementById('pageSizeSel');
+  if (sel) sel.value = pageSize === 0 ? 'all' : String(pageSize);
+}
+
+function onPageSizeChange(v) {
+  pageSize = (v === 'all') ? 0 : (parseInt(v, 10) || 20);
+  try { localStorage.setItem(kPageSizeKey, v); } catch (e) { /* ignore */ }
+  loadDir(currentPath, 1);
+}
+
+function cfg() { return MODE_CFG[mode]; }
 
 function formatSize(bytes) {
   if (bytes === 0) return '0 B';
@@ -128,16 +223,87 @@ function formatSize(bytes) {
 function getFileIcon(name, isDir) {
   if (isDir) return '📁';
   const ext = name.split('.').pop().toLowerCase();
-  if (['txt', 'epub', 'pdf', 'mobi', 'azw3'].includes(ext)) return '📖';
-  if (['png', 'jpg', 'jpeg', 'bmp', 'a2i1'].includes(ext)) return '🖼️';
+  if (BOOK_EXTS.includes(ext)) return '📖';
+  if (IMAGE_EXTS.includes(ext)) return '🖼️';
   if (['mp3', 'wav', 'ogg', 'aac', 'flac'].includes(ext)) return '🎵';
   if (['ttf', 'otf', 'woff'].includes(ext)) return '🔤';
   return '📄';
 }
 
+function escapeHtml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function isAllowedExt(name) {
+  const exts = cfg().exts;
+  if (!exts) return true;
+  const ext = name.split('.').pop().toLowerCase();
+  return exts.includes(ext);
+}
+
+// 带超时的 fetch:设备无响应/连接被占满时给出明确错误,
+// 而不是永远停在"正在读取目录..."
+async function fetchJson(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs || 12000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error('请求超时，请检查设备是否已断开 WiFi');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 读取设备上的图书库/壁纸库路径(服务端权威,页面不硬编码)
+async function loadRoots() {
+  try {
+    const data = await fetchJson('/api/fs/roots', 8000);
+    if (data && data.books) roots.books = data.books;
+    if (data && data.wallpaper) roots.wallpaper = data.wallpaper;
+  } catch (err) {
+    /* 保持默认路径 */
+  }
+}
+
+function switchMode(m) {
+  mode = m;
+  const c = cfg();
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('data-mode') === m);
+  });
+
+  // 传书/壁纸页签固定落在各自的库目录,目录类操作隐藏
+  const fixed = !!c.dir;
+  document.getElementById('btnUp').style.display = fixed ? 'none' : '';
+  document.getElementById('btnMkdir').style.display = fixed ? 'none' : '';
+  document.getElementById('fileInput').accept = c.exts ? c.exts.map(e => '.' + e).join(',') : '';
+
+  document.getElementById('dzIcon').innerText = c.icon;
+  document.getElementById('dzTitle').innerText = c.title;
+  document.getElementById('dzTip').innerText = c.tip;
+
+  loadDir(fixed ? roots[c.dir] : '/');
+}
+
 function renderBreadcrumbs(path) {
   const container = document.getElementById('breadcrumbs');
   container.innerHTML = '';
+
+  const c = cfg();
+  if (c.crumb) {
+    const cur = document.createElement('span');
+    cur.className = 'breadcrumb-cur';
+    cur.innerText = c.crumb + ' (' + path + ')';
+    container.appendChild(cur);
+    return;
+  }
+
   const rootSpan = document.createElement('span');
   rootSpan.className = path === '/' ? 'breadcrumb-cur' : 'breadcrumb-item';
   rootSpan.innerText = '根目录 (/)';
@@ -168,19 +334,27 @@ function renderBreadcrumbs(path) {
   });
 }
 
-async function loadDir(path) {
+async function loadDir(path, page) {
   currentPath = path;
+  if (page === undefined || page === null) page = 1;
+  if (page < 1) page = 1;
   renderBreadcrumbs(path);
   const tbody = document.getElementById('fileList');
   tbody.innerHTML = '<tr><td colspan="4" class="empty-tip">正在读取目录...</td></tr>';
 
   try {
-    const res = await fetch('/api/fs/list?path=' + encodeURIComponent(path));
-    if (!res.ok) throw new Error('读取目录失败');
-    const data = await res.json();
+    const sizeQ = (pageSize === 0) ? '&all=1' : '&per_page=' + pageSize;
+    const data = await fetchJson('/api/fs/list?path=' + encodeURIComponent(path) +
+                                  '&page=' + page + sizeQ, 15000);
+
+    // 服务端会把越界页码回退到最后一页，这里同步回来
+    currentPage = data.page || 1;
+    totalPages = data.total_pages || 1;
+    totalItems = data.total || 0;
+    renderPager();
 
     if (!data.items || data.items.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" class="empty-tip">此目录为空</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-tip">' + cfg().empty + '</td></tr>';
     } else {
       tbody.innerHTML = '';
       data.items.forEach(item => {
@@ -200,6 +374,13 @@ async function loadDir(path) {
           nameDiv.onclick = () => downloadFile(item.name);
         }
         tdName.appendChild(nameDiv);
+
+        // 日期小字(窄屏时显示,替代被隐藏的日期列)
+        const sub = document.createElement('div');
+        sub.className = 'file-sub';
+        sub.innerText = item.date || '';
+        tdName.appendChild(sub);
+
         tr.appendChild(tdName);
 
         // 大小
@@ -208,9 +389,9 @@ async function loadDir(path) {
         tdSize.innerText = item.is_dir ? '--' : formatSize(item.size);
         tr.appendChild(tdSize);
 
-        // 日期
+        // 日期(窄屏隐藏)
         const tdDate = document.createElement('td');
-        tdDate.className = 'file-date';
+        tdDate.className = 'file-date col-date';
         tdDate.innerText = item.date || '--';
         tr.appendChild(tdDate);
 
@@ -244,18 +425,42 @@ async function loadDir(path) {
     }
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="4" class="empty-tip" style="color:var(--danger)">加载失败: ${err.message}</td></tr>`;
+    totalPages = 1; totalItems = 0; currentPage = 1;
+    renderPager();
   }
 }
 
 function goUp() {
-  if (currentPath === '/') return;
+  if (cfg().dir || currentPath === '/') return;
   const parts = currentPath.split('/').filter(p => p.length > 0);
   parts.pop();
-  loadDir(parts.length === 0 ? '/' : '/' + parts.join('/'));
+  loadDir(parts.length === 0 ? '/' : '/' + parts.join('/'), 1);
 }
 
 function refreshCurrentDir() {
-  loadDir(currentPath);
+  loadDir(currentPath, currentPage);
+}
+
+// 翻页
+function gotoPage(n) {
+  if (n < 1 || n > totalPages || n === currentPage) return;
+  loadDir(currentPath, n);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderPager() {
+  const label = document.getElementById('pagerLabel');
+  const prev = document.getElementById('btnPrev');
+  const next = document.getElementById('btnNext');
+  if (!label || !prev || !next) return;
+
+  if (totalItems === 0) {
+    label.innerText = '共 0 项';
+  } else {
+    label.innerText = '第 ' + currentPage + ' / ' + totalPages + ' 页 · 共 ' + totalItems + ' 项';
+  }
+  prev.disabled = (currentPage <= 1);
+  next.disabled = (currentPage >= totalPages);
 }
 
 function downloadFile(name) {
@@ -265,9 +470,13 @@ function downloadFile(name) {
 
 async function deleteItem(name, isDir) {
   const itemType = isDir ? '文件夹' : '文件';
-  if (!confirm(`确定要彻底删除此${itemType}【${name}】吗？`)) return;
-
   const target = currentPath === '/' ? '/' + name : currentPath + '/' + name;
+  if (isDir) {
+    if (!confirm(`确定要彻底删除文件夹【${target}】吗？\n\n该文件夹及其全部内容都会被递归删除,且无法恢复!`)) return;
+  } else {
+    if (!confirm(`确定要彻底删除此${itemType}【${name}】吗？`)) return;
+  }
+
   try {
     const res = await fetch('/api/fs/delete?path=' + encodeURIComponent(target), { method: 'POST' });
     const data = await res.json();
@@ -279,6 +488,7 @@ async function deleteItem(name, isDir) {
 }
 
 async function promptMkdir() {
+  if (cfg().dir) return;
   const name = prompt('请输入新文件夹名称：');
   if (!name || name.trim() === '') return;
   const cleanName = name.trim();
@@ -297,20 +507,32 @@ async function promptMkdir() {
 // 批量上传管理
 async function handleFileSelect(files) {
   if (!files || files.length === 0) return;
+
+  let list = Array.from(files);
+  const exts = cfg().exts;
+  if (exts) {
+    const skipped = list.filter(f => !isAllowedExt(f.name)).map(f => f.name);
+    list = list.filter(f => isAllowedExt(f.name));
+    if (skipped.length > 0) {
+      alert('本页只接受 ' + exts.map(e => '.' + e).join('/') + ' 格式,已跳过:\n' + skipped.join('\n'));
+    }
+    if (list.length === 0) return;
+  }
+
   const pWrap = document.getElementById('progressWrap');
   const pFill = document.getElementById('progressFill');
   const pText = document.getElementById('progressText');
   pWrap.style.display = 'block';
 
-  for (let i = 0; i < files.length; ++i) {
-    const f = files[i];
-    pText.innerText = `正在上传 (${i+1}/${files.length}): ${f.name}`;
+  for (let i = 0; i < list.length; ++i) {
+    const f = list[i];
+    pText.innerText = `正在上传 (${i+1}/${list.length}): ${f.name}`;
     pFill.style.width = '0%';
 
     try {
       await uploadSingleFile(f, (pct) => {
         pFill.style.width = pct + '%';
-        pText.innerText = `正在上传 (${i+1}/${files.length}) ${pct}%: ${f.name}`;
+        pText.innerText = `正在上传 (${i+1}/${list.length}) ${pct}%: ${f.name}`;
       });
     } catch (err) {
       alert(`文件【${f.name}】上传失败: ${err.message}`);
@@ -350,10 +572,6 @@ function uploadSingleFile(file, onProgress) {
   });
 }
 
-function escapeHtml(str) {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-}
-
 // 拖拽支持
 const dz = document.getElementById('dropzone');
 ['dragenter', 'dragover'].forEach(name => {
@@ -369,8 +587,12 @@ dz.addEventListener('drop', (e) => {
   }
 });
 
-// 初始化加载
-window.onload = () => loadDir('/');
+// 初始化:先取图书库/壁纸库路径,再切到传书页签
+window.onload = async () => {
+  loadPageSize();
+  await loadRoots();
+  switchMode('books');
+};
 </script>
 </body>
 </html>
