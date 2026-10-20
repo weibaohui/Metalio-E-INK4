@@ -288,7 +288,7 @@ const lv_font_t* fontpack_lv_font_get(uint16_t size, uint16_t bpp) {
     if (!fontpack_lv_ensure_ready()) {
         return nullptr;
     }
-    // 冒烟：必须含汉字字形。fontpack 里 18@2 / 28@2 / 36@2 是纯数学符号包
+    // 只返回含汉字字形的字体。fontpack 里 18@2 / 28@2 / 36@2 是纯拉丁/符号包
     // （各 333 字、零汉字），它们只满足「有 ASCII」——若放行，所有中文会渲染成
     // 空白、只剩 ASCII 露出来（曾导致「服务未运行 (请点击下方启动)」只显示 "()"）。
     GlyphInfo g{};
@@ -307,17 +307,19 @@ const lv_font_t* fontpack_lv_font_get(uint16_t size, uint16_t bpp) {
     return fontpack_lv_font_get(25, 2);
 }
 
-const lv_font_t* fontpack_lv_font_math(uint16_t size) {
+const lv_font_t* fontpack_lv_font_latin(uint16_t size) {
     if (!fontpack_lv_ensure_ready()) {
         return nullptr;
     }
-    // 数学包固定 2bpp；用 ASCII 做存在性探测（数学包里没有汉字）
-    constexpr uint16_t kMathBpp = 2;
+    // 纯拉丁/数字/符号包（Latin Modern Math）固定 2bpp，零汉字。
+    // 用于「需要小号字但内容是纯 ASCII」的场景（如分数数字、计时、步数）：
+    // 包内只有 18@2 / 28@2 / 36@2 三个规格，且都不含汉字。
+    constexpr uint16_t kLatinBpp = 2;
     GlyphInfo g{};
-    if (!get_glyph(0x0041u /* A */, size, kMathBpp, &g)) {
+    if (!get_glyph(0x0030u /* 0 */, size, kLatinBpp, &g)) {
         return nullptr;
     }
-    FontpackLvFont* slot = FindOrCreate(size, kMathBpp);
+    FontpackLvFont* slot = FindOrCreate(size, kLatinBpp);
     return slot != nullptr ? &slot->lv : nullptr;
 }
 

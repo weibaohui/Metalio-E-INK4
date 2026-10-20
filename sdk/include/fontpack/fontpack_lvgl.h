@@ -21,11 +21,12 @@ extern "C" {
 const lv_font_t* fontpack_lv_font_get(uint16_t size, uint16_t bpp);
 
 /**
- * 取数学/符号字体（fontpack 内 18@2 / 28@2 / 36@2）。
- * 与 fontpack_lv_font_get 互不影响：这里不做汉字检查，
- * 专供公式渲染（a2ui_math）使用。规格不在包内时返回 nullptr。
+ * 取纯拉丁字母 / 数字 / 数学符号的小字体（fontpack 内 18@2 / 28@2 / 36@2）。
+ * 这三个规格**不含汉字**，用于「需要小号字但内容是纯 ASCII」的场景
+ * （分数数字、计时、步数等）；需要显示中文时请用 fontpack_lv_font_get()。
+ * 规格不在包内时返回 nullptr。
  */
-const lv_font_t* fontpack_lv_font_math(uint16_t size);
+const lv_font_t* fontpack_lv_font_latin(uint16_t size);
 
 /**
  * 全局 UI 默认字：fontpack **25@2**（MiSans-Mixed 中为 Regular）。

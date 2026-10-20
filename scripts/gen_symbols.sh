@@ -33,7 +33,7 @@ cJSON_CreateNumber cJSON_CreateObject cJSON_CreateString cJSON_Delete
 cJSON_GetArrayItem cJSON_GetArraySize cJSON_GetObjectItem cJSON_GetObjectItemCaseSensitive
 cJSON_GetStringValue cJSON_IsArray cJSON_IsBool cJSON_IsNull cJSON_IsNumber
 cJSON_IsString cJSON_IsTrue cJSON_Parse cJSON_Print cJSON_PrintUnformatted
-esp_random fclose fflush fgets fontpack_lv_font_get fontpack_lv_font_math fontpack_lv_font_ui fopen
+esp_random fclose fflush fgets fontpack_lv_font_get fontpack_lv_font_latin fontpack_lv_font_ui fopen fputc
 fprintf fputs fread free fscanf fseek ftell fwrite gmtime_r localtime_r
 malloc memcmp memcpy memmove memset mktime
 radio_catalog_count radio_catalog_get radio_play radio_play_indexed
@@ -47,6 +47,14 @@ strlen strncmp strncpy strrchr strstr strtol time
 LEGACY_LV_SYMBOLS = """
 lv_obj_set_style_margin_ver lv_obj_set_style_pad_ver lv_obj_set_style_pad_all
 lv_obj_clear_flag lv_obj_set_style_pad_hor
+""".split()
+
+# 另一类人工保留:固件自己没调用 → 被链接器 --gc-sections 裁掉 → 不在固件 ELF 里
+# → 自动导出表按 ELF 反推时收录不到(鸡生蛋),但 SDK 应用可能要用。
+# 这里显式列出,固件会强制引用它们并一并导出。SDK 应用用到清单外的 LVGL API 时,
+# 在此补一行即可(头文件是唯一事实源,探测编译会校验声明存在)。
+MANUAL_LV_SYMBOLS = """
+lv_obj_set_style_text_decor
 """.split()
 
 # libgcc 内建函数(64 位整数/双精度浮点全族):不生成进 .inc(加载器文件头以 extern
@@ -172,7 +180,8 @@ def main():
     defined = elf_symbols(nm)
 
     lv_candidates = sorted({s for s in defined if s.startswith("lv_")} |
-                           {s for s in LEGACY_LV_SYMBOLS})
+                           {s for s in LEGACY_LV_SYMBOLS} |
+                           {s for s in MANUAL_LV_SYMBOLS})
     # SDK 头声明的 dynapp_* 全量并入候选(ELF 里被 gc-sections 裁掉的也在内)
     sdk_dynapp = sdk_declared_dynapp_symbols()
     elf_dynapp = {s for s in defined if s.startswith("dynapp_")}

@@ -624,19 +624,20 @@ static lv_obj_t *make_score_box(lv_obj_t *parent, const char *title, lv_coord_t 
 
     lv_obj_t *t_lbl = lv_label_create(box);
     lv_label_set_text(t_lbl, title);
-    const lv_font_t *f18 = fontpack_lv_font_get(18, 2);
-    if (f18 == NULL) f18 = fontpack_lv_font_ui();
-    if (f18 != NULL) lv_obj_set_style_text_font(t_lbl, f18, 0);
+    // 标签是中文 → 必须用含汉字的字体(UI 25@2)
+    const lv_font_t *f_ui = fontpack_lv_font_ui();
+    if (f_ui != NULL) lv_obj_set_style_text_font(t_lbl, f_ui, 0);
     lv_obj_set_style_text_color(t_lbl, lv_palette_darken(LV_PALETTE_GREY, 2), 0);
-    lv_obj_align(t_lbl, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_align(t_lbl, LV_ALIGN_TOP_MID, 0, 2);
 
     lv_obj_t *v_lbl = lv_label_create(box);
     lv_label_set_text(v_lbl, "0");
-    const lv_font_t *f24 = fontpack_lv_font_get(24, 2);
-    if (f24 == NULL) f24 = fontpack_lv_font_ui();
-    if (f24 != NULL) lv_obj_set_style_text_font(v_lbl, f24, 0);
+    // 数值是纯数字 → 用小号拉丁字体(18@2),避免 25@2 的大字顶掉上面的中文标签
+    const lv_font_t *f_num = fontpack_lv_font_latin(18);
+    if (f_num == NULL) f_num = fontpack_lv_font_ui();
+    if (f_num != NULL) lv_obj_set_style_text_font(v_lbl, f_num, 0);
     lv_obj_set_style_text_color(v_lbl, lv_color_black(), 0);
-    lv_obj_align(v_lbl, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_align(v_lbl, LV_ALIGN_BOTTOM_MID, 0, -2);
 
     return v_lbl;
 }
@@ -686,13 +687,13 @@ static void *game2048_create(void) {
     lv_obj_set_style_text_color(sub_lbl, lv_palette_darken(LV_PALETTE_GREY, 2), 0);
     lv_obj_set_pos(sub_lbl, 24, 82);
 
-    s_score_lbl = make_score_box(scr, "得分", 260, 44, 94, 56);
-    s_best_lbl = make_score_box(scr, "最高", 362, 44, 94, 56);
+    s_score_lbl = make_score_box(scr, "得分", 260, 42, 94, 64);
+    s_best_lbl = make_score_box(scr, "最高", 362, 42, 94, 64);
 
     // 5. 棋盘
     s_board_obj = lv_obj_create(scr);
     lv_obj_remove_style_all(s_board_obj);
-    lv_obj_set_pos(s_board_obj, 20, 114);
+    lv_obj_set_pos(s_board_obj, 20, 120);
     lv_obj_set_size(s_board_obj, BOARD_SIZE, BOARD_SIZE);
     lv_obj_set_style_bg_color(s_board_obj, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(s_board_obj, LV_OPA_COVER, 0);

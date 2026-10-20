@@ -17,8 +17,9 @@ ABI 稳定政策:**签名只增不改**;破坏性变更（删符号/改签名）
 - **新增符号**(纯增量,不破坏 ABI):
   - `dynapp_wifi_file_set_callback(dynapp_fs_activity_cb_t, void*)`
   - `dynapp_fs_activity_cb_t` = `void (*)(const char* action, const char* path, void* user_data)`
-  - `fontpack_lv_font_math(size)` —— 取数学/符号字体(fontpack 内 18/28/36@2),
-    专供公式渲染,不做汉字检查
+  - `fontpack_lv_font_latin(size)` —— 取纯拉丁字母 / 数字 / 符号的小字体
+    (fontpack 内 18@2 / 28@2 / 36@2，**零汉字**)，用于「需要小号字但内容是
+    纯 ASCII」的场景(分数数字、计时、步数)；公式渲染也走它
 - **字体接口行为修正**(影响所有第三方应用的取字行为):
   `fontpack_lv_font_get(size, bpp)` 现在**只返回含汉字的字体**。此前它的冒烟检查是
   「中 **和** A 都没找到才返回 null」,而 fontpack 里的 18@2 / 28@2 / 36@2 是

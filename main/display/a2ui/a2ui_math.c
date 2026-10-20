@@ -85,9 +85,9 @@ static const lv_font_t *math_font(uint16_t size)
 {
     /* 数学字体走专用接口：fontpack 的 18/28/36@2 是纯符号包，
        fontpack_lv_font_get 只返回含汉字的字体，取不到数学规格。 */
-    const lv_font_t *f = fontpack_lv_font_math(size);
+    const lv_font_t *f = fontpack_lv_font_latin(size);
     if (!f) {
-        f = fontpack_lv_font_math(A2UI_MATH_SIZE_TEXT);
+        f = fontpack_lv_font_latin(A2UI_MATH_SIZE_TEXT);
     }
     if (!f) {
         f = fontpack_lv_font_ui();

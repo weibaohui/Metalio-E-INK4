@@ -238,7 +238,7 @@ const lv_font_t* fontpack_lv_font_get(uint16_t size, uint16_t bpp) {
     return fontpack_lv_font_get(25, 2);
 }
 
-const lv_font_t* fontpack_lv_font_math(uint16_t size) {
+const lv_font_t* fontpack_lv_font_latin(uint16_t size) {
     if (!fontpack_lv_ensure_ready()) {
         return nullptr;
     }

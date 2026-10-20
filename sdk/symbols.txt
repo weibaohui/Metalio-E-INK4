@@ -569,6 +569,7 @@ lv_obj_set_style_radius
 lv_obj_set_style_shadow_width
 lv_obj_set_style_text_align
 lv_obj_set_style_text_color
+lv_obj_set_style_text_decor
 lv_obj_set_style_text_font
 lv_obj_set_style_text_opa
 lv_obj_set_style_translate_y
@@ -837,9 +838,10 @@ fclose
 fflush
 fgets
 fontpack_lv_font_get
-fontpack_lv_font_math
+fontpack_lv_font_latin
 fontpack_lv_font_ui
 fopen
+fputc
 fprintf
 fputs
 fread
