@@ -81,10 +81,20 @@ void AppManager::RegisterApp(std::shared_ptr<AppModule> module) {
         ESP_LOGI(TAG, "updated app module: %s", module->GetId());
     } else {
         modules_.push_back(module);
-        // 运行时注册的新应用（如 SD 推送）默认开启：否则 boot 后构建的
-        // enabled_mask_ 没有它的位，GetEnabledApps 会把它过滤出桌面
-        enabled_mask_ |= (1u << (modules_.size() - 1));
-        ESP_LOGI(TAG, "registered app module: %s", module->GetId());
+        // 启用状态按 per-app NVS 键(en_<id>)决定，与 LoadToggles 保持一致。
+        // 不能用位掩码直接置位：UnregisterApp 的 erase 会让后续模块索引前移，
+        // 而位掩码不会跟着移 —— 运行期会出现"某个 app 继承别人开关状态"的错位。
+        const size_t idx = modules_.size() - 1;
+        char key[24];
+        std::snprintf(key, sizeof(key), "en_%s", module->GetId());
+        const bool want_on = AsyncSettingsStore::GetInstance().GetBool("apps", key, true);
+        if (want_on) {
+            enabled_mask_ |= (1u << idx);
+        } else {
+            enabled_mask_ &= ~(1u << idx);
+        }
+        ESP_LOGI(TAG, "registered app module: %s (enabled=%d)", module->GetId(),
+                 want_on ? 1 : 0);
     }
 }
 
@@ -100,6 +110,12 @@ bool AppManager::UnregisterApp(const char* id) {
         active_app_.reset();
     }
     modules_.erase(modules_.begin() + index);
+    // erase 会让后面所有 app 的索引前移一位，而 enabled_mask_ 的位不会跟着移，
+    // 导致 enable 状态整体错位（某个 app 被当成另一个 app 的开关状态）。
+    // 用 per-app NVS 键（en_<id>）重算，天然与索引无关。
+    if (toggles_loaded_) {
+        LoadToggles();
+    }
     ESP_LOGI(TAG, "unregistered app module: %s", id);
     return true;
 }

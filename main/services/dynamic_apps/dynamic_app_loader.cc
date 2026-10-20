@@ -567,6 +567,15 @@ bool InstallPackage(const std::string& id) {
             }
             RegisterDir(pkg.dir, info);
             AsyncSettingsStore::GetInstance().SetBool("dynapp", ("in_" + info.id).c_str(), true);
+            // 安装即开启：显式把 en_<id> 置 true。
+            // LoadToggles 读的是 en_<id>（缺键才用默认 true），所以只要 NVS 里
+            // 残留一个 en_<id>=false（同名 app 之前被关过，或历史索引错位写错了键），
+            // 新装的 app 就会一直停在"关闭"态、永远不上桌面。
+            // 这与 AppManager::RegisterApp 里"运行时注册的新应用默认开启"的意图一致。
+            AppManager::GetInstance().SetAppEnabled(info.id.c_str(), true);
+            // 立即落盘：AsyncSettingsStore 有 300ms 去抖窗口，安装后若立刻重启/断电，
+            // enable 状态会随未落盘的脏数据一起丢掉（表现为"装上了但桌面上没有"）
+            AsyncSettingsStore::GetInstance().FlushSync();
             ESP_LOGI(TAG, "package installed: %s (%s, bundle: %s)",
                      info.name.c_str(), info.id.c_str(), pkg.dir.c_str());
             return true;
@@ -578,6 +587,8 @@ bool InstallPackage(const std::string& id) {
 
 bool UninstallPackage(const std::string& id) {
     AsyncSettingsStore::GetInstance().SetBool("dynapp", ("in_" + id).c_str(), false);
+    // 同 InstallPackage：卸载后立刻落盘，避免重启丢失
+    AsyncSettingsStore::GetInstance().FlushSync();
     const bool was = AppManager::GetInstance().UnregisterApp(id.c_str());
     if (was) {
         ESP_LOGI(TAG, "package uninstalled: %s", id.c_str());
@@ -788,6 +799,11 @@ AppInstallResult InstallFromZip(const std::string& zip_path, bool overwrite) {
     AppManager::GetInstance().UnregisterApp(app_id.c_str());
     AsyncSettingsStore::GetInstance().SetBool("dynapp", ("in_" + app_id).c_str(), true);
     dynamic_apps::ScanAndRegister();
+    // 安装即开启：显式把 en_<id> 置 true 并立刻落盘。
+    // LoadToggles 读的是 en_<id>（缺键才用默认 true），若 NVS 里残留
+    // en_<id>=false，新装的 app 就会一直停在"关闭"态、永远不上桌面。
+    AppManager::GetInstance().SetAppEnabled(app_id.c_str(), true);
+    AsyncSettingsStore::GetInstance().FlushSync();
     HomeScreenRequestAppsRefresh();
 
     ESP_LOGI(TAG, "app %s (%s) installed/updated successfully to %s",
