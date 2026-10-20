@@ -60,6 +60,14 @@ static int s_dots_made[N][N];
 static lv_obj_t *s_flag_obj[N][N];
 static lv_obj_t *s_mine_obj[N][N];
 
+// 每格上次渲染的状态指纹：变了才真正去动 LVGL 对象。
+// 墨水屏局刷按脏区面积计费，全表 81 格重绘一次要几百毫秒，
+// 会把紧接着的下一次点击挤掉。
+typedef struct {
+    uint8_t val;    // 打包状态: bit0=open bit1=flag bit2=mine bit3..=around
+} RenderState;
+static RenderState s_rendered[N][N];
+
 static lv_obj_t *s_scr = NULL;
 static lv_obj_t *s_info_lbl = NULL;
 static int s_move_count = 0;
@@ -120,6 +128,10 @@ static void reset_board(int diff_idx) {
     s_first_click = 1;
     s_move_count = 0;
     s_last_full_refresh = 0;
+    // 用 0xFF 哨兵而不是 0：指纹 val 的合法取值最大 0x47，
+    // 而"未翻开 + 周围无雷"的格子指纹正好是 0 —— 若用 0 初始化，
+    // 这些格子首次渲染会被指纹短路跳过，边框没画上，格线就宽窄不一。
+    memset(s_rendered, 0xFF, sizeof(s_rendered));
 }
 
 // 统计周围雷数（已插旗 + 实际雷）
@@ -271,6 +283,14 @@ static void render_cell(int r, int c) {
     if (cell == NULL) return;
     const Cell *cc = &s_cells[r][c];
 
+    // 指纹一致 = 这格外观没变 → 跳过，避免无谓的脏区
+    const uint8_t val = (uint8_t)((cc->open ? 1 : 0) | (cc->flag ? 2 : 0) |
+                                  (cc->mine ? 4 : 0) | (cc->around << 3));
+    if (s_rendered[r][c].val == val) {
+        return;
+    }
+    s_rendered[r][c].val = val;
+
     // 未翻开的格子用 2px 边框（墨水屏上表示"还没揭"），翻开的去掉边框
     if (cc->open) {
         lv_obj_set_style_border_side(cell, LV_BORDER_SIDE_NONE, 0);
@@ -383,11 +403,53 @@ static int load_game(void) {
     s_first_click = 0;
     s_move_count = 0;
     s_last_full_refresh = 0;
+    memset(s_rendered, 0xFF, sizeof(s_rendered));
     compute_around();
     return 1;
 }
 
 // ================= 交互 =================
+// ================= 空闲维护：落盘 与 全刷 分开 =================
+//   落盘(3.5s)：操作只改内存，停手 3.5s 后写一次 SD。
+//   全刷(6s)  ：全刷 480x800 = 38 万像素，墨水屏要 2~3 秒，期间 LVGL/触摸都被
+//                阻塞，注入的"按下"会被 LVGL 当成手指移动 → CLICKED 丢失。
+//                所以全刷必须等到"真空闲"（6 秒无操作）才做，绝不能在连续操作
+//                途中触发 —— 否则一次全刷就会让后面一整串操作全部失效。
+static lv_timer_t *s_save_timer = NULL;
+static lv_timer_t *s_refresh_timer = NULL;
+static int s_save_dirty = 0;
+
+static void idle_save_cb(lv_timer_t *tmr) {
+    if (s_save_dirty) {
+        s_save_dirty = 0;
+        save_game();
+    }
+    lv_timer_delete(tmr);
+    s_save_timer = NULL;
+}
+
+static void idle_full_refresh_cb(lv_timer_t *tmr) {
+    if (s_move_count - s_last_full_refresh >= FULL_REFRESH_EVERY) {
+        s_last_full_refresh = s_move_count;
+        dynapp_epd_full_refresh();
+    }
+    lv_timer_delete(tmr);
+    s_refresh_timer = NULL;
+}
+
+static void schedule_idle_maintenance(void) {
+    s_save_dirty = 1;
+    if (s_save_timer != NULL) {
+        lv_timer_delete(s_save_timer);
+    }
+    s_save_timer = lv_timer_create(idle_save_cb, 3500, NULL);
+
+    if (s_refresh_timer != NULL) {
+        lv_timer_delete(s_refresh_timer);
+    }
+    s_refresh_timer = lv_timer_create(idle_full_refresh_cb, 6000, NULL);
+}
+
 static void on_cell_clicked(lv_event_t *e) {
     const int idx = (int)(intptr_t)lv_event_get_user_data(e);
     const int r = idx / N, c = idx % N;
@@ -400,18 +462,14 @@ static void on_cell_clicked(lv_event_t *e) {
     } else {
         reveal_at(r, c);
     }
-    save_game();
-    if (s_move_count - s_last_full_refresh >= FULL_REFRESH_EVERY) {
-        dynapp_epd_full_refresh();
-        s_last_full_refresh = s_move_count;
-    }
+    schedule_idle_maintenance();
 }
 
 static void on_cell_long_pressed(lv_event_t *e) {
     const int idx = (int)(intptr_t)lv_event_get_user_data(e);
     const int r = idx / N, c = idx % N;
     toggle_flag(r, c);
-    save_game();
+    schedule_idle_maintenance();
 }
 
 static void on_new_game_clicked(lv_event_t *e) {

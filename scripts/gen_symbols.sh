@@ -53,6 +53,9 @@ lv_obj_clear_flag lv_obj_set_style_pad_hor
 # → 自动导出表按 ELF 反推时收录不到(鸡生蛋),但 SDK 应用可能要用。
 # 这里显式列出,固件会强制引用它们并一并导出。SDK 应用用到清单外的 LVGL API 时,
 # 在此补一行即可(头文件是唯一事实源,探测编译会校验声明存在)。
+#
+# 注意:lv_obj_set_style_text_decor 只对 lv_span 有效 —— LVGL 9 的 lv_label
+# 不再把 LV_STYLE_TEXT_DECOR 传给绘制层,设在 label 上不画(实测)。
 MANUAL_LV_SYMBOLS = """
 lv_obj_set_style_text_decor
 """.split()

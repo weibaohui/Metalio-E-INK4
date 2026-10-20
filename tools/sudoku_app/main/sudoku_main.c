@@ -62,10 +62,29 @@ static int s_undo_count = 0;
 static lv_obj_t *s_scr = NULL;
 static lv_obj_t *s_cells[N][N];
 static lv_obj_t *s_cell_lbls[N][N];
+// 格子状态标记条：提示揭示=顶部细线，冲突=底部粗线。
+// LVGL 9 的 lv_label 不再把 LV_STYLE_TEXT_DECOR 传给绘制层（只有 lv_span 支持），
+// lv_obj_set_style_text_decor 设了也不画，所以只能用几何标记。
+static lv_obj_t *s_mark_obj[N][N];
+
+// 每格上次渲染的状态指纹：变了才真正去动 LVGL 对象。
+// 墨水屏局刷按脏区面积计费，全表 81 格重绘一次要几百毫秒，
+// 会把紧接着的下一次点击挤掉（实测连点时约 1/3 的操作被吞）。
+typedef struct {
+    uint8_t val;    // 格子数字
+    uint8_t flags;  // 状态位
+} RenderState;
+static RenderState s_rendered[N][N];
+#define RS_GIVEN    0x01
+#define RS_CONFLICT 0x02
+#define RS_REVEAL   0x04
+#define RS_SELECTED 0x08
 static lv_obj_t *s_info_lbl = NULL;
 static int s_move_count = 0;
 static int s_last_full_refresh = 0;
 #define FULL_REFRESH_EVERY 15
+
+static void save_game(void);
 
 // ---- 字体 ----
 static const lv_font_t *ui_font(void) {
@@ -211,6 +230,7 @@ static void new_game(int diff_idx) {
     s_move_count = 0;
     s_last_full_refresh = 0;
     s_undo_count = 0;
+    memset(s_rendered, 0xFF, sizeof(s_rendered));
 }
 
 // 冲突检测：同行/同列/同宫出现重复数字的格子全部标出
@@ -254,10 +274,19 @@ static void apply_cell_style(int r, int c) {
     if (cell == NULL || lbl == NULL) return;
 
     const int selected = (r == s_sel_r && c == s_sel_c);
-    const int peer = (s_sel_r >= 0 &&
-                      (r == s_sel_r || c == s_sel_c ||
-                       ((r / 3) == (s_sel_r / 3) && (c / 3) == (s_sel_c / 3))));
     const int conflict = s_conflict[r][c] ? 1 : 0;
+
+    // 指纹一致 = 这格外观没变 → 跳过，避免无谓的脏区
+    uint8_t flags = 0;
+    if (s_given[r][c]) flags |= RS_GIVEN;
+    if (conflict) flags |= RS_CONFLICT;
+    if (s_reveal[r][c]) flags |= RS_REVEAL;
+    if (selected) flags |= RS_SELECTED;
+    if (s_rendered[r][c].val == s_user[r][c] && s_rendered[r][c].flags == flags) {
+        return;
+    }
+    s_rendered[r][c].val = s_user[r][c];
+    s_rendered[r][c].flags = flags;
 
     // 背景：选中格反白(黑底白字)——墨水屏上对比最强的选中指示
     if (selected) {
@@ -269,15 +298,20 @@ static void apply_cell_style(int r, int c) {
 
     // 关联格(同行/同列/同宫)加一圈细框。注意：1bpp 单色屏上浅灰背景会被
     // 直接压成纯白、看不出差别(实测像素完全一致)，只有加粗边缘才有效。
-    if (peer && !selected) {
+    // 边框：只在"冲突"和"选中"两种强指示上用。
+    // 曾经给同行/同列/同宫加 1px 细框做关联高亮，但 1bpp 上 1px 细框和 1px 宫格线
+    // 几乎分不出来，却让每次选格要重绘约 20 格 → 脏区覆盖整行整列 → 局刷变慢，
+    // 紧接着的下一次点击 press 被 LVGL 合并掉（连点时稳定丢操作）。去掉更划算。
+    if (conflict) {
+        // 冲突格：边框加粗，和底部粗横条一起构成双重指示
         lv_obj_set_style_border_side(cell, LV_BORDER_SIDE_FULL, 0);
-        lv_obj_set_style_border_width(cell, 1, 0);
+        lv_obj_set_style_border_width(cell, 3, 0);
         lv_obj_set_style_border_color(cell, lv_color_black(), 0);
     } else {
         lv_obj_set_style_border_side(cell, LV_BORDER_SIDE_NONE, 0);
     }
 
-    // 数字：题目给定的用粗体，提示揭示的加下划线，冲突的加删除线
+    // 数字：题目给定的用粗体，用户填的用常规
     const uint8_t v = s_user[r][c];
     char buf[4] = {0};
     if (v) snprintf(buf, sizeof(buf), "%u", v);
@@ -288,10 +322,22 @@ static void apply_cell_style(int r, int c) {
     if (f != NULL) lv_obj_set_style_text_font(lbl, f, 0);
     lv_obj_set_style_text_color(lbl, selected ? lv_color_white() : lv_color_black(), 0);
 
-    lv_text_decor_t decor = LV_TEXT_DECOR_NONE;
-    if (s_reveal[r][c]) decor |= LV_TEXT_DECOR_UNDERLINE;
-    if (conflict) decor |= LV_TEXT_DECOR_STRIKETHROUGH;
-    lv_obj_set_style_text_decor(lbl, decor, 0);
+    // 状态标记条（几何，1bpp 上唯一可靠）：
+    //   提示揭示 → 顶部细线；冲突 → 底部粗线（边框也已加粗）
+    lv_obj_t *mark = s_mark_obj[r][c];
+    if (mark != NULL) {
+        if (conflict) {
+            lv_obj_set_size(mark, 34, 4);
+            lv_obj_set_pos(mark, 8, 42);
+            lv_obj_clear_flag(mark, LV_OBJ_FLAG_HIDDEN);
+        } else if (s_reveal[r][c]) {
+            lv_obj_set_size(mark, 20, 2);
+            lv_obj_set_pos(mark, 15, 2);
+            lv_obj_clear_flag(mark, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 static void refresh_all_cells(void) {
@@ -309,11 +355,51 @@ static void update_info_line(void) {
     lv_label_set_text(s_info_lbl, buf);
 }
 
-static void maybe_full_refresh(void) {
-    if (s_move_count - s_last_full_refresh >= FULL_REFRESH_EVERY) {
-        dynapp_epd_full_refresh();
-        s_last_full_refresh = s_move_count;
+// ================= 空闲维护：落盘 与 全刷 分开 =================
+// 两个独立的空闲定时器：
+//   落盘(3.5s)：操作只改内存，停手 3.5s 后写一次 SD。
+//   全刷(6s)  ：全刷 480x800 = 38 万像素，墨水屏要 2~3 秒，期间 LVGL/触摸都被
+//                阻塞，注入的"按下"会被 LVGL 当成手指移动 → CLICKED 丢失。
+//                所以全刷必须等到"真空闲"（6 秒无操作）才做，绝不能在连续操作
+//                途中触发 —— 否则一次全刷就会让后面一整串操作全部失效。
+// 操作本身不再同步写 SD（SD 写在 LVGL 任务里会阻塞事件处理，同样丢点击）。
+static lv_timer_t *s_save_timer = NULL;
+static lv_timer_t *s_refresh_timer = NULL;
+static int s_save_dirty = 0;
+
+static void idle_save_cb(lv_timer_t *tmr) {
+    if (s_save_dirty) {
+        s_save_dirty = 0;
+        save_game();
     }
+    lv_timer_delete(tmr);
+    s_save_timer = NULL;
+}
+
+static void idle_full_refresh_cb(lv_timer_t *tmr) {
+    if (s_move_count - s_last_full_refresh >= FULL_REFRESH_EVERY) {
+        s_last_full_refresh = s_move_count;
+        dynapp_epd_full_refresh();
+    }
+    lv_timer_delete(tmr);
+    s_refresh_timer = NULL;
+}
+
+static void schedule_idle_maintenance(void) {
+    s_save_dirty = 1;
+    if (s_save_timer != NULL) {
+        lv_timer_delete(s_save_timer);
+    }
+    s_save_timer = lv_timer_create(idle_save_cb, 3500, NULL);
+
+    if (s_refresh_timer != NULL) {
+        lv_timer_delete(s_refresh_timer);
+    }
+    s_refresh_timer = lv_timer_create(idle_full_refresh_cb, 6000, NULL);
+}
+
+static void maybe_full_refresh(void) {
+    schedule_idle_maintenance();
 }
 
 static void check_win(void) {
@@ -325,7 +411,7 @@ static void check_win(void) {
             if (s_conflict[r][c]) return;  // 有冲突就不算完成
         }
     }
-    dynapp_modal_alert("完成！", "恭喜完成本题，步数与用时已记录。", "再来一局");
+    dynapp_modal_alert("完成！", "恭喜完成本题，步数已记录。", "再来一局");
 }
 
 static void push_undo(void) {
@@ -355,6 +441,7 @@ static void do_undo(void) {
     detect_conflicts();
     refresh_all_cells();
     update_info_line();
+    schedule_idle_maintenance();
     dynapp_toast_show("已撤销一步", 1200);
 }
 
@@ -366,8 +453,6 @@ static void on_cell_clicked(lv_event_t *e) {
     s_sel_c = c;
     refresh_all_cells();
 }
-
-static void save_game(void);
 
 static void on_digit_clicked(lv_event_t *e) {
     const int d = (int)(intptr_t)lv_event_get_user_data(e);
@@ -395,8 +480,7 @@ static void on_digit_clicked(lv_event_t *e) {
     detect_conflicts();
     refresh_all_cells();
     update_info_line();
-    save_game();
-    maybe_full_refresh();
+    schedule_idle_maintenance();
     check_win();
 }
 
@@ -420,7 +504,7 @@ static void on_erase_clicked(lv_event_t *e) {
     detect_conflicts();
     refresh_all_cells();
     update_info_line();
-    save_game();
+    schedule_idle_maintenance();
 }
 
 static void on_undo_clicked(lv_event_t *e) {
@@ -464,6 +548,7 @@ static void on_new_game_clicked(lv_event_t *e) {
     new_game(next);
     refresh_all_cells();
     update_info_line();
+    save_game();          // 立即落盘：退出前崩溃/断电会丢掉新题
     dynapp_toast_show(kDifficulties[next].name, 1200);
     dynapp_epd_full_refresh();
 }
@@ -563,6 +648,10 @@ static int load_game(void) {
     s_move_count = 0;
     s_last_full_refresh = 0;
     s_undo_count = 0;
+    // 用 0xFF 哨兵而不是 0：指纹 flags 的合法取值最大 0x0F，
+    // 而"空格 + 无任何状态"的格子指纹正好是 (0,0) —— 若用 0 初始化，
+    // 这些格子首次渲染会被指纹短路跳过，背景/边框根本没设过。
+    memset(s_rendered, 0xFF, sizeof(s_rendered));
     detect_conflicts();
     return 1;
 }
@@ -597,6 +686,7 @@ static void on_screen_deleted(lv_event_t *e) {
     s_scr = NULL;
     memset(s_cells, 0, sizeof(s_cells));
     memset(s_cell_lbls, 0, sizeof(s_cell_lbls));
+    memset(s_mark_obj, 0, sizeof(s_mark_obj));
     s_info_lbl = NULL;
 }
 
@@ -657,6 +747,17 @@ static void *sudoku_create(void) {
 
             s_cells[r][c] = cell;
             s_cell_lbls[r][c] = lbl;
+
+            // 状态标记条（默认隐藏）
+            lv_obj_t *mark = lv_obj_create(cell);
+            lv_obj_remove_style_all(mark);
+            lv_obj_set_size(mark, 20, 2);
+            lv_obj_set_pos(mark, 15, 2);
+            lv_obj_set_style_bg_color(mark, lv_color_black(), 0);
+            lv_obj_set_style_bg_opa(mark, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(mark, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN);
+            s_mark_obj[r][c] = mark;
         }
     }
 
