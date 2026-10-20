@@ -133,11 +133,12 @@ esp_err_t HandleGetIndex(httpd_req_t* req) {
 }
 
 // HTTP Handler: GET /api/fs/roots
-// 前端用它拿到「传书」页签的图书库路径,避免在页面里硬编码产品目录
+// 前端用它拿到「传书」「壁纸」页签的目标目录,避免在页面里硬编码产品目录
 esp_err_t HandleGetRoots(httpd_req_t* req) {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "success", true);
     cJSON_AddStringToObject(root, "books", WifiFileService::GetBooksRelDir());
+    cJSON_AddStringToObject(root, "wallpaper", WifiFileService::GetWallpaperRelDir());
     cJSON_AddStringToObject(root, "root", "/");
     char* json_str = cJSON_PrintUnformatted(root);
     httpd_resp_set_type(req, "application/json");
@@ -495,20 +496,38 @@ WifiFileService& WifiFileService::GetInstance() {
     return instance;
 }
 
+namespace {
+
+// 把绝对路径(/sdcard/...)转成相对 SD 根的路径(/...),
+// 供 Web 端直接拼到 /api/fs/list?path= 上
+std::string RelDirFromAbs(const char* abs) {
+    const std::string a(abs);
+    const std::string root(kSdMountRoot);
+    std::string rel = (a.compare(0, root.size(), root) == 0) ? a.substr(root.size()) : a;
+    if (rel.empty()) rel = "/";
+    return rel;
+}
+
+}  // namespace
+
 const char* WifiFileService::GetBooksRelDir() {
-    // SD_PATH_BOOKS 形如 /sdcard/metalio/e-ink/books,Web 端用相对 SD 根的路径
     static std::string rel;
-    if (rel.empty()) {
-        std::string abs(SD_PATH_BOOKS);
-        const std::string root(kSdMountRoot);
-        rel = abs.compare(0, root.size(), root) == 0 ? abs.substr(root.size()) : abs;
-        if (rel.empty()) rel = "/";
-    }
+    if (rel.empty()) rel = RelDirFromAbs(SD_PATH_BOOKS);
     return rel.c_str();
 }
 
 const char* WifiFileService::GetBooksAbsDir() {
     return SD_PATH_BOOKS;
+}
+
+const char* WifiFileService::GetWallpaperRelDir() {
+    static std::string rel;
+    if (rel.empty()) rel = RelDirFromAbs(SD_PATH_WALLPAPER);
+    return rel.c_str();
+}
+
+const char* WifiFileService::GetWallpaperAbsDir() {
+    return SD_PATH_WALLPAPER;
 }
 
 bool WifiFileService::Start(uint16_t port) {

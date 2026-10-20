@@ -270,11 +270,18 @@ static void *wififile_create(void) {
     lv_obj_set_style_text_color(s_storage_lbl, lv_color_black(), 0);
 
     lv_obj_t *fmt_lbl = lv_label_create(card1);
-    lv_label_set_text(fmt_lbl, "传书支持: .txt / .epub / .ebook / .pdf (直存图书库)");
+    lv_label_set_text(fmt_lbl, "传书: .txt/.epub/.ebook/.pdf");
     lv_obj_set_width(fmt_lbl, lv_pct(100));
     lv_label_set_long_mode(fmt_lbl, LV_LABEL_LONG_WRAP);
     if (f_ui) lv_obj_set_style_text_font(fmt_lbl, f_ui, 0);
     lv_obj_set_style_text_color(fmt_lbl, lv_color_black(), 0);
+
+    lv_obj_t *fmt_lbl2 = lv_label_create(card1);
+    lv_label_set_text(fmt_lbl2, "壁纸: .png/.jpg/.jpeg/.a2i1");
+    lv_obj_set_width(fmt_lbl2, lv_pct(100));
+    lv_label_set_long_mode(fmt_lbl2, LV_LABEL_LONG_WRAP);
+    if (f_ui) lv_obj_set_style_text_font(fmt_lbl2, f_ui, 0);
+    lv_obj_set_style_text_color(fmt_lbl2, lv_color_black(), 0);
 
     // 2. 中部卡片：手机扫码直达
     lv_obj_t *card2 = make_card(body, 12);

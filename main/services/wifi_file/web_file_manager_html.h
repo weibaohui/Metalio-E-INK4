@@ -72,6 +72,7 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
 
   <div class="tabs">
     <button class="tab-btn active" data-mode="books" onclick="switchMode('books')">📖 传书</button>
+    <button class="tab-btn" data-mode="wallpaper" onclick="switchMode('wallpaper')">🖼️ 壁纸</button>
     <button class="tab-btn" data-mode="fs" onclick="switchMode('fs')">💾 文件管理</button>
   </div>
 
@@ -126,9 +127,35 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
 
 <script>
 const BOOK_EXTS = ['txt', 'epub', 'ebook', 'pdf'];
-let mode = 'books';               // 'books' 传书 | 'fs' 全盘文件管理
+const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'a2i1', 'bin'];
+
+// 三个页签共用一套列表/上传逻辑,差异只在目标目录、允许的扩展名与文案
+const MODE_CFG = {
+  books: {
+    dir: 'books', exts: BOOK_EXTS, icon: '📖',
+    title: '点击选择或拖放书籍到此处(可多选)',
+    tip: '传书到设备书库,传完立即可用阅读器打开 (.txt/.epub/.ebook/.pdf)',
+    crumb: '📖 设备书库', empty: '书库暂无书籍,拖一本书进来试试'
+  },
+  wallpaper: {
+    dir: 'wallpaper', exts: IMAGE_EXTS, icon: '🖼️',
+    title: '点击选择或拖放图片到此处(可多选)',
+    tip: '传壁纸到设备壁纸库,再打开设备「待机壁纸」应用挑选 (.png/.jpg/.a2i1)',
+    crumb: '🖼️ 设备壁纸库', empty: '壁纸库暂无图片,拖一张进来试试'
+  },
+  fs: {
+    dir: null, exts: null, icon: '📂',
+    title: '点击选择或拖放文件到此处',
+    tip: '支持任意文件,直传存入当前目录',
+    crumb: null, empty: '此目录为空'
+  }
+};
+
+let mode = 'books';               // 'books' 传书 | 'wallpaper' 壁纸 | 'fs' 全盘文件管理
 let currentPath = '/';
-let booksPath = '/metalio/e-ink/books';
+let roots = { books: '/metalio/e-ink/books', wallpaper: '/metalio/e-ink/wallpaper' };
+
+function cfg() { return MODE_CFG[mode]; }
 
 function formatSize(bytes) {
   if (bytes === 0) return '0 B';
@@ -142,7 +169,7 @@ function getFileIcon(name, isDir) {
   if (isDir) return '📁';
   const ext = name.split('.').pop().toLowerCase();
   if (BOOK_EXTS.includes(ext)) return '📖';
-  if (['png', 'jpg', 'jpeg', 'bmp', 'a2i1'].includes(ext)) return '🖼️';
+  if (IMAGE_EXTS.includes(ext)) return '🖼️';
   if (['mp3', 'wav', 'ogg', 'aac', 'flac'].includes(ext)) return '🎵';
   if (['ttf', 'otf', 'woff'].includes(ext)) return '🔤';
   return '📄';
@@ -152,17 +179,20 @@ function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
-function isBookFile(name) {
+function isAllowedExt(name) {
+  const exts = cfg().exts;
+  if (!exts) return true;
   const ext = name.split('.').pop().toLowerCase();
-  return BOOK_EXTS.includes(ext);
+  return exts.includes(ext);
 }
 
-// 读取设备上的图书库路径(服务端权威,页面不硬编码)
+// 读取设备上的图书库/壁纸库路径(服务端权威,页面不硬编码)
 async function loadRoots() {
   try {
     const res = await fetch('/api/fs/roots');
     const data = await res.json();
-    if (data && data.books) booksPath = data.books;
+    if (data && data.books) roots.books = data.books;
+    if (data && data.wallpaper) roots.wallpaper = data.wallpaper;
   } catch (err) {
     /* 保持默认路径 */
   }
@@ -170,35 +200,33 @@ async function loadRoots() {
 
 function switchMode(m) {
   mode = m;
-  const isBooks = (m === 'books');
+  const c = cfg();
   document.querySelectorAll('.tab-btn').forEach(b => {
     b.classList.toggle('active', b.getAttribute('data-mode') === m);
   });
 
-  // 传书页签固定落在书库目录,目录类操作隐藏
-  document.getElementById('btnUp').style.display = isBooks ? 'none' : '';
-  document.getElementById('btnMkdir').style.display = isBooks ? 'none' : '';
-  document.getElementById('fileInput').accept = isBooks ? '.txt,.epub,.ebook,.pdf' : '';
+  // 传书/壁纸页签固定落在各自的库目录,目录类操作隐藏
+  const fixed = !!c.dir;
+  document.getElementById('btnUp').style.display = fixed ? 'none' : '';
+  document.getElementById('btnMkdir').style.display = fixed ? 'none' : '';
+  document.getElementById('fileInput').accept = c.exts ? c.exts.map(e => '.' + e).join(',') : '';
 
-  document.getElementById('dzIcon').innerText = isBooks ? '📖' : '📂';
-  document.getElementById('dzTitle').innerText = isBooks
-      ? '点击选择或拖放书籍到此处(可多选)'
-      : '点击选择或拖放文件到此处';
-  document.getElementById('dzTip').innerText = isBooks
-      ? '传书到设备书库,传完立即可用阅读器打开 (.txt/.epub/.ebook/.pdf)'
-      : '支持任意文件,直传存入当前目录';
+  document.getElementById('dzIcon').innerText = c.icon;
+  document.getElementById('dzTitle').innerText = c.title;
+  document.getElementById('dzTip').innerText = c.tip;
 
-  loadDir(isBooks ? booksPath : '/');
+  loadDir(fixed ? roots[c.dir] : '/');
 }
 
 function renderBreadcrumbs(path) {
   const container = document.getElementById('breadcrumbs');
   container.innerHTML = '';
 
-  if (mode === 'books') {
+  const c = cfg();
+  if (c.crumb) {
     const cur = document.createElement('span');
     cur.className = 'breadcrumb-cur';
-    cur.innerText = '📖 设备书库 (' + path + ')';
+    cur.innerText = c.crumb + ' (' + path + ')';
     container.appendChild(cur);
     return;
   }
@@ -245,8 +273,7 @@ async function loadDir(path) {
     const data = await res.json();
 
     if (!data.items || data.items.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" class="empty-tip">' +
-          (mode === 'books' ? '书库暂无书籍,拖一本书进来试试' : '此目录为空') + '</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-tip">' + cfg().empty + '</td></tr>';
     } else {
       tbody.innerHTML = '';
       data.items.forEach(item => {
@@ -314,7 +341,7 @@ async function loadDir(path) {
 }
 
 function goUp() {
-  if (mode === 'books' || currentPath === '/') return;
+  if (cfg().dir || currentPath === '/') return;
   const parts = currentPath.split('/').filter(p => p.length > 0);
   parts.pop();
   loadDir(parts.length === 0 ? '/' : '/' + parts.join('/'));
@@ -349,7 +376,7 @@ async function deleteItem(name, isDir) {
 }
 
 async function promptMkdir() {
-  if (mode === 'books') return;
+  if (cfg().dir) return;
   const name = prompt('请输入新文件夹名称：');
   if (!name || name.trim() === '') return;
   const cleanName = name.trim();
@@ -370,11 +397,12 @@ async function handleFileSelect(files) {
   if (!files || files.length === 0) return;
 
   let list = Array.from(files);
-  if (mode === 'books') {
-    const skipped = list.filter(f => !isBookFile(f.name)).map(f => f.name);
-    list = list.filter(f => isBookFile(f.name));
+  const exts = cfg().exts;
+  if (exts) {
+    const skipped = list.filter(f => !isAllowedExt(f.name)).map(f => f.name);
+    list = list.filter(f => isAllowedExt(f.name));
     if (skipped.length > 0) {
-      alert('仅支持图书格式 (.txt/.epub/.ebook/.pdf)，已跳过:\n' + skipped.join('\n'));
+      alert('本页只接受 ' + exts.map(e => '.' + e).join('/') + ' 格式,已跳过:\n' + skipped.join('\n'));
     }
     if (list.length === 0) return;
   }
@@ -447,7 +475,7 @@ dz.addEventListener('drop', (e) => {
   }
 });
 
-// 初始化:先取图书库路径,再切到传书页签
+// 初始化:先取图书库/壁纸库路径,再切到传书页签
 window.onload = async () => {
   await loadRoots();
   switchMode('books');

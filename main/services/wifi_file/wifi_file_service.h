@@ -82,6 +82,17 @@ public:
      */
     static const char* GetBooksAbsDir();
 
+    /**
+     * @brief 壁纸库目录(相对 SD 根),供 Web 端「壁纸」页签直达
+     *        例: /metalio/e-ink/wallpaper
+     */
+    static const char* GetWallpaperRelDir();
+
+    /**
+     * @brief 壁纸库目录绝对路径 (例: /sdcard/metalio/e-ink/wallpaper)
+     */
+    static const char* GetWallpaperAbsDir();
+
 private:
     WifiFileService() = default;
     ~WifiFileService() { Stop(); }
