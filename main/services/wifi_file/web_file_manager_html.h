@@ -64,12 +64,15 @@ const char kFileManagerHtml[] = R"rawliteral(<!DOCTYPE html>
   @media (max-width: 560px) {
     .file-table th.col-date, .file-table td.col-date { display: none; }
     .file-sub { display: block; }
-    .file-table th:nth-child(2) { width: 64px; }
-    .file-table th:nth-child(4) { width: 96px; }
-    .file-table th, .file-table td { padding: 9px 5px; }
-    .file-actions { gap: 4px; }
-    .btn-sm { padding: 4px 7px; font-size: 11px; }
+    .file-table th:nth-child(2) { width: 56px; }
+    .file-table th:nth-child(4) { width: 80px; }
+    .file-table th, .file-table td { padding: 9px 4px; }
+    .file-actions { gap: 3px; }
+    .btn-sm { padding: 4px 6px; font-size: 10px; }
     .file-size { font-size: 11px; }
+    .file-name { font-size: 12px; }
+    .dropzone { padding: 16px 10px; }
+    .dropzone-icon { font-size: 24px; }
   }
   .file-icon { font-size: 18px; flex-shrink: 0; }
   .file-size { color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -238,11 +241,29 @@ function isAllowedExt(name) {
   return exts.includes(ext);
 }
 
+// 带超时的 fetch:设备无响应/连接被占满时给出明确错误,
+// 而不是永远停在"正在读取目录..."
+async function fetchJson(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs || 12000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error('请求超时，请检查设备是否已断开 WiFi');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // 读取设备上的图书库/壁纸库路径(服务端权威,页面不硬编码)
 async function loadRoots() {
   try {
-    const res = await fetch('/api/fs/roots');
-    const data = await res.json();
+    const data = await fetchJson('/api/fs/roots', 8000);
     if (data && data.books) roots.books = data.books;
     if (data && data.wallpaper) roots.wallpaper = data.wallpaper;
   } catch (err) {
@@ -323,10 +344,8 @@ async function loadDir(path, page) {
 
   try {
     const sizeQ = (pageSize === 0) ? '&all=1' : '&per_page=' + pageSize;
-    const res = await fetch('/api/fs/list?path=' + encodeURIComponent(path) +
-                            '&page=' + page + sizeQ);
-    if (!res.ok) throw new Error('读取目录失败');
-    const data = await res.json();
+    const data = await fetchJson('/api/fs/list?path=' + encodeURIComponent(path) +
+                                  '&page=' + page + sizeQ, 15000);
 
     // 服务端会把越界页码回退到最后一页，这里同步回来
     currentPage = data.page || 1;
