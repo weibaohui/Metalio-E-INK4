@@ -768,6 +768,7 @@
     ESP_ELFSYM_EXPORT(dynapp_wifi_file_get_port),
     ESP_ELFSYM_EXPORT(dynapp_wifi_file_get_url),
     ESP_ELFSYM_EXPORT(dynapp_wifi_file_is_running),
+    ESP_ELFSYM_EXPORT(dynapp_wifi_file_set_callback),
     ESP_ELFSYM_EXPORT(dynapp_wifi_file_start),
     ESP_ELFSYM_EXPORT(dynapp_wifi_file_stop),
     ESP_ELFSYM_EXPORT(dynapp_wifi_transfer_get_port),

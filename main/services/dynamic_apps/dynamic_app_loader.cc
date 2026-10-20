@@ -375,6 +375,18 @@ bool ParseManifestDir(const std::string &dir_path, ManifestInfo &out) {
     return true;
 }
 
+// 退役的应用 id:功能已被并入其它应用,SD 卡上残留的老包不再出现在桌面与商店。
+// 例:"transfer"(WiFi 传书)已并入 "wififile"(WiFi 传输),见 v2.0.58 SDK CHANGELOG。
+bool IsRetiredAppId(const std::string& id) {
+    static const char *kRetiredIds[] = {"transfer"};
+    for (const char *rid : kRetiredIds) {
+        if (id == rid) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // 注册有效包（不做安装态判断）。已注册返回 0，新注册返回 1。
 int RegisterDir(const std::string &dir_path, const ManifestInfo &info) {
     if (AppManager::GetInstance().GetAppById(info.id.c_str()) != nullptr) {
@@ -403,6 +415,10 @@ int RegisterDir(const std::string &dir_path, const ManifestInfo &info) {
 int RegisterDirIfInstalled(const std::string &dir_path) {
     ManifestInfo info;
     if (!ParseManifestDir(dir_path, info)) {
+        return 0;
+    }
+    if (IsRetiredAppId(info.id)) {
+        ESP_LOGI(TAG, "dynamic app %s retired, skip", info.id.c_str());
         return 0;
     }
     const std::string flag_key = "in_" + info.id;
@@ -513,6 +529,9 @@ std::vector<DynPackage> ListPackages() {
     for (const auto &d : dirs) {
         ManifestInfo info;
         if (!ParseManifestDir(d, info)) {
+            continue;
+        }
+        if (IsRetiredAppId(info.id)) {
             continue;
         }
         bool seen = false;

@@ -1,5 +1,6 @@
 // tools/wififile_app/main/wififile_main.c
-// WiFi 文件管理 动态应用：严格对齐 2739acf wifi_file_screen 完整界面与逻辑
+// WiFi 传输 动态应用：传书(直存设备书库) + 全盘文件管理,合一的唯一 WiFi 应用。
+// 旧「WiFi 传书」(transfer)应用已并入本应用,功能不再单独提供。
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,7 +21,7 @@ static lv_obj_t *s_storage_lbl = NULL;
 static lv_obj_t *s_log_lbl = NULL;
 static lv_timer_t *s_timer = NULL;
 
-static char s_recent_log[256] = "服务就绪，点击下方按钮启动管理";
+static char s_recent_log[256] = "服务就绪，点击下方按钮启动";
 
 static void *wififile_create(void);
 
@@ -92,7 +93,7 @@ static void refresh_ui(void) {
     }
 
     if (s_switch_btn_lbl) {
-        lv_label_set_text(s_switch_btn_lbl, running ? "停止文件管理服务" : "启动文件管理服务");
+        lv_label_set_text(s_switch_btn_lbl, running ? "停止传输服务" : "启动传输服务");
     }
 
     // 2. 二维码展示与更新
@@ -106,7 +107,7 @@ static void refresh_ui(void) {
         } else {
             lv_obj_add_flag(s_qr_box, LV_OBJ_FLAG_HIDDEN);
             if (s_qr_tip_lbl) {
-                lv_label_set_text(s_qr_tip_lbl, "请先启动管理服务以生成直达二维码");
+                lv_label_set_text(s_qr_tip_lbl, "请先启动服务以生成直达二维码");
             }
         }
     }
@@ -133,21 +134,40 @@ static void on_toggle_clicked(lv_event_t *e) {
     (void)e;
     if (dynapp_wifi_file_is_running()) {
         dynapp_wifi_file_stop();
-        snprintf(s_recent_log, sizeof(s_recent_log), "文件管理服务已停止");
-        dynapp_toast_show("WiFi 文件服务已停止", 1500);
+        snprintf(s_recent_log, sizeof(s_recent_log), "传输服务已停止");
+        dynapp_toast_show("WiFi 传输服务已停止", 1500);
     } else {
         if (!dynapp_is_network_ready()) {
-            dynapp_modal_alert("提示", "当前设备未连接 WiFi，请先进入设置连接 WiFi 后再启动文件管理服务。", "确定");
+            dynapp_modal_alert("提示", "当前设备未连接 WiFi，请先进入设置连接 WiFi 后再启动传输服务。", "确定");
             return;
         }
         if (dynapp_wifi_file_start()) {
             snprintf(s_recent_log, sizeof(s_recent_log), "服务已启动，请在浏览器中输入网址访问");
-            dynapp_toast_show("WiFi 文件服务已启动", 1500);
+            dynapp_toast_show("WiFi 传输服务已启动", 1500);
         } else {
             dynapp_modal_alert("错误", "启动服务失败，端口可能已被占用", "确定");
         }
     }
     refresh_ui();
+}
+
+// Web 端文件操作活动回传(传书/上传/删除/新建目录)
+static void on_fs_activity_cb(const char* action, const char* path, void* user_data) {
+    (void)user_data;
+    if (!action) return;
+    if (strcmp(action, "传书") == 0) {
+        snprintf(s_recent_log, sizeof(s_recent_log), "✓ 已存入书库: %s", path ? path : "");
+        dynapp_toast_show("已收到新书", 2500);
+    } else if (strcmp(action, "上传") == 0) {
+        snprintf(s_recent_log, sizeof(s_recent_log), "✓ 已上传: %s", path ? path : "");
+    } else if (strcmp(action, "删除") == 0) {
+        snprintf(s_recent_log, sizeof(s_recent_log), "已删除: %s", path ? path : "");
+    } else if (strcmp(action, "新建目录") == 0) {
+        snprintf(s_recent_log, sizeof(s_recent_log), "已新建目录: %s", path ? path : "");
+    }
+    if (s_log_lbl && lv_obj_is_valid(s_log_lbl)) {
+        lv_label_set_text(s_log_lbl, s_recent_log);
+    }
 }
 
 static void timer_cb(lv_timer_t *tmr) {
@@ -161,6 +181,7 @@ static void on_screen_deleted(lv_event_t *e) {
         lv_timer_del(s_timer);
         s_timer = NULL;
     }
+    dynapp_wifi_file_set_callback(NULL, NULL);
     dynapp_wifi_file_stop();
 
     s_scr = NULL;
@@ -187,9 +208,7 @@ static void *wififile_create(void) {
     dynapp_vk_attach(scr, "wififile", wififile_create, wififile_on_vk_key);
 
     const lv_font_t *f_ui = fontpack_lv_font_ui();
-    const lv_font_t *f22 = get_font(22, 2);
     const lv_font_t *f24 = get_font(24, 2);
-    const lv_font_t *f26 = get_font(26, 2);
     const lv_font_t *f28 = get_font(28, 2);
 
     // 主滚动容器 (无返回顶栏，由底部 vk_home 键统一控制返回)
@@ -215,7 +234,7 @@ static void *wififile_create(void) {
     lv_obj_set_style_text_color(s_wifi_status_lbl, lv_color_black(), 0);
 
     lv_obj_t *tip_h = lv_label_create(card1);
-    lv_label_set_text(tip_h, "同局域网浏览器输入下方网址即可管理文件:");
+    lv_label_set_text(tip_h, "同局域网浏览器输入下方网址，即可传书与管理文件:");
     lv_obj_set_width(tip_h, lv_pct(100));
     lv_label_set_long_mode(tip_h, LV_LABEL_LONG_WRAP);
     if (f_ui) lv_obj_set_style_text_font(tip_h, f_ui, 0);
@@ -239,7 +258,7 @@ static void *wififile_create(void) {
     lv_obj_add_event_cb(btn, on_toggle_clicked, LV_EVENT_CLICKED, NULL);
 
     s_switch_btn_lbl = lv_label_create(btn);
-    lv_label_set_text(s_switch_btn_lbl, "启动文件管理服务");
+    lv_label_set_text(s_switch_btn_lbl, "启动传输服务");
     if (f_ui) lv_obj_set_style_text_font(s_switch_btn_lbl, f_ui, 0);
     lv_obj_set_style_text_color(s_switch_btn_lbl, lv_color_black(), 0);
     lv_obj_center(s_switch_btn_lbl);
@@ -249,6 +268,13 @@ static void *wififile_create(void) {
     lv_label_set_long_mode(s_storage_lbl, LV_LABEL_LONG_WRAP);
     if (f_ui) lv_obj_set_style_text_font(s_storage_lbl, f_ui, 0);
     lv_obj_set_style_text_color(s_storage_lbl, lv_color_black(), 0);
+
+    lv_obj_t *fmt_lbl = lv_label_create(card1);
+    lv_label_set_text(fmt_lbl, "传书支持: .txt / .epub / .ebook / .pdf (直存图书库)");
+    lv_obj_set_width(fmt_lbl, lv_pct(100));
+    lv_label_set_long_mode(fmt_lbl, LV_LABEL_LONG_WRAP);
+    if (f_ui) lv_obj_set_style_text_font(fmt_lbl, f_ui, 0);
+    lv_obj_set_style_text_color(fmt_lbl, lv_color_black(), 0);
 
     // 2. 中部卡片：手机扫码直达
     lv_obj_t *card2 = make_card(body, 12);
@@ -285,7 +311,7 @@ static void *wififile_create(void) {
     lv_obj_center(s_qr_obj);
 
     lv_obj_t *qr_subtip = lv_label_create(card2);
-    lv_label_set_text(qr_subtip, "免输网址 · 手机直接管理 SD 卡");
+    lv_label_set_text(qr_subtip, "免输网址 · 手机直接传书 / 管理文件");
     lv_obj_set_width(qr_subtip, lv_pct(100));
     lv_obj_set_style_text_align(qr_subtip, LV_TEXT_ALIGN_CENTER, 0);
     if (f_ui) lv_obj_set_style_text_font(qr_subtip, f_ui, 0);
@@ -312,6 +338,9 @@ static void *wififile_create(void) {
     if (f_ui) lv_obj_set_style_text_font(hint, f_ui, 0);
     lv_obj_set_style_text_color(hint, lv_color_black(), 0);
 
+    // 注册文件操作活动回调(传书/上传/删除实时回显)
+    dynapp_wifi_file_set_callback(on_fs_activity_cb, NULL);
+
     refresh_ui();
 
     s_timer = lv_timer_create(timer_cb, 2000, NULL);
@@ -321,7 +350,7 @@ static void *wififile_create(void) {
 void metalio_app_entry(metalio_app_desc_t *out) {
     out->abi_version = METALIO_DYNAPP_ABI_VERSION;
     out->id = "wififile";
-    out->name = "WiFi 文件管理";
+    out->name = "WiFi 传输";
     out->icon = "icon.png";
     out->create = wififile_create;
 }

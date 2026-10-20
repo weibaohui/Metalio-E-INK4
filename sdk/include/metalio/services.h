@@ -173,18 +173,24 @@ int dynapp_image_decode_l8(const char* path, int max_w, int max_h,
 // WiFi 局域网服务
 int dynapp_get_ip_address(char* out_ip, size_t max_len);
 
+// WiFi 传输(传书 + 全盘文件管理,合一的唯一服务)
 int dynapp_wifi_file_start(void);
 void dynapp_wifi_file_stop(void);
 int dynapp_wifi_file_is_running(void);
 int dynapp_wifi_file_get_port(void);
+int dynapp_wifi_file_get_url(char* out_url, size_t max_len);
+// 文件操作活动通知:动作(传书/上传/删除/新建目录) + 路径(文件名或相对路径)
+typedef void (*dynapp_fs_activity_cb_t)(const char* action, const char* path, void* user_data);
+void dynapp_wifi_file_set_callback(dynapp_fs_activity_cb_t cb, void* user_data);
 
+// deprecated: 旧「WiFi 传书」已并入 wififile,以下接口保留为空实现以维持
+// 第三方 .so 的链接兼容,不再提供服务能力。新代码请用上面的 wififile 系列。
+typedef void (*dynapp_upload_cb_t)(const char* filename, size_t size_bytes, void* user_data);
 int dynapp_wifi_transfer_start(void);
 void dynapp_wifi_transfer_stop(void);
 int dynapp_wifi_transfer_is_running(void);
 int dynapp_wifi_transfer_get_port(void);
 int dynapp_wifi_transfer_get_url(char* out_url, size_t max_len);
-int dynapp_wifi_file_get_url(char* out_url, size_t max_len);
-typedef void (*dynapp_upload_cb_t)(const char* filename, size_t size_bytes, void* user_data);
 void dynapp_wifi_transfer_set_callback(dynapp_upload_cb_t cb, void* user_data);
 
 // 模态弹窗管理器

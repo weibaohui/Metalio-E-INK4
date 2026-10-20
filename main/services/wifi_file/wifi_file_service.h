@@ -7,6 +7,10 @@
 
 namespace wifi_file {
 
+/**
+ * @brief 文件操作活动通知 (动作, 路径)
+ *        动作取值: "上传" / "删除" / "新建目录" / "传书"
+ */
 using ActivityCallback = std::function<void(const std::string& action, const std::string& path)>;
 
 class WifiFileService {
@@ -14,14 +18,14 @@ public:
     static WifiFileService& GetInstance();
 
     /**
-     * @brief 启动 WiFi 文件管理 Web 服务
-     * @param port 监听端口，默认 80
+     * @brief 启动 WiFi 传输 Web 服务 (传书 + 文件管理)
+     * @param port 监听端口，默认 80；占用时自动回退到 8088
      * @return true 启动成功，false 启动失败
      */
     bool Start(uint16_t port = 80);
 
     /**
-     * @brief 停止 WiFi 文件管理 Web 服务
+     * @brief 停止 WiFi 传输 Web 服务
      */
     void Stop();
 
@@ -41,7 +45,7 @@ public:
     std::string GetLocalIp() const;
 
     /**
-     * @brief 获取当前 Web 访问完整 URL (如 http://192.168.1.108:8080/)
+     * @brief 获取当前 Web 访问完整 URL (如 http://192.168.1.108/)
      */
     std::string GetServerUrl() const;
 
@@ -66,6 +70,17 @@ public:
             cb_copy(action, path);
         }
     }
+
+    /**
+     * @brief 图书库目录(相对 SD 根),供 Web 端「传书」页签直达
+     *        例: /metalio/e-ink/books
+     */
+    static const char* GetBooksRelDir();
+
+    /**
+     * @brief 图书库目录绝对路径 (例: /sdcard/metalio/e-ink/books)
+     */
+    static const char* GetBooksAbsDir();
 
 private:
     WifiFileService() = default;

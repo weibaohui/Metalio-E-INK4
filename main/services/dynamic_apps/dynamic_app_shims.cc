@@ -316,7 +316,6 @@ int dynapp_sysinfo_get(dynapp_sysinfo_t* out) {
 #include "services/backup/nvs_backup_service.h"
 #include "services/wallpaper/wallpaper_active.h"
 #include "services/wifi_file/wifi_file_service.h"
-#include "services/wifi_transfer/wifi_transfer_service.h"
 #include "wifi_station.h"
 
 // 日历日程服务
@@ -670,57 +669,64 @@ int dynapp_wifi_file_get_url(char* out_url, size_t max_len) {
     return url.empty() ? 0 : 1;
 }
 
+// 文件操作活动通知(动作, 路径)——传书/上传/删除/新建目录
+static dynapp_fs_activity_cb_t s_fs_activity_cb = nullptr;
+static void* s_fs_activity_ud = nullptr;
+
+void dynapp_wifi_file_set_callback(dynapp_fs_activity_cb_t cb, void* user_data) {
+    s_fs_activity_cb = cb;
+    s_fs_activity_ud = user_data;
+    if (cb != nullptr) {
+        wifi_file::WifiFileService::GetInstance().SetActivityCallback(
+            [](const std::string& action, const std::string& path) {
+                if (s_fs_activity_cb != nullptr) {
+                    struct EvMsg {
+                        std::string action;
+                        std::string path;
+                    };
+                    auto* msg = new EvMsg{action, path};
+                    ScreenLvAsync([](void* p) {
+                        auto* m = static_cast<EvMsg*>(p);
+                        if (s_fs_activity_cb != nullptr) {
+                            s_fs_activity_cb(m->action.c_str(), m->path.c_str(),
+                                             s_fs_activity_ud);
+                        }
+                        delete m;
+                    }, msg);
+                }
+            });
+    } else {
+        wifi_file::WifiFileService::GetInstance().SetActivityCallback(nullptr);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 旧「WiFi 传书」动态应用已并入「WiFi 传输」(wififile)。
+// 下列符号保留为 deprecated 空实现:第三方 .so 若仍链接这些符号,dlopen 不会
+// 因符号缺失直接失败(删符号属破坏性 ABI 变更,需递增 METALIO_DYNAPP_ABI_VERSION)。
+// ---------------------------------------------------------------------------
 int dynapp_wifi_transfer_start(void) {
-    return wifi_transfer::WifiTransferService::GetInstance().Start(80) ? 1 : 0;
+    ESP_LOGW(kShimTag, "dynapp_wifi_transfer_start: 已并入 wififile,本接口不再提供服务");
+    return 0;
 }
 
-void dynapp_wifi_transfer_stop(void) {
-    wifi_transfer::WifiTransferService::GetInstance().Stop();
-}
+void dynapp_wifi_transfer_stop(void) {}
 
-int dynapp_wifi_transfer_is_running(void) {
-    return wifi_transfer::WifiTransferService::GetInstance().IsRunning() ? 1 : 0;
-}
+int dynapp_wifi_transfer_is_running(void) { return 0; }
 
-int dynapp_wifi_transfer_get_port(void) {
-    return static_cast<int>(wifi_transfer::WifiTransferService::GetInstance().GetPort());
-}
+int dynapp_wifi_transfer_get_port(void) { return 0; }
 
 int dynapp_wifi_transfer_get_url(char* out_url, size_t max_len) {
-    std::string url = wifi_transfer::WifiTransferService::GetInstance().GetServerUrl();
     if (out_url != nullptr && max_len > 0) {
-        strncpy(out_url, url.c_str(), max_len - 1);
-        out_url[max_len - 1] = '\0';
+        out_url[0] = '\0';
     }
-    return url.empty() ? 0 : 1;
+    return 0;
 }
 
-static dynapp_upload_cb_t s_user_upload_cb = nullptr;
-static void* s_user_upload_ud = nullptr;
-
 void dynapp_wifi_transfer_set_callback(dynapp_upload_cb_t cb, void* user_data) {
-    s_user_upload_cb = cb;
-    s_user_upload_ud = user_data;
-    if (cb != nullptr) {
-        wifi_transfer::WifiTransferService::GetInstance().SetUploadCallback([](const wifi_transfer::UploadEvent& ev) {
-            if (s_user_upload_cb != nullptr) {
-                struct EvMsg {
-                    std::string fn;
-                    size_t sz;
-                };
-                auto* msg = new EvMsg{ev.filename, ev.size_bytes};
-                ScreenLvAsync([](void* p) {
-                    auto* m = static_cast<EvMsg*>(p);
-                    if (s_user_upload_cb != nullptr) {
-                        s_user_upload_cb(m->fn.c_str(), m->sz, s_user_upload_ud);
-                    }
-                    delete m;
-                }, msg);
-            }
-        });
-    } else {
-        wifi_transfer::WifiTransferService::GetInstance().SetUploadCallback(nullptr);
-    }
+    (void)cb;
+    (void)user_data;
+    // 旧上传回调不再触发——活动事件统一走 dynapp_wifi_file_set_callback
 }
 
 void dynapp_modal_alert(const char* title, const char* message, const char* ok_text) {

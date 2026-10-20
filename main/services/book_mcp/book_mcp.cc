@@ -16,13 +16,13 @@
 #include "reader_core/file_size.h"
 #include "SdCardManager.hpp"
 #include "sd_paths.h"
-#include "transfer_utils.h"
+#include "utils/fs_utils.h"
 
 namespace {
 
 constexpr const char* TAG = "BookMcp";
 
-using wifi_transfer::SanitizeFilename;
+using fs_utils::SanitizeFilename;
 
 }  // namespace
 

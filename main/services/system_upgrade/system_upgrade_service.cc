@@ -22,7 +22,7 @@
 #include "SdCardManager.hpp"
 #include "sd_paths.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
-#include "services/wifi_transfer/wifi_transfer_service.h"
+#include "services/wifi_file/wifi_file_service.h"
 
 namespace system_upgrade {
 
@@ -497,8 +497,8 @@ bool SystemUpgradeService::StartWebServer(uint16_t port) {
         return true;
     }
 
-    // 确保与 WiFi 传书不冲突
-    wifi_transfer::WifiTransferService::GetInstance().Stop();
+    // 确保与 WiFi 传输(传书/文件管理)不冲突——两者都占用 80 端口
+    wifi_file::WifiFileService::GetInstance().Stop();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = port;

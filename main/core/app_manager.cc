@@ -12,10 +12,9 @@
 #include "settings_screen/settings_screen.h"
 
 #include "services/ai_chat/ai_chat_service.h"
+#include "services/book_mcp/book_mcp.h"
 #include "services/calendar/calendar_mcp.h"
 #include "services/radio/radio_mcp.h"
-#include "services/wifi_transfer/book_mcp.h"
-#include "services/wifi_transfer/wifi_transfer_service.h"
 #include "system_upgrade_screen/system_upgrade_screen.h"
 #include "services/wifi_file/wifi_file_service.h"
 
@@ -259,8 +258,10 @@ void AppManager::DispatchScreenLifecycle(const char* screen_id, bool loaded) {
         std::strcmp(screen_id, "read") == 0 ||
         std::strcmp(screen_id, "detail") == 0) {
         app_id = "book";
-    } else if (std::strcmp(screen_id, "wifi_transfer") == 0) {
-        app_id = "transfer";
+    } else if (std::strcmp(screen_id, "wifi_transfer") == 0 ||
+               std::strcmp(screen_id, "transfer") == 0) {
+        // 旧「WiFi 传书」动态应用已并入「WiFi 传输」(wififile),历史 screen id 归一
+        app_id = "wififile";
     }
 
     auto app = GetAppById(app_id);

@@ -21,6 +21,8 @@
 #include "board.h"
 #include "boards/common/SdCardManager.hpp"
 #include "boards/common/sd_paths.h"
+#include "reader/book_library.h"
+#include "utils/fs_utils.h"
 #include "ff.h"
 
 namespace wifi_file {
@@ -30,27 +32,9 @@ namespace {
 constexpr const char* TAG = "WifiFileSvc";
 constexpr const char* kSdMountRoot = "/sdcard";
 
-std::string UrlDecode(const std::string& in) {
-    std::string out;
-    out.reserve(in.size());
-    for (size_t i = 0; i < in.size(); ++i) {
-        if (in[i] == '%' && i + 2 < in.size()) {
-            char hex[3] = {in[i + 1], in[i + 2], '\0'};
-            char* end = nullptr;
-            long val = std::strtol(hex, &end, 16);
-            if (end == hex + 2) {
-                out.push_back(static_cast<char>(val));
-                i += 2;
-                continue;
-            }
-        } else if (in[i] == '+') {
-            out.push_back(' ');
-            continue;
-        }
-        out.push_back(in[i]);
-    }
-    return out;
-}
+using fs_utils::IsUnderDir;
+using fs_utils::SanitizeFilename;
+using fs_utils::UrlDecode;
 
 // 严防路径穿越：确保路径限定在 /sdcard 下
 std::string SafeSdPath(const std::string& rel_or_abs) {
@@ -91,31 +75,43 @@ std::string SafeSdPath(const std::string& rel_or_abs) {
     return result;
 }
 
-std::string SanitizeFilename(const std::string& name) {
-    std::string clean;
-    clean.reserve(name.size());
-    for (char c : name) {
-        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
-            c == '"' || c == '<' || c == '>' || c == '|' ||
-            static_cast<unsigned char>(c) < 0x20) {
-            clean.push_back('_');
-        } else {
-            clean.push_back(c);
-        }
+// 目标是否落在图书库目录内——落在库内才需要让阅读器重新扫描书库
+bool IsUnderBooksDir(const std::string& abs_path) {
+    return IsUnderDir(abs_path, WifiFileService::GetBooksAbsDir());
+}
+
+// 逐级创建目录(如 /sdcard/metalio/e-ink/books)：目标目录可能尚未存在
+// (新卡首次传书、或用户新建了多级目录),已存在时 mkdir 返回 EEXIST 可忽略
+void EnsureDirTree(const std::string& abs_dir) {
+    if (abs_dir.size() <= std::strlen(kSdMountRoot)) return;
+    size_t pos = std::strlen(kSdMountRoot);
+    while (pos < abs_dir.size()) {
+        size_t next = abs_dir.find('/', pos);
+        if (next == std::string::npos) next = abs_dir.size();
+        mkdir(abs_dir.substr(0, next).c_str(), 0755);
+        pos = next + 1;
     }
-    while (!clean.empty() && (clean.front() == ' ' || clean.front() == '.')) {
-        clean.erase(clean.begin());
-    }
-    while (!clean.empty() && clean.back() == ' ') {
-        clean.pop_back();
-    }
-    return clean;
 }
 
 // HTTP Handler: GET /
 esp_err_t HandleGetIndex(httpd_req_t* req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, kFileManagerHtml, HTTPD_RESP_USE_STRLEN);
+}
+
+// HTTP Handler: GET /api/fs/roots
+// 前端用它拿到「传书」页签的图书库路径,避免在页面里硬编码产品目录
+esp_err_t HandleGetRoots(httpd_req_t* req) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    cJSON_AddStringToObject(root, "books", WifiFileService::GetBooksRelDir());
+    cJSON_AddStringToObject(root, "root", "/");
+    char* json_str = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t res = httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(json_str);
+    cJSON_Delete(root);
+    return res;
 }
 
 // HTTP Handler: GET /api/fs/list?path=...
@@ -231,7 +227,7 @@ esp_err_t HandlePostUpload(httpd_req_t* req) {
     }
 
     std::string target_dir = SafeSdPath(rel_path);
-    mkdir(target_dir.c_str(), 0755);
+    EnsureDirTree(target_dir);
 
     std::string target_path = target_dir + "/" + clean_name;
     std::string tmp_path = target_path + ".upload.tmp";
@@ -295,7 +291,13 @@ esp_err_t HandlePostUpload(httpd_req_t* req) {
         return ESP_FAIL;
     }
 
-    WifiFileService::GetInstance().NotifyActivity("上传", clean_name);
+    // 落在图书库内才算「传书」——必须让阅读器重新扫描书库,否则设备上看不到新书
+    const bool to_books = IsUnderBooksDir(target_path);
+    if (to_books) {
+        reader::InvalidateBookLibraryCache();
+    }
+    WifiFileService::GetInstance().NotifyActivity(to_books ? "传书" : "上传",
+                                                 clean_name);
 
     httpd_resp_set_type(req, "application/json");
     cJSON* root = cJSON_CreateObject();
@@ -346,6 +348,14 @@ esp_err_t HandlePostDelete(httpd_req_t* req) {
         return ESP_FAIL;
     }
 
+    // 图书库内的书要连带清掉分页索引/封面等旁路文件,否则残留垃圾文件
+    if (IsUnderBooksDir(target)) {
+        unlink((target + ".pos").c_str());
+        unlink((target + ".idx").c_str());
+        unlink((target + ".upload.tmp").c_str());
+        reader::InvalidateBookLibraryCache();
+    }
+
     WifiFileService::GetInstance().NotifyActivity("删除", target.substr(std::strlen(kSdMountRoot)));
 
     httpd_resp_set_type(req, "application/json");
@@ -366,6 +376,11 @@ esp_err_t HandlePostMkdir(httpd_req_t* req) {
     }
 
     std::string target = SafeSdPath(pval);
+    // 父目录可能尚不存在(API 直接指定多级路径),先逐级补齐
+    size_t slash = target.rfind('/');
+    if (slash != std::string::npos && slash > 0) {
+        EnsureDirTree(target.substr(0, slash));
+    }
     if (mkdir(target.c_str(), 0755) != 0) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Mkdir failed");
         return ESP_FAIL;
@@ -445,6 +460,22 @@ WifiFileService& WifiFileService::GetInstance() {
     return instance;
 }
 
+const char* WifiFileService::GetBooksRelDir() {
+    // SD_PATH_BOOKS 形如 /sdcard/metalio/e-ink/books,Web 端用相对 SD 根的路径
+    static std::string rel;
+    if (rel.empty()) {
+        std::string abs(SD_PATH_BOOKS);
+        const std::string root(kSdMountRoot);
+        rel = abs.compare(0, root.size(), root) == 0 ? abs.substr(root.size()) : abs;
+        if (rel.empty()) rel = "/";
+    }
+    return rel.c_str();
+}
+
+const char* WifiFileService::GetBooksAbsDir() {
+    return SD_PATH_BOOKS;
+}
+
 bool WifiFileService::Start(uint16_t port) {
     if (server_ != nullptr) {
         return true;
@@ -459,8 +490,19 @@ bool WifiFileService::Start(uint16_t port) {
     config.lru_purge_enable = true;
 
     httpd_handle_t handle = nullptr;
-    if (httpd_start(&handle, &config) != ESP_OK) {
-        ESP_LOGE(TAG, "failed to start http server on port %u", port_);
+    esp_err_t err = httpd_start(&handle, &config);
+    if (err != ESP_OK && port_ == 80) {
+        // 80 端口常被 OTA/其他服务占用,回退到 8088(与 WiFi 传书旧行为一致)
+        ESP_LOGW(TAG, "httpd_start on port 80 failed (%s), fallback to 8088",
+                 esp_err_to_name(err));
+        port_ = 8088;
+        config.server_port = port_;
+        config.ctrl_port = port_ + 1;
+        err = httpd_start(&handle, &config);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to start http server on port %u: %s", port_,
+                 esp_err_to_name(err));
         return false;
     }
     server_ = handle;
@@ -472,6 +514,14 @@ bool WifiFileService::Start(uint16_t port) {
         .user_ctx = nullptr
     };
     httpd_register_uri_handler(handle, &get_index);
+
+    httpd_uri_t get_roots = {
+        .uri = "/api/fs/roots",
+        .method = HTTP_GET,
+        .handler = HandleGetRoots,
+        .user_ctx = nullptr
+    };
+    httpd_register_uri_handler(handle, &get_roots);
 
     httpd_uri_t get_list = {
         .uri = "/api/fs/list",
