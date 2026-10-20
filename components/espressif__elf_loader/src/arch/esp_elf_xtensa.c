@@ -82,6 +82,15 @@ int esp_elf_arch_relocate(esp_elf_t *elf, const elf32_rela_t *rela,
 
     where = (uint32_t *)esp_elf_map_sym(elf, rela->offset);
 
+    /* Metalio 补丁：重定位目标 VMA 不属于任何已加载节(如 .got 等加载器
+     * 未覆盖的节)时 map_sym 返回 0，继续写 *0 会打穿内存低区。跳过并
+     * 点名日志，保证一个坏 .so 不至于整机 abort。 */
+    if (where == NULL) {
+        ESP_LOGE(TAG, "relocation offset 0x%x unmapped, skipped (type=%d)",
+                 (int)rela->offset, ELF_R_TYPE(rela->info));
+        return -EINVAL;
+    }
+
     ESP_LOGD(TAG, "type: %d, where=%p addr=0x%x offset=0x%x\n",
              ELF_R_TYPE(rela->info), where, (int)addr, (int)rela->offset);
 

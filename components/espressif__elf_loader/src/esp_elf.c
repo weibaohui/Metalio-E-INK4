@@ -215,6 +215,14 @@ static int esp_elf_load_section(esp_elf_t *elf, const uint8_t *pbuf)
                 ESP_LOGD(TAG, ".data   offset is 0x%lx size is 0x%x",
                          elf->sec[ELF_SEC_DATA].offset,
                          elf->sec[ELF_SEC_DATA].size);
+            } else if (!strcmp(ELF_GOT, name)) {
+                ESP_LOGD(TAG, ".got    sec addr=0x%08x size=0x%08x offset=0x%08x",
+                         shdr[i].addr, shdr[i].size, shdr[i].offset);
+
+                elf->sec[ELF_SEC_GOT].v_addr  = shdr[i].addr;
+                elf->sec[ELF_SEC_GOT].size    = shdr[i].size;
+                elf->sec[ELF_SEC_GOT].offset  = shdr[i].offset;
+                sec_align[ELF_SEC_GOT] = shdr[i].addralign > 1 ? shdr[i].addralign : 1;
             } else if (!strcmp(ELF_RODATA, name)) {
                 ESP_LOGD(TAG, ".rodata sec addr=0x%08x size=0x%08x offset=0x%08x",
                          shdr[i].addr, shdr[i].size, shdr[i].offset);
@@ -327,7 +335,7 @@ static int esp_elf_load_section(esp_elf_t *elf, const uint8_t *pbuf)
 
     if (size) {
         static const uint32_t data_sections[] = {
-            ELF_SEC_DATA, ELF_SEC_RODATA, ELF_SEC_DRLRO, ELF_SEC_BSS
+            ELF_SEC_DATA, ELF_SEC_GOT, ELF_SEC_RODATA, ELF_SEC_DRLRO, ELF_SEC_BSS
         };
         uint8_t *pdata = elf->pdata;
         uint32_t remaining = size;

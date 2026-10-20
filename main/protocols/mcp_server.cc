@@ -407,9 +407,9 @@ void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_o
         }
         
         // 添加tool前检查大小
-        ESP_LOGI(TAG, "tools/list serializing %s", (*it)->name().c_str());
+        ESP_LOGD(TAG, "tools/list serializing %s", (*it)->name().c_str());
         std::string tool_json = (*it)->to_json() + ",";
-        ESP_LOGI(TAG, "tools/list serialized %s len=%u", (*it)->name().c_str(),
+        ESP_LOGD(TAG, "tools/list serialized %s len=%u", (*it)->name().c_str(),
                  (unsigned)tool_json.length());
         if (json.length() + tool_json.length() + 30 > max_payload_size) {
             // 如果添加这个tool会超出大小限制，设置next_cursor并退出循环

@@ -1,0 +1,8 @@
+{
+  "id": "knowledge",
+  "name": "知识卡片",
+  "icon": "icon.png",
+  "executable": "lib/knowledge.so",
+  "abi": 1,
+  "version": "1.0.0"
+}

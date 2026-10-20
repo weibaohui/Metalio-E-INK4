@@ -115,6 +115,7 @@ extern "C" {
 #define ELF_STRTAB      ".strtab"       /*!< string table */
 #define ELF_SYMTAB      ".symtab"       /*!< symbol table */
 #define ELF_TEXT        ".text"         /*!< code */
+#define ELF_GOT         ".got"          /*!< global offset table */
 #define ELF_DATA_REL_RO ".data.rel.ro"  /*!< dynamic read-only data */
 #define ELF_PLT         ".plt"          /*!< procedure linkage table. */
 #define ELF_GOT_PLT     ".got.plt"      /*!< a table where resolved addresses from external functions are stored */
@@ -125,8 +126,9 @@ extern "C" {
 #define ELF_SEC_BSS             1
 #define ELF_SEC_DATA            2
 #define ELF_SEC_RODATA          3
-#define ELF_SEC_DRLRO           4
-#define ELF_SECS                5
+#define ELF_SEC_GOT             4
+#define ELF_SEC_DRLRO           5
+#define ELF_SECS                6
 
 #define ELF_ST_BIND(_i)         ((_i) >> 4)
 #define ELF_ST_TYPE(_i)         ((_i) & 0xf)
