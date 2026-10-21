@@ -1,0 +1,10 @@
+{
+  "id": "peg",
+  "name": "孔明棋",
+  "icon": "icon.png",
+  "executable": "lib/peg.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "Peg Solitaire 经典跳棋，英文十字盘 33 洞，纯几何棋面一步一刷，最适合墨水屏"
+}
