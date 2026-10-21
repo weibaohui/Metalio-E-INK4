@@ -543,24 +543,28 @@ void TouchFeedTask(void* arg) {
                 count = 0;
             }
         }
-        if (count > 0) {
-            x = static_cast<int>(pts[0].x);
-            y = static_cast<int>(pts[0].y);
-        } else {
-            // 无物理触摸时，检查并执行虚拟触控注入
-            portENTER_CRITICAL(&s_touch_inject_mux);
-            if (s_touch_inject.active) {
-                if (s_touch_inject.remaining_ticks > 0) {
-                    count = 1;
-                    x = s_touch_inject.x;
-                    y = s_touch_inject.y;
-                    s_touch_inject.remaining_ticks--;
-                } else {
-                    s_touch_inject.active = false;
-                    count = 0;
-                }
+        // 虚拟注入优先于物理触摸：触摸芯片偶尔会报幻影按下（count 恒为 1），
+        // 那样注入分支永远进不去，远程点击全丢。注入是确定要送出去的一轮点。
+        bool injected = false;
+        portENTER_CRITICAL(&s_touch_inject_mux);
+        if (s_touch_inject.active) {
+            if (s_touch_inject.remaining_ticks > 0) {
+                count = 1;
+                x = s_touch_inject.x;
+                y = s_touch_inject.y;
+                s_touch_inject.remaining_ticks--;
+                injected = true;
+            } else {
+                s_touch_inject.active = false;
+                count = 0;
             }
-            portEXIT_CRITICAL(&s_touch_inject_mux);
+        }
+        portEXIT_CRITICAL(&s_touch_inject_mux);
+        if (!injected) {
+            if (count > 0) {
+                x = static_cast<int>(pts[0].x);
+                y = static_cast<int>(pts[0].y);
+            }
         }
         TouchFeedHandleSample(count, x, y);
         vTaskDelay(pdMS_TO_TICKS(kTouchFeedPeriodMs));
@@ -2009,6 +2013,9 @@ bool LVAdapterDisplay::InjectTouch(int x, int y, int duration_ms) {
             s_touch_inject.active = false;
             s_touch_inject.remaining_ticks = 0;
             portEXIT_CRITICAL(&s_touch_inject_mux);
+            // 先补一次抬起：触摸芯片报幻影按下时，喂点状态里会残留"手指还按着"，
+            // 这一轮按下会被 LVGL 当成手指移动 → CLICKED 丢失（点了没反应）。
+            TouchFeedHandleSample(0, 0, 0);
             for (int i = 0; i < actual_ticks; ++i) {
                 TouchFeedHandleSample(1, x, y);
                 vTaskDelay(pdMS_TO_TICKS(kTouchFeedPeriodMs));
