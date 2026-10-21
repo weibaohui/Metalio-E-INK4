@@ -1,0 +1,10 @@
+{
+  "id": "slink",
+  "name": "数回",
+  "icon": "icon.png",
+  "executable": "lib/slink.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "Slitherlink 数回，纸上逻辑谜题：按数字提示画单一闭合回路；关卡程序生成无限供应"
+}
