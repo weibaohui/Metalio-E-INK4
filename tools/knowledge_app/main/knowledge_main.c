@@ -77,10 +77,6 @@ static void page_next(void);
 static void page_prev(void);
 static void next_card(void);
 static void prev_card(void);
-static void on_next_card_cb(lv_event_t *e);
-static void on_prev_card_cb(lv_event_t *e);
-static void on_page_next_cb(lv_event_t *e);
-static void on_page_prev_cb(lv_event_t *e);
 static void on_daily_cb(lv_event_t *e);
 static void on_random_cb(lv_event_t *e);
 static void on_fav_cb(lv_event_t *e);
@@ -415,30 +411,24 @@ static void build_card_view(void) {
     lv_obj_clear_flag(s_content, LV_OBJ_FLAG_SCROLLABLE);
     render_card_content(&s_card);
 
-    // 页指示 + 翻页按钮
+    // 页指示(翻页用侧键 vk_prev/vk_next,屏上不画翻页按钮)
     lv_obj_t *pager = lv_obj_create(s_body_box);
     lv_obj_remove_style_all(pager);
-    lv_obj_set_size(pager, lv_pct(100), 34);
+    lv_obj_set_size(pager, lv_pct(100), 30);
     s_pager_lbl = make_label(pager, "", 15, 0);
     lv_obj_center(s_pager_lbl);
-    lv_obj_t *pp = make_btn(pager, "◀上页", 90, 30, on_page_prev_cb, NULL);
-    lv_obj_align(pp, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_t *pn = make_btn(pager, "下页▶", 90, 30, on_page_next_cb, NULL);
-    lv_obj_align(pn, LV_ALIGN_RIGHT_MID, 0, 0);
 
-    // 底部按钮排
+    // 底部按钮排(翻页/翻卡走侧键,屏上只留功能按钮)
     lv_obj_t *row = lv_obj_create(s_body_box);
     lv_obj_remove_style_all(row);
     lv_obj_set_size(row, lv_pct(100), BTN_H);
-    const lv_coord_t bw = (lv_coord_t)((LV_HOR_RES - 2 * PAD - 5 * 6) / 6);
+    const lv_coord_t bw = (lv_coord_t)((LV_HOR_RES - 2 * PAD - 3 * 6) / 4);
     s_fav_btn = make_btn(row, "收藏", bw, BTN_H, on_fav_cb, NULL);
-    make_btn(row, "上张", bw, BTN_H, on_prev_card_cb, NULL);
     make_btn(row, "每日", bw, BTN_H, on_daily_cb, NULL);
     make_btn(row, "随机", bw, BTN_H, on_random_cb, NULL);
     make_btn(row, "书目", bw, BTN_H, on_books_cb, NULL);
-    make_btn(row, "下张", bw, BTN_H, on_next_card_cb, NULL);
     const int n = (int)lv_obj_get_child_count(row);
-    for (int i = 0; i < n && i < 6; ++i) {
+    for (int i = 0; i < n && i < 4; ++i) {
         lv_obj_align(lv_obj_get_child(row, i), LV_ALIGN_LEFT_MID,
                      (lv_coord_t)(i * (bw + 6)), 0);
     }
@@ -574,10 +564,6 @@ static void build_list_view(void) {
 }
 
 // ================= 事件 =================
-static void on_next_card_cb(lv_event_t *e) { (void)e; next_card(); }
-static void on_prev_card_cb(lv_event_t *e) { (void)e; prev_card(); }
-static void on_page_next_cb(lv_event_t *e) { (void)e; page_next(); }
-static void on_page_prev_cb(lv_event_t *e) { (void)e; page_prev(); }
 static void on_daily_cb(lv_event_t *e) {
     (void)e;
     int idx = 0;
