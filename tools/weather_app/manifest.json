@@ -1,0 +1,10 @@
+{
+  "id": "weather",
+  "name": "天气",
+  "icon": "icon.png",
+  "executable": "lib/weather.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "墨水屏当第二屏：七段大字温度 + 三天预报 + 断网缓存上次读数 + 一键朗读播报；数据源 Open-Meteo"
+}
