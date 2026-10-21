@@ -59,6 +59,7 @@ static int s_winner = -1;          // -1 未结束 / 0 空心方胜 / 1 实心�
 static int s_win_reason = 0;       // 1=将死 2=被将死 3=困毙
 static int s_nmoves = 0;
 static int s_check_side = -1;      // 正被将军的一方
+static int s_user_side = SIDE_HOLLOW; // 用户执子方（界面常驻显示"你执X方"）
 
 // 悔棋历史
 static XMove s_hist[256];
@@ -412,11 +413,8 @@ static void render_cell(int r, int c) {
 static void update_info_line(void) {
     if (s_info_lbl == NULL) return;
     char buf[64];
-    if (s_winner >= 0) {
-        snprintf(buf, sizeof(buf), "%s胜", side_name(s_winner));
-    } else {
-        snprintf(buf, sizeof(buf), "轮到%s", side_name(s_turn));
-    }
+    // 常驻告诉用户"你执哪一方"——墨水屏上双方只靠明暗区分，指路必须靠文字
+    snprintf(buf, sizeof(buf), "你执%s", side_name(s_user_side));
     lv_label_set_text(s_info_lbl, buf);
 }
 
@@ -428,10 +426,12 @@ static void update_status_line(void) {
     } else if (s_winner == SIDE_SOLID) {
         snprintf(buf, sizeof(buf), "%s", s_win_reason == 2 ? "空心方被将死，实心方胜" : "实心方胜");
     } else if (s_check_side == s_turn) {
-        snprintf(buf, sizeof(buf), "%s · 将军！",
-                 s_turn == SIDE_HOLLOW ? "空心方须应将" : "实心方须应将");
+        snprintf(buf, sizeof(buf), "%s须应将%s",
+                 side_name(s_turn), s_turn == s_user_side ? "·该你了" : "");
     } else {
-        snprintf(buf, sizeof(buf), "%s走棋 · 共 %d 手", side_name(s_turn), s_nmoves);
+        // 状态行同时说清"谁的回合"和"该哪一方"：谁在走 + 这一方是谁
+        snprintf(buf, sizeof(buf), "%s（%s）· 共 %d 手",
+                 s_turn == s_user_side ? "该你落子" : "对方落子", side_name(s_turn), s_nmoves);
     }
     lv_label_set_text(s_status_lbl, buf);
 }
@@ -481,7 +481,7 @@ static const char kHexDigits[] = "0123456789abcdef";
 static void save_game(void) {
     FILE *fp = (FILE *)dynapp_fopen_data("xq.txt", "w");
     if (fp == NULL) return;
-    fprintf(fp, "XQI1 %d %d %d %d\n", s_turn, s_winner, s_win_reason, s_nmoves);
+    fprintf(fp, "XQI2 %d %d %d %d %d\n", s_turn, s_winner, s_win_reason, s_nmoves, s_user_side);
     for (int r = 0; r < XC_ROWS; ++r) {
         for (int c = 0; c < XC_COLS; ++c) {
             const XPiece *p = &s_board[r][c];
@@ -496,12 +496,12 @@ static int load_game(void) {
     FILE *fp = (FILE *)dynapp_fopen_data("xq.txt", "r");
     if (fp == NULL) return 0;
     char magic[16] = {0};
-    int turn = 0, winner = -1, reason = 0, nmoves = 0;
-    if (fscanf(fp, "%15s", magic) != 1 || strcmp(magic, "XQI1") != 0) {
+    int turn = 0, winner = -1, reason = 0, nmoves = 0, user_side = 0;
+    if (fscanf(fp, "%15s", magic) != 1 || strcmp(magic, "XQI2") != 0) {
         fclose(fp);
         return 0;
     }
-    if (fscanf(fp, "%d %d %d %d", &turn, &winner, &reason, &nmoves) != 4) {
+    if (fscanf(fp, "%d %d %d %d %d", &turn, &winner, &reason, &nmoves, &user_side) != 5) {
         fclose(fp);
         return 0;
     }
@@ -534,6 +534,7 @@ static int load_game(void) {
     s_winner = winner;
     s_win_reason = reason;
     s_nmoves = nmoves;
+    s_user_side = user_side;
     s_sel_r = s_sel_c = -1;
     s_move_count = 0;
     s_last_full_refresh = 0;
@@ -672,6 +673,18 @@ static void on_new_game_clicked(lv_event_t *e) {
     render_all();
     save_game();
     dynapp_toast_show("新局，空心方先行", 1400);
+    dynapp_epd_full_refresh();
+}
+
+static void on_side_clicked(lv_event_t *e) {
+    (void)e;
+    s_user_side = (s_user_side == SIDE_HOLLOW) ? SIDE_SOLID : SIDE_HOLLOW;
+    update_info_line();
+    update_status_line();
+    save_game();
+    char buf[48];
+    snprintf(buf, sizeof(buf), "你执%s", side_name(s_user_side));
+    dynapp_toast_show(buf, 1500);
     dynapp_epd_full_refresh();
 }
 
@@ -984,7 +997,7 @@ static void *xq_create(void) {
     lv_obj_set_pos(hint, 16, 92 + 9 * XC_CELL + 2 * PAD + 34);
 
     // 4. 按钮
-    const lv_coord_t bw = 144, bh = 56, bgap = 8;
+    const lv_coord_t bw = 107, bh = 56, bgap = 6;
     const lv_coord_t by = 620;
     lv_obj_t *b1 = make_btn(scr, "新局", bw, bh, on_new_game_clicked, NULL);
     lv_obj_set_pos(b1, 16, by);
@@ -992,6 +1005,8 @@ static void *xq_create(void) {
     lv_obj_set_pos(b2, 16 + bw + bgap, by);
     lv_obj_t *b3 = make_btn(scr, "提示", bw, bh, on_hint_clicked, NULL);
     lv_obj_set_pos(b3, 16 + 2 * (bw + bgap), by);
+    lv_obj_t *b4 = make_btn(scr, "选边", bw, bh, on_side_clicked, NULL);
+    lv_obj_set_pos(b4, 16 + 3 * (bw + bgap), by);
 
     render_all();
     return scr;
