@@ -49,3 +49,6 @@ sdk/examples/*/bin/
 firmware/
 daily-builds/
 metalio-e-ink4.bin
+
+# 诗词 App 数据构建产物(设备直传, 可由 pack_poems.py 重新生成)
+tools/poetry_app/data/

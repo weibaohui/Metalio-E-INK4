@@ -1,0 +1,8 @@
+{
+  "id": "poems",
+  "name": "唐诗宋词",
+  "icon": "icon.png",
+  "executable": "lib/poems.so",
+  "abi": 1,
+  "version": "1.0.0"
+}
