@@ -247,7 +247,7 @@ static lv_obj_t *make_btn(lv_obj_t *parent, const char *text, lv_coord_t w, lv_c
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
-    lv_obj_set_style_text_font(lbl, get_font(17, 0), 0);
+    lv_obj_set_style_text_font(lbl, get_font(18, 0), 0);
     lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(lbl);
@@ -274,7 +274,7 @@ static int s_card_valid = 0;
 static void render_card_content(Card *c) {
     lv_obj_clean(s_content);
     if (!c->body || c->body_len == 0) {
-        make_label(s_content, "（无内容）", 16, 0);
+        make_label(s_content, "（无内容）", 20, 0);
         return;
     }
     char *text = malloc((size_t)c->body_len + 2);
@@ -321,16 +321,16 @@ static void render_card_content(Card *c) {
             if (sec_title[0]) {
                 char hd[80];
                 snprintf(hd, sizeof(hd), "【%s】", sec_title);
-                make_label(s_content, hd, 17, 2);
+                make_label(s_content, hd, 20, 2);
             }
-            if (used) make_label(s_content, text, 16, 0);
+            if (used) make_label(s_content, text, 20, 0);
         }
     }
     free(text);
 
     // 关联跳转行
     if (c->link_count > 0) {
-        make_label(s_content, "—— 关联 ——", 14, 0);
+        make_label(s_content, "—— 关联 ——", 16, 0);
         for (uint16_t k = 0; k < c->link_count; ++k) {
             char t_title[MAX_TITLE];
             uint8_t rec[CARD_REC];
@@ -388,8 +388,8 @@ static void build_card_view(void) {
     lv_obj_set_style_pad_row(box, 6, 0);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
 
-    make_label(box, s_card.title, 20, 2);
-    make_label(box, s_card.chapter, 14, 0);
+    make_label(box, s_card.title, 24, 2);
+    make_label(box, s_card.chapter, 16, 0);
 
     // 视口：固定高（占满剩余空间），内容超高则分页
     s_clip = lv_obj_create(s_body_box);
@@ -415,7 +415,7 @@ static void build_card_view(void) {
     lv_obj_t *pager = lv_obj_create(s_body_box);
     lv_obj_remove_style_all(pager);
     lv_obj_set_size(pager, lv_pct(100), 30);
-    s_pager_lbl = make_label(pager, "", 15, 0);
+    s_pager_lbl = make_label(pager, "", 16, 0);
     lv_obj_center(s_pager_lbl);
 
     // 底部按钮排(翻页/翻卡走侧键,屏上只留功能按钮)
@@ -484,7 +484,7 @@ static void build_books_view(void) {
     lv_obj_t *top = lv_obj_create(s_body_box);
     lv_obj_remove_style_all(top);
     lv_obj_set_size(top, lv_pct(100), 44);
-    make_label(top, "书目", 18, 2);
+    make_label(top, "书目", 20, 2);
     make_btn(top, "◀ 返回卡片", 130, BTN_H, on_back_card_cb, NULL);
 
     lv_obj_t *list = lv_obj_create(s_body_box);
@@ -527,11 +527,11 @@ static void build_list_view(void) {
     lv_obj_remove_style_all(top);
     lv_obj_set_size(top, lv_pct(100), 44);
     if (s_list_kind == 1) {
-        make_label(top, "收藏夹", 18, 2);
+        make_label(top, "收藏夹", 20, 2);
     } else {
         char bn[128];
         book_name(s_list_book, bn, sizeof(bn));
-        make_label(top, bn, 18, 2);
+        make_label(top, bn, 20, 2);
     }
     make_btn(top, "◀ 返回", 110, BTN_H, on_back_cb, NULL);
 
@@ -546,7 +546,7 @@ static void build_list_view(void) {
 
     if (s_list_kind == 1) {
         add_list_buttons(list, (const int *)s_fav, s_fav_n);
-        if (s_fav_n == 0) make_label(list, "暂无收藏", 16, 0);
+        if (s_fav_n == 0) make_label(list, "暂无收藏", 18, 0);
     } else {
         uint8_t rec[BOOK_REC];
         db_read(s_hdr.book_table_off + BOOK_REC * s_list_book, rec, BOOK_REC);
@@ -559,7 +559,7 @@ static void build_list_view(void) {
             add_list_buttons(list, ids, (int)count);
             free(ids);
         }
-        if (count == 0) make_label(list, "（空）", 16, 0);
+        if (count == 0) make_label(list, "（空）", 18, 0);
     }
 }
 
@@ -660,7 +660,7 @@ static void *knowledge_create(void) {
     dynapp_vk_attach(s_scr, "knowledge", knowledge_create, kb_on_vk);
 
     if (!db_open()) {
-        make_label(s_body_box, "未找到知识库数据(cards.db)，请重新安装应用", 16, 0);
+        make_label(s_body_box, "未找到知识库数据(cards.db)，请重新安装应用", 18, 0);
         return s_scr;
     }
 
