@@ -1,0 +1,10 @@
+{
+  "id": "life",
+  "name": "生命游戏",
+  "icon": "icon.png",
+  "executable": "lib/life.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "康威生命游戏，一代一刷，点格编辑 + 预设图案 + 自动播放，适配墨水屏低刷新率特性"
+}
