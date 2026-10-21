@@ -1,0 +1,10 @@
+{
+  "id": "pomo",
+  "name": "番茄钟",
+  "icon": "icon.png",
+  "executable": "lib/pomo.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "专注/休息循环计时，七段数码管 + 每分钟排水条，不跳秒不烧屏，最适合墨水屏"
+}
