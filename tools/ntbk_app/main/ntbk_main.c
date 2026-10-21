@@ -375,6 +375,8 @@ static void render_scene(void) {
         set_label(s_guest_lbl, title);
         set_label(s_story_lbl, body);
         show_options(0);
+        // 结束了不该再有「下一晚」
+        if (s_next_btn != NULL) lv_obj_add_flag(s_next_btn, LV_OBJ_FLAG_HIDDEN);
         set_label(s_result_lbl, "");
         update_night_label();
         update_stats();
@@ -387,6 +389,7 @@ static void render_scene(void) {
         set_label(s_guest_lbl, "收摊");
         set_label(s_story_lbl, "这一晚没有人来。师父的册子上，最后一页还空着。");
         show_options(0);
+        if (s_next_btn != NULL) lv_obj_add_flag(s_next_btn, LV_OBJ_FLAG_HIDDEN);
         set_label(s_result_lbl, "");
         update_night_label();
         update_stats();
@@ -482,15 +485,23 @@ static void schedule_idle_maintenance(void) {
 }
 
 static void next_night(void) {
+    if (s_night >= NIGHT_TOTAL) {
+        // 最后一晚也断完了 → 出师。晚数停在第 20 晚，别多出「第 21 晚」。
+        s_order_pos++;
+        s_phase = 0;
+        s_sel = 0;
+        s_result[0] = '\0';
+        s_ended = 1;
+        s_end_kind = 4;
+        render_scene();
+        schedule_idle_maintenance();
+        return;
+    }
     s_night++;
     s_order_pos++;
     s_phase = 0;
     s_sel = 0;
     s_result[0] = '\0';
-    if (s_night > NIGHT_TOTAL) {
-        s_ended = 1;
-        s_end_kind = 4;
-    }
     render_scene();
     schedule_idle_maintenance();
 }
@@ -560,6 +571,20 @@ static void show_history_view(bool show) {
         if (s_main_objs[i] == NULL) continue;
         if (show) lv_obj_add_flag(s_main_objs[i], LV_OBJ_FLAG_HIDDEN);
         else lv_obj_clear_flag(s_main_objs[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    if (!show) {
+        // 主视图里有些控件的可见性随阶段变（结果阶段才有「下一晚」，
+        // 选断法阶段才有三个断法和光标）。统一收回主视图时若只清 HIDDEN，
+        // 「下一晚」按钮会在选断法阶段也露出来，正好压在第一个断法「铜钱卦」头上，
+        // 铜钱卦就永远点不到。收回后必须按当前阶段重新落位。
+        if (s_next_btn != NULL) {
+            if (!s_ended && s_phase == 1) {
+                lv_obj_clear_flag(s_next_btn, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(s_next_btn, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+        show_options(!s_ended && s_phase == 0);
     }
     for (int i = 0; i < s_hist_obj_n; ++i) {
         if (s_hist_objs[i] == NULL) continue;
@@ -765,7 +790,8 @@ static void *ntbk_create(void) {
     lv_obj_set_pos(b2, 16 + bw + bgap, by);
 
     // 往事视图（默认收起）
-    s_hist_lbl = make_label(scr, "", 16, 120, 448, f_ui, true);
+    // y 要落在三个数值框（92~142）下面，否则页眉会压在「信望」框上
+    s_hist_lbl = make_label(scr, "", 16, 152, 448, f_ui, true);
     reg_hist(s_hist_lbl);
     {
         lv_obj_t *h1 = make_btn(scr, "上一页", 140, 48, on_hist_page_up, NULL);
