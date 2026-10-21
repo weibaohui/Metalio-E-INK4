@@ -765,6 +765,7 @@ dynapp_glm_request_refresh
 dynapp_glm_select_context
 dynapp_glm_start
 dynapp_glm_stop
+dynapp_http_get_async
 dynapp_image_decode_l8
 dynapp_is_network_ready
 dynapp_is_path_allowed
@@ -786,6 +787,10 @@ dynapp_time_set_manual
 dynapp_time_set_tz_offset_min
 dynapp_time_sync_now
 dynapp_toast_show
+dynapp_tts_available
+dynapp_tts_speak
+dynapp_tts_speak_ex
+dynapp_tts_stop
 dynapp_vk_attach
 dynapp_wallpaper_clear_standby
 dynapp_wallpaper_get_item

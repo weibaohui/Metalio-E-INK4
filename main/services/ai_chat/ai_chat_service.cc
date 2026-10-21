@@ -1042,6 +1042,11 @@ void AiChat_SetAutoTts(bool enable) {
 }
 bool AiChat_LlmConfigured() { std::lock_guard<std::mutex> l(s_cfg_mutex); return !s_cfg.llm_key.empty(); }
 
+std::string AiChat_GetApiKey() {
+    std::lock_guard<std::mutex> l(s_cfg_mutex);
+    return !s_cfg.stt_key.empty() ? s_cfg.stt_key : s_cfg.llm_key;
+}
+
 void AiChat_RegisterMcpTools() {
     auto& mcp = McpServer::GetInstance();
 

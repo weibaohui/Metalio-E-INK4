@@ -124,6 +124,27 @@ void dynapp_glm_configure(const char* api_key, const char* jwt_token);
 void dynapp_glm_start(void);
 void dynapp_glm_stop(void);
 
+// ==================== 语音合成（TTS）====================
+// 把一段文字合成语音并播放。电子墨水屏可以"熄屏只出声"——不烧屏、
+// 不消耗刷新电，这是墨水屏相对手机/平板的独占能力（听书场景）。
+// 异步：函数立即返回，合成在后台线程完成，播完自动结束。
+// 返回 1=已排队，0=未配置 API Key 或排队失败。
+int dynapp_tts_speak(const char* text);
+// 停止当前朗读。
+void dynapp_tts_stop(void);
+// 带完成回调的朗读：cb 在 LVGL 线程执行，ok=1 播完 / 0 失败，err=失败原因。
+typedef void (*dynapp_tts_cb_t)(int ok, const char* err, void* user_data);
+int dynapp_tts_speak_ex(const char* text, dynapp_tts_cb_t cb, void* user_data);
+// 1=已配置可朗读，0=没配 MiniMax API Key。
+int dynapp_tts_available(void);
+
+// ==================== HTTP ====================
+// 异步 GET。回调在 LVGL 线程执行，可直接操作界面。
+// data=响应体(不含结尾 \0)，len=长度，status=HTTP 状态码。
+typedef void (*dynapp_http_resp_cb_t)(const char* data, int len, int status, void* user_data);
+// 返回 1=已发起，0=参数非法。
+int dynapp_http_get_async(const char* url, dynapp_http_resp_cb_t cb, void* user_data);
+
 // 备份恢复服务
 typedef struct {
     char name[64];

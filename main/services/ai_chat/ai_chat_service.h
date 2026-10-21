@@ -48,6 +48,9 @@ std::string AiChat_GetStateText();  // 状态的中文短描述
 // 配置查询(供 MCP/状态显示)
 bool AiChat_SttConfigured();
 bool AiChat_LlmConfigured();
+// 取当前可用的 API Key(MiniMax 优先,退回通用 OpenAI 格式 Key)。
+// 动态应用的 TTS 垫片用它合成语音;未配置返回空串。
+std::string AiChat_GetApiKey();
 
 // 自动发声开关(MiniMax TTS 播报回复)。LVGL 任务可调,落盘走 SafeSettings。
 bool AiChat_AutoTts();
