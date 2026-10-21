@@ -1,0 +1,10 @@
+{
+  "id": "liuyao",
+  "name": "六爻占卜",
+  "icon": "icon.png",
+  "executable": "lib/liuyao.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "摇六爻成卦，看本卦变卦，断所问之事。纯几何卦象 + 文字断语，最适合墨水屏"
+}
