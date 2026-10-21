@@ -16,6 +16,7 @@
 #include "display/screen/vk_key_handler.h"
 #include "reader/image_util.h"
 #include "sd_paths.h"
+#include <zlib.h>
 
 // PSRAM 栈任务(含 LVGL worker,动态应用 create/按键回调都在其中)禁止任何
 // NVS/flash 访问:关 cache 窗口内跑 PSRAM 栈任务触发
@@ -317,6 +318,22 @@ int dynapp_sysinfo_get(dynapp_sysinfo_t* out) {
 #include "services/wallpaper/wallpaper_active.h"
 #include "services/wifi_file/wifi_file_service.h"
 #include "wifi_station.h"
+
+// zlib 解压(知识卡片库按卡 deflate 存储;符号经 gen_symbols 的 dynapp_* 规则导出)
+int dynapp_zlib_inflate(const char *src, int src_len, char *dst, int dst_cap) {
+    if (!src || !dst || src_len <= 0 || dst_cap <= 0) return -1;
+    z_stream zs;
+    memset(&zs, 0, sizeof(zs));
+    zs.next_in = (Bytef *)src;
+    zs.avail_in = (uInt)src_len;
+    zs.next_out = (Bytef *)dst;
+    zs.avail_out = (uInt)dst_cap;
+    if (inflateInit_(&zs, ZLIB_VERSION, (int)sizeof(z_stream)) != Z_OK) return -2;
+    const int rc = inflate(&zs, Z_FINISH);
+    inflateEnd(&zs);
+    if (rc != Z_STREAM_END && rc != Z_OK) return -3;
+    return (int)zs.total_out;
+}
 
 // 日历日程服务
 int dynapp_cal_today(char* out_buf, size_t max_len) {

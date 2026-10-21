@@ -92,6 +92,7 @@ int dynapp_sysinfo_get(dynapp_sysinfo_t* out);
 
 // 日历日程服务
 int dynapp_cal_today(char* out_buf, size_t max_len);
+int dynapp_zlib_inflate(const char *src, int src_len, char *dst, int dst_cap);
 int dynapp_cal_has_event(const char* date);
 int dynapp_cal_get_events_text(const char* date, char* out_buf, size_t max_len);
 void dynapp_cal_auto_refresh(void);

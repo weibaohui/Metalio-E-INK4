@@ -25,12 +25,14 @@
 
 // ---- cards.db 结构（pack_cards.py v1 输出，little-endian）----
 #define DB_HDR_SIZE 64
-#define CARD_REC 24
-#define BOOK_REC 12
+#define CARD_REC 32
+#define BOOK_REC 16
 
 typedef struct {
     uint32_t card_count, book_count;
-    uint32_t card_table_off, book_table_off, strings_off, links_off, body_off;
+    uint32_t card_table_off, book_table_off;
+    uint32_t coll_table_off, coll_count;
+    uint32_t strings_off, links_off, body_off;
 } DbHeader;
 
 typedef struct {
@@ -54,6 +56,7 @@ static int s_db_ok = 0;
 static int s_view = VIEW_CARD;
 static int s_list_kind = 0;      // 0=某书卡片 1=收藏夹
 static uint16_t s_list_book = 0;
+static int s_browse_coll = -1;
 static int s_cur = 0;            // 当前卡号
 static int s_page = 0, s_pages = 0;
 static uint32_t *s_fav = NULL;
@@ -81,6 +84,8 @@ static void on_daily_cb(lv_event_t *e);
 static void on_random_cb(lv_event_t *e);
 static void on_fav_cb(lv_event_t *e);
 static void on_books_cb(lv_event_t *e);
+static void on_colls_cb(lv_event_t *e);
+static void on_coll_clicked(lv_event_t *e);
 static void on_back_card_cb(lv_event_t *e);
 static void on_back_cb(lv_event_t *e);
 static void on_book_clicked(lv_event_t *e);
@@ -169,9 +174,11 @@ static int db_open(void) {
     memcpy(&s_hdr.book_count, hdr + 12, 4);
     memcpy(&s_hdr.card_table_off, hdr + 16, 4);
     memcpy(&s_hdr.book_table_off, hdr + 20, 4);
-    memcpy(&s_hdr.strings_off, hdr + 24, 4);
-    memcpy(&s_hdr.links_off, hdr + 28, 4);
-    memcpy(&s_hdr.body_off, hdr + 32, 4);
+    memcpy(&s_hdr.coll_table_off, hdr + 24, 4);
+    memcpy(&s_hdr.coll_count, hdr + 28, 4);
+    memcpy(&s_hdr.strings_off, hdr + 32, 4);
+    memcpy(&s_hdr.links_off, hdr + 36, 4);
+    memcpy(&s_hdr.body_off, hdr + 40, 4);
     s_db_ok = (s_hdr.card_count > 0);
     return s_db_ok;
 }
@@ -187,23 +194,30 @@ static void card_load(int idx, Card *c) {
     if (!s_db_ok || idx < 0 || (uint32_t)idx >= s_hdr.card_count) return;
     uint8_t rec[CARD_REC];
     db_read(s_hdr.card_table_off + CARD_REC * idx, rec, CARD_REC);
-    uint32_t title_off, chapter_off, body_off, body_len, links_off;
+    uint32_t title_off, chapter_off, body_off, body_len, raw_len, links_off;
     uint16_t link_count, book_id;
     memcpy(&title_off, rec, 4);
     memcpy(&chapter_off, rec + 4, 4);
     memcpy(&body_off, rec + 8, 4);
     memcpy(&body_len, rec + 12, 4);
-    memcpy(&links_off, rec + 16, 4);
-    memcpy(&link_count, rec + 20, 2);
-    memcpy(&book_id, rec + 22, 2);
+    memcpy(&raw_len, rec + 16, 4);
+    memcpy(&links_off, rec + 20, 4);
+    memcpy(&link_count, rec + 24, 2);
+    memcpy(&book_id, rec + 26, 2);
     db_read_str(s_hdr.strings_off + title_off, c->title, sizeof(c->title));
     db_read_str(s_hdr.strings_off + chapter_off, c->chapter, sizeof(c->chapter));
-    c->body_len = body_len;
-    c->body = malloc((size_t)body_len + 1);
-    if (c->body) {
-        db_read(s_hdr.body_off + body_off, c->body, body_len);
-        c->body[body_len] = '\0';
+    // 正文按卡 deflate 存储:读入压缩数据后经固件 zlib 垫片解压
+    char *comp = malloc((size_t)body_len + 1);
+    if (comp == NULL) return;
+    db_read(s_hdr.body_off + body_off, comp, body_len);
+    c->body_len = raw_len;
+    c->body = malloc((size_t)raw_len + 1);
+    if (c->body != NULL) {
+        const int n = dynapp_zlib_inflate(comp, (int)body_len, c->body, raw_len);
+        if (n < 0) { free(c->body); c->body = NULL; c->body_len = 0; }
+        else c->body[(n < 0 ? 0 : n)] = '\0';
     }
+    free(comp);
     c->link_count = link_count;
     c->links = NULL;
     if (link_count) {
@@ -211,6 +225,13 @@ static void card_load(int idx, Card *c) {
         if (c->links) db_read(s_hdr.links_off + links_off, c->links, (size_t)link_count * 4);
     }
     c->book_id = book_id;
+}
+
+static void collection_name(uint16_t coll_id, char *buf, size_t cap) {
+    if (!s_db_ok || coll_id >= s_hdr.coll_count) { snprintf(buf, cap, "?"); return; }
+    uint32_t name_off;
+    db_read(s_hdr.coll_table_off + 8 * coll_id, &name_off, 4);
+    db_read_str(s_hdr.strings_off + name_off, buf, cap);
 }
 
 static void book_name(uint16_t book_id, char *buf, size_t cap) {
@@ -478,14 +499,28 @@ static void page_prev(void) {
 }
 
 // ================= 列表视图 =================
+// 书目两级浏览:s_browse_coll < 0 = collection 列表,>= 0 = 该 collection 的书组列表
+static int s_browse_coll = -1;
+
 static void build_books_view(void) {
     lv_obj_clean(s_body_box);
     s_view = VIEW_BOOKS;
     lv_obj_t *top = lv_obj_create(s_body_box);
     lv_obj_remove_style_all(top);
     lv_obj_set_size(top, lv_pct(100), 44);
-    make_label(top, "书目", 20, 2);
+    if (s_browse_coll >= 0) {
+        char cn[64];
+        collection_name((uint16_t)s_browse_coll, cn, sizeof(cn));
+        char label[96];
+        snprintf(label, sizeof(label), "书目 · %s", cn);
+        make_label(top, label, 20, 2);
+    } else {
+        make_label(top, "书库分类", 20, 2);
+    }
     make_btn(top, "◀ 返回卡片", 130, BTN_H, on_back_card_cb, NULL);
+    if (s_browse_coll >= 0) {
+        make_btn(top, "◀ 分类", 110, BTN_H, on_colls_cb, NULL);
+    }
 
     lv_obj_t *list = lv_obj_create(s_body_box);
     lv_obj_remove_style_all(list);
@@ -496,17 +531,43 @@ static void build_books_view(void) {
     lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
 
-    for (uint32_t b = 0; b < s_hdr.book_count; ++b) {
-        char name[128];
-        book_name((uint16_t)b, name, sizeof(name));
-        uint8_t rec[BOOK_REC];
-        db_read(s_hdr.book_table_off + BOOK_REC * b, rec, BOOK_REC);
-        uint32_t first, count;
-        memcpy(&first, rec + 4, 4);
-        memcpy(&count, rec + 8, 4);
-        char label[160];
-        snprintf(label, sizeof(label), "%s (%u)", name, (unsigned)count);
-        make_btn(list, label, lv_pct(100), 46, on_book_clicked, (void *)(uintptr_t)b);
+    if (s_browse_coll < 0) {
+        for (uint32_t k = 0; k < s_hdr.coll_count; ++k) {
+            char cn[64];
+            collection_name((uint16_t)k, cn, sizeof(cn));
+            // 统计该 collection 的书组数
+            uint32_t groups = 0, cards = 0;
+            for (uint32_t b = 0; b < s_hdr.book_count; ++b) {
+                uint8_t rec[BOOK_REC];
+                db_read(s_hdr.book_table_off + BOOK_REC * b, rec, BOOK_REC);
+                uint16_t coll;
+                memcpy(&coll, rec + 12, 2);
+                if (coll == k) { ++groups;
+                    uint32_t cnt; memcpy(&cnt, rec + 8, 4); cards += cnt; }
+            }
+            char label[128];
+            snprintf(label, sizeof(label), "%s (%u 书 / %u 卡)", cn,
+                     (unsigned)groups, (unsigned)cards);
+            make_btn(list, label, lv_pct(100), 46, on_coll_clicked, (void *)(uintptr_t)k);
+        }
+    } else {
+        uint16_t collsel = (uint16_t)s_browse_coll;
+        for (uint32_t b = 0; b < s_hdr.book_count; ++b) {
+            uint8_t rec[BOOK_REC];
+            db_read(s_hdr.book_table_off + BOOK_REC * b, rec, BOOK_REC);
+            uint16_t coll;
+            memcpy(&coll, rec + 12, 2);
+            if (coll != collsel) continue;
+            uint32_t name_off, first, count;
+            memcpy(&name_off, rec, 4);
+            memcpy(&first, rec + 4, 4);
+            memcpy(&count, rec + 8, 4);
+            char name[128];
+            db_read_str(s_hdr.strings_off + name_off, name, sizeof(name));
+            char label[160];
+            snprintf(label, sizeof(label), "%s (%u)", name, (unsigned)count);
+            make_btn(list, label, lv_pct(100), 46, on_book_clicked, (void *)(uintptr_t)b);
+        }
     }
 }
 
@@ -584,7 +645,12 @@ static void on_fav_cb(lv_event_t *e) {
     fav_toggle((uint32_t)s_cur);
     refresh_fav_btn();
 }
-static void on_books_cb(lv_event_t *e) { (void)e; build_books_view(); }
+static void on_books_cb(lv_event_t *e) { (void)e; s_browse_coll = -1; build_books_view(); }
+static void on_colls_cb(lv_event_t *e) { (void)e; s_browse_coll = -1; build_books_view(); }
+static void on_coll_clicked(lv_event_t *e) {
+    s_browse_coll = (int)(uintptr_t)lv_event_get_user_data(e);
+    build_books_view();
+}
 static void on_back_card_cb(lv_event_t *e) { (void)e; enter_card_view(); }
 static void on_back_cb(lv_event_t *e) {
     (void)e;
