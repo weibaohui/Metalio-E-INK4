@@ -1,0 +1,10 @@
+{
+  "id": "non",
+  "name": "数织",
+  "icon": "icon.png",
+  "executable": "lib/non.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "非织图解谜，按行列数字提示还原图案，10 个内置图案，一步一刷，适配墨水屏"
+}
