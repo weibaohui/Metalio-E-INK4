@@ -1,0 +1,10 @@
+{
+  "id": "xq",
+  "name": "中国象棋",
+  "icon": "icon.png",
+  "executable": "lib/xq.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "回合制中国象棋，一步一刷，完整走法与将死判定，适配墨水屏低刷新率特性"
+}
