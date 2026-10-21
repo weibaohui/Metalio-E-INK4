@@ -1,0 +1,10 @@
+{
+  "id": "mem",
+  "name": "记忆翻牌",
+  "icon": "icon.png",
+  "executable": "lib/mem.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "回合制记忆翻牌配对，一步一刷，6 对/8 对两档，适配墨水屏低刷新率特性"
+}
