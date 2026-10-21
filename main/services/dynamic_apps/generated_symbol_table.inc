@@ -778,6 +778,7 @@
     ESP_ELFSYM_EXPORT(dynapp_wifi_transfer_set_callback),
     ESP_ELFSYM_EXPORT(dynapp_wifi_transfer_start),
     ESP_ELFSYM_EXPORT(dynapp_wifi_transfer_stop),
+    ESP_ELFSYM_EXPORT(dynapp_zlib_inflate),
 
     // ---- 基础库(libc/cJSON/esp/fontpack/radio/时间函数) ----
     ESP_ELFSYM_EXPORT(atoi),

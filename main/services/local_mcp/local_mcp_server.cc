@@ -409,8 +409,8 @@ esp_err_t AppInstallHandler(httpd_req_t* req) {
         return ESP_OK;
     }
 
-    if (req->content_len == 0 || req->content_len > 25 * 1024 * 1024) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid content length (max 25MB)");
+    if (req->content_len == 0 || req->content_len > 64 * 1024 * 1024) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid content length (max 64MB)");
         return ESP_FAIL;
     }
 

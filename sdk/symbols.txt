@@ -804,6 +804,7 @@ dynapp_wifi_transfer_is_running
 dynapp_wifi_transfer_set_callback
 dynapp_wifi_transfer_start
 dynapp_wifi_transfer_stop
+dynapp_zlib_inflate
 
 # ==== 基础库(libc/cJSON/esp/fontpack/radio/时间函数) ====
 atoi
