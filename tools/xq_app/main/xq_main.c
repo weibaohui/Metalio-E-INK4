@@ -3,8 +3,9 @@
 //
 // 设计要点（墨水屏 480x800 / 1bpp 单色）：
 //   - 走一步只重绘变化的两个点 → LVGL 局刷，残影可控；每 N 步全刷一次去残影
-//   - 1bpp 单色没有红黑之分：红方=白底黑字，黑方=黑底白字，再配合
+//   - 1bpp 单色没有红黑之分：空心方=白底黑字，实心方=黑底白字，再配合
 //     帥/將 仕/士 相/象 兵/卒 的不同字形，双方一眼可分
+//     界面文案也只用"空心/实心"，不用"红/黑"——墨水屏上"红"传达不了信息
 //   - 棋盘 9x10 线，格 45px；楚河漢界写在河界内
 //   - 引擎完整实现走法生成、将军判定、��死判定、飞将（白脸将）限制
 #include <stdint.h>
@@ -22,8 +23,12 @@
 #define XC_CELL 45
 #define XC_PIECE 40
 
-#define SIDE_RED 0  // 下（先行）
-#define SIDE_BLACK 1 // 上
+// 1bpp 单色屏上没有"红/黑"可言，棋子上最明显的区分是牌面的明暗：
+//   空心方 = 白底黑字（棋子在下方，帥仕相馬車炮兵），先行
+//   实心方 = 黑底白字（棋子在上方，將士象馬車炮卒）
+// 界面文案一律用"空心/实心"，别再用红/黑（墨水屏上"红"传达不了任何信息）
+#define SIDE_HOLLOW 0 // 空心方（下，先行）
+#define SIDE_SOLID 1  // 实心方（上）
 
 // 棋子类型
 enum {
@@ -49,8 +54,8 @@ typedef struct {
 #define XC_MAX_MOVES 128
 
 static XPiece s_board[XC_ROWS][XC_COLS];
-static int s_turn = SIDE_RED;      // 该谁走
-static int s_winner = -1;          // -1 未结束 / 0 红胜 / 1 黑胜
+static int s_turn = SIDE_HOLLOW;      // 该谁走
+static int s_winner = -1;          // -1 未结束 / 0 空心方胜 / 1 实心方胜
 static int s_win_reason = 0;       // 1=将死 2=被将死 3=困毙
 static int s_nmoves = 0;
 static int s_check_side = -1;      // 正被将军的一方
@@ -93,9 +98,9 @@ static const lv_font_t *piece_font(void) {
 }
 
 // ================= 棋子字形 =================
-// 1bpp 单色：红方白底黑字，黑方黑底白字；字形也按阵营区分
+// 1bpp 单色：空心方白底黑字，实心方黑底白字；字形也按阵营区分
 static const char *piece_glyph(uint8_t type, uint8_t side) {
-    if (side == SIDE_RED) {
+    if (side == SIDE_HOLLOW) {
         switch (type) {
             case XP_KING: return "帥";
             case XP_ADVISOR: return "仕";
@@ -119,18 +124,21 @@ static const char *piece_glyph(uint8_t type, uint8_t side) {
     }
 }
 
+// 阵营显示名：墨水屏上只能靠明暗区分，别写"红/黑"
+static const char *side_name(int side) { return side == SIDE_HOLLOW ? "空心方" : "实心方"; }
+
 // ================= 棋局 =================
 static int in_board(int r, int c) { return r >= 0 && r < XC_ROWS && c >= 0 && c < XC_COLS; }
 
-// 九宫：黑方行 0-2，红方行 7-9，列 3-5
+// 九宫：实心方行 0-2，空心方行 7-9，列 3-5
 static int in_palace(int r, int c, int side) {
     if (c < 3 || c > 5) return 0;
-    return side == SIDE_BLACK ? (r <= 2) : (r >= 7);
+    return side == SIDE_SOLID ? (r <= 2) : (r >= 7);
 }
 
-// 未过河：红方不能过河到 0-4 行，黑方不能到 5-9 行
+// 未过河：空心方不能过河到 0-4 行，实心方不能到 5-9 行
 static int in_own_half(int r, int side) {
-    return side == SIDE_RED ? (r >= 5) : (r <= 4);
+    return side == SIDE_HOLLOW ? (r >= 5) : (r <= 4);
 }
 
 static void set_piece(int r, int c, uint8_t type, uint8_t side) {
@@ -140,18 +148,18 @@ static void set_piece(int r, int c, uint8_t type, uint8_t side) {
 
 static void init_board(void) {
     memset(s_board, 0, sizeof(s_board));
-    // 黑方（上）
+    // 实心方（上）
     const int bk[9] = {XP_ROOK, XP_KNIGHT, XP_ELEPHANT, XP_ADVISOR, XP_KING, XP_ADVISOR, XP_ELEPHANT, XP_KNIGHT, XP_ROOK};
-    for (int c = 0; c < 9; ++c) set_piece(0, c, (uint8_t)bk[c], SIDE_BLACK);
-    set_piece(2, 1, XP_CANNON, SIDE_BLACK);
-    set_piece(2, 7, XP_CANNON, SIDE_BLACK);
-    for (int c = 0; c < 9; c += 2) set_piece(3, c, XP_PAWN, SIDE_BLACK);
-    // 红方（下）
+    for (int c = 0; c < 9; ++c) set_piece(0, c, (uint8_t)bk[c], SIDE_SOLID);
+    set_piece(2, 1, XP_CANNON, SIDE_SOLID);
+    set_piece(2, 7, XP_CANNON, SIDE_SOLID);
+    for (int c = 0; c < 9; c += 2) set_piece(3, c, XP_PAWN, SIDE_SOLID);
+    // 空心方（下，先行）
     const int rk[9] = {XP_ROOK, XP_KNIGHT, XP_ELEPHANT, XP_ADVISOR, XP_KING, XP_ADVISOR, XP_ELEPHANT, XP_KNIGHT, XP_ROOK};
-    for (int c = 0; c < 9; ++c) set_piece(9, c, (uint8_t)rk[c], SIDE_RED);
-    set_piece(7, 1, XP_CANNON, SIDE_RED);
-    set_piece(7, 7, XP_CANNON, SIDE_RED);
-    for (int c = 0; c < 9; c += 2) set_piece(6, c, XP_PAWN, SIDE_RED);
+    for (int c = 0; c < 9; ++c) set_piece(9, c, (uint8_t)rk[c], SIDE_HOLLOW);
+    set_piece(7, 1, XP_CANNON, SIDE_HOLLOW);
+    set_piece(7, 7, XP_CANNON, SIDE_HOLLOW);
+    for (int c = 0; c < 9; c += 2) set_piece(6, c, XP_PAWN, SIDE_HOLLOW);
 }
 
 // 找将/帅
@@ -292,7 +300,7 @@ static int gen_piece_moves(int r, int c, int side, XMove *out, int n, int max) {
             break;
         }
         case XP_PAWN: { // 兵/卒：只进不退，过河后可以横走
-            const int fwd = (side == SIDE_RED) ? -1 : 1;
+            const int fwd = (side == SIDE_HOLLOW) ? -1 : 1;
             const int rr = r + fwd;
             if (in_board(rr, c) && s_board[rr][c].type == XP_NONE) {
                 n = add_move(out, n, max, r, c, rr, c);
@@ -335,8 +343,8 @@ static int is_attacked(int r, int c, int by_side) {
 
 // 飞将（白脸将）：两将同列且中间无子 → 非法局面
 static int generals_face_each_other(void) {
-    const int rk = find_king(SIDE_RED);
-    const int bk = find_king(SIDE_BLACK);
+    const int rk = find_king(SIDE_HOLLOW);
+    const int bk = find_king(SIDE_SOLID);
     if (rk < 0 || bk < 0) return 0;
     const int rc = rk % 9, br = bk / 9, bc = bk % 9;
     if (rc != bc) return 0;
@@ -351,7 +359,7 @@ static int generals_face_each_other(void) {
 static int side_in_check(int side) {
     const int k = find_king(side);
     if (k < 0) return 0;
-    return is_attacked(k / 9, k % 9, side == SIDE_RED ? SIDE_BLACK : SIDE_RED);
+    return is_attacked(k / 9, k % 9, side == SIDE_HOLLOW ? SIDE_SOLID : SIDE_HOLLOW);
 }
 
 // 走法是否合法（走后自己不被将军，且不构成白脸将）
@@ -391,7 +399,7 @@ static void render_cell(int r, int c) {
         return;
     }
     lv_obj_clear_flag(po, LV_OBJ_FLAG_HIDDEN);
-    const bool red = (p->side == SIDE_RED);
+    const bool red = (p->side == SIDE_HOLLOW);
     lv_obj_set_style_bg_color(po, red ? lv_color_white() : lv_color_black(), 0);
     lv_obj_set_style_bg_opa(po, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(po, lv_color_black(), 0);
@@ -405,9 +413,9 @@ static void update_info_line(void) {
     if (s_info_lbl == NULL) return;
     char buf[64];
     if (s_winner >= 0) {
-        snprintf(buf, sizeof(buf), "%s胜", s_winner == SIDE_RED ? "红方" : "黑方");
+        snprintf(buf, sizeof(buf), "%s胜", side_name(s_winner));
     } else {
-        snprintf(buf, sizeof(buf), "轮到%s", s_turn == SIDE_RED ? "红方" : "黑方");
+        snprintf(buf, sizeof(buf), "轮到%s", side_name(s_turn));
     }
     lv_label_set_text(s_info_lbl, buf);
 }
@@ -415,15 +423,15 @@ static void update_info_line(void) {
 static void update_status_line(void) {
     if (s_status_lbl == NULL) return;
     char buf[96];
-    if (s_winner == SIDE_RED) {
-        snprintf(buf, sizeof(buf), "%s", s_win_reason == 2 ? "黑方被将死，红方胜" : "红方胜");
-    } else if (s_winner == SIDE_BLACK) {
-        snprintf(buf, sizeof(buf), "%s", s_win_reason == 2 ? "红方被将死，黑方胜" : "黑方胜");
+    if (s_winner == SIDE_HOLLOW) {
+        snprintf(buf, sizeof(buf), "%s", s_win_reason == 2 ? "实心方被将死，空心方胜" : "空心方胜");
+    } else if (s_winner == SIDE_SOLID) {
+        snprintf(buf, sizeof(buf), "%s", s_win_reason == 2 ? "空心方被将死，实心方胜" : "实心方胜");
     } else if (s_check_side == s_turn) {
         snprintf(buf, sizeof(buf), "%s · 将军！",
-                 s_turn == SIDE_RED ? "红方须应将" : "黑方须应将");
+                 s_turn == SIDE_HOLLOW ? "空心方须应将" : "实心方须应将");
     } else {
-        snprintf(buf, sizeof(buf), "%s走棋 · 共 %d 手", s_turn == SIDE_RED ? "红方" : "黑方", s_nmoves);
+        snprintf(buf, sizeof(buf), "%s走棋 · 共 %d 手", side_name(s_turn), s_nmoves);
     }
     lv_label_set_text(s_status_lbl, buf);
 }
@@ -461,7 +469,7 @@ static void update_last_mark(int r, int c) {
         return;
     }
     lv_obj_clear_flag(s_last_mark, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_bg_color(s_last_mark, s_board[r][c].side == SIDE_RED ? lv_color_black() : lv_color_white(), 0);
+    lv_obj_set_style_bg_color(s_last_mark, s_board[r][c].side == SIDE_HOLLOW ? lv_color_black() : lv_color_white(), 0);
     lv_obj_set_pos(s_last_mark, c * XC_CELL + XC_CELL / 2 - 3, r * XC_CELL + XC_CELL / 2 - 3);
 }
 
@@ -497,7 +505,7 @@ static int load_game(void) {
         fclose(fp);
         return 0;
     }
-    if ((turn != SIDE_RED && turn != SIDE_BLACK) || winner < -1 || winner > 1) {
+    if ((turn != SIDE_HOLLOW && turn != SIDE_SOLID) || winner < -1 || winner > 1) {
         fclose(fp);
         return 0;
     }
@@ -531,7 +539,7 @@ static int load_game(void) {
     s_last_full_refresh = 0;
     memset(s_rendered, 0xFF, sizeof(s_rendered));
     s_rendered_sel[0] = 0;
-    s_check_side = side_in_check(SIDE_RED) ? SIDE_RED : (side_in_check(SIDE_BLACK) ? SIDE_BLACK : -1);
+    s_check_side = side_in_check(SIDE_HOLLOW) ? SIDE_HOLLOW : (side_in_check(SIDE_SOLID) ? SIDE_SOLID : -1);
     return 1;
 }
 
@@ -540,7 +548,7 @@ static void after_move(int side) {
     s_nmoves++;
     s_move_count++;
     // 判定对方是否被将死 / 困毙
-    const int opp = side == SIDE_RED ? SIDE_BLACK : SIDE_RED;
+    const int opp = side == SIDE_HOLLOW ? SIDE_SOLID : SIDE_HOLLOW;
     s_check_side = -1;
     if (side_in_check(opp)) {
         s_check_side = opp;
@@ -633,9 +641,9 @@ static void on_point_clicked(lv_event_t *e) {
             if (s_winner >= 0) {
                 char msg[64];
                 snprintf(msg, sizeof(msg), "%s", s_win_reason == 2
-                                           ? (s_winner == SIDE_RED ? "黑方被将死。" : "红方被将死。")
-                                           : (s_winner == SIDE_RED ? "黑方无棋可走。" : "红方无棋可走。"));
-                dynapp_modal_alert(s_winner == SIDE_RED ? "红方胜！" : "黑方胜！", msg, "确定");
+                                           ? (s_winner == SIDE_HOLLOW ? "实心方被将死。" : "空心方被将死。")
+                                           : (s_winner == SIDE_HOLLOW ? "实心方无棋可走。" : "空心方无棋可走。"));
+                dynapp_modal_alert(s_winner == SIDE_HOLLOW ? "空心方胜！" : "实心方胜！", msg, "确定");
             } else if (s_check_side == s_turn) {
                 dynapp_toast_show("将军！", 1400);
             }
@@ -648,7 +656,7 @@ static void on_point_clicked(lv_event_t *e) {
 static void on_new_game_clicked(lv_event_t *e) {
     (void)e;
     init_board();
-    s_turn = SIDE_RED;
+    s_turn = SIDE_HOLLOW;
     s_winner = -1;
     s_win_reason = 0;
     s_nmoves = 0;
@@ -663,7 +671,7 @@ static void on_new_game_clicked(lv_event_t *e) {
     update_last_mark(-1, -1);
     render_all();
     save_game();
-    dynapp_toast_show("新局，红方先行", 1400);
+    dynapp_toast_show("新局，空心方先行", 1400);
     dynapp_epd_full_refresh();
 }
 
@@ -682,7 +690,7 @@ static void on_undo_clicked(lv_event_t *e) {
     s_winner = -1;
     s_win_reason = 0;
     s_sel_r = s_sel_c = -1;
-    s_check_side = side_in_check(SIDE_RED) ? SIDE_RED : (side_in_check(SIDE_BLACK) ? SIDE_BLACK : -1);
+    s_check_side = side_in_check(SIDE_HOLLOW) ? SIDE_HOLLOW : (side_in_check(SIDE_SOLID) ? SIDE_SOLID : -1);
     render_cell(m->fr, m->fc);
     render_cell(m->tr, m->tc);
     if (s_nmoves > 0) {
@@ -811,7 +819,7 @@ static void *xq_create(void) {
 
     if (!load_game()) {
         init_board();
-        s_turn = SIDE_RED;
+        s_turn = SIDE_HOLLOW;
         s_winner = -1;
         s_nmoves = 0;
         s_check_side = -1;
