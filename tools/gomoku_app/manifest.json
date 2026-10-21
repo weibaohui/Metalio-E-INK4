@@ -1,0 +1,10 @@
+{
+  "id": "gomoku",
+  "name": "五子棋",
+  "icon": "icon.png",
+  "executable": "lib/gomoku.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "回合制五子棋，一步一刷，人机或双人同机，适配墨水屏低刷新率特性"
+}
