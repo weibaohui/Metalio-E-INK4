@@ -521,6 +521,7 @@ struct TouchInjectRequest {
     int y = 0;
     int remaining_ticks = 0;
     bool active = false;
+    bool fresh = false;  // 本轮注入尚未被喂任务消费（首拍）
 };
 static TouchInjectRequest s_touch_inject{};
 static portMUX_TYPE s_touch_inject_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -546,6 +547,7 @@ void TouchFeedTask(void* arg) {
         // 虚拟注入优先于物理触摸：触摸芯片偶尔会报幻影按下（count 恒为 1），
         // 那样注入分支永远进不去，远程点击全丢。注入是确定要送出去的一轮点。
         bool injected = false;
+        bool inject_fresh = false;
         portENTER_CRITICAL(&s_touch_inject_mux);
         if (s_touch_inject.active) {
             if (s_touch_inject.remaining_ticks > 0) {
@@ -554,12 +556,22 @@ void TouchFeedTask(void* arg) {
                 y = s_touch_inject.y;
                 s_touch_inject.remaining_ticks--;
                 injected = true;
+                inject_fresh = s_touch_inject.fresh;
+                s_touch_inject.fresh = false;
             } else {
                 s_touch_inject.active = false;
                 count = 0;
             }
         }
         portEXIT_CRITICAL(&s_touch_inject_mux);
+        if (injected && inject_fresh && s_finger_was_down) {
+            // 触摸芯片报幻影按下（或真手指没抬）时，喂点状态里会残留"手指还按着"。
+            // 残留状态会把这一轮注入的按下当成手指移动 → LVGL 收不到 press，
+            // 远程点击点了没反应（曾表现为远程点击全部失灵）。
+            // 先补一次抬起把残留清掉，注入才是独立完整的一轮点。
+            ESP_LOGI(TAG, "InjectTouch: clear residual finger-down before injected press");
+            TouchFeedHandleSample(0, 0, 0);
+        }
         if (!injected) {
             if (count > 0) {
                 x = static_cast<int>(pts[0].x);
@@ -1986,6 +1998,7 @@ bool LVAdapterDisplay::InjectTouch(int x, int y, int duration_ms) {
         s_touch_inject.y = y;
         s_touch_inject.remaining_ticks = actual_ticks;
         s_touch_inject.active = true;
+        s_touch_inject.fresh = true;
         portEXIT_CRITICAL(&s_touch_inject_mux);
 
         // 等待整个按下与抬起周期真正喂完
@@ -2024,6 +2037,10 @@ bool LVAdapterDisplay::InjectTouch(int x, int y, int duration_ms) {
         }
         return true;
     } else {
+        // 没有喂任务时直接自己喂：同样先清掉残留的"手指还按着"
+        if (s_finger_was_down) {
+            TouchFeedHandleSample(0, 0, 0);
+        }
         TouchFeedHandleSample(1, x, y);
         vTaskDelay(pdMS_TO_TICKS(duration_ms));
         TouchFeedHandleSample(0, 0, 0);

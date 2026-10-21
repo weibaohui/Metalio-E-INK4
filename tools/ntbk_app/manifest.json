@@ -1,0 +1,10 @@
+{
+  "id": "ntbk",
+  "name": "夜市卜卦",
+  "icon": "icon.png",
+  "executable": "lib/ntbk.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "抉择式文字冒险，一屏一段故事，纯文字一步一刷，最省墨水屏的玩法"
+}
