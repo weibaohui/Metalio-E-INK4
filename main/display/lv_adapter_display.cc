@@ -249,12 +249,25 @@ struct TouchFeedSnapshot {
 portMUX_TYPE s_touch_snap_mux = portMUX_INITIALIZER_UNLOCKED;
 TouchFeedSnapshot s_touch_snap{};
 TaskHandle_t s_touch_feed_task = nullptr;
-volatile bool s_touch_feed_run = false;
+// 喂任务代号：重启后旧任务退出时不得清掉新句柄
+volatile uint32_t s_touch_feed_gen = 0;
+// 喂任务心跳：看门狗据此判断喂任务是否卡死（每轮自增）
+volatile uint32_t s_touch_feed_heartbeat = 0;
+// 喂任务的运行标志与代号（每个任务一份，重启时旧任务自行退出）
 struct TouchFeedContext {
     esp_lcd_touch_handle_t touch = nullptr;
     TouchPollCallback poll = nullptr;
+    volatile bool run = true;
+    uint32_t gen = 0;
 };
-TouchFeedContext s_touch_feed_context;
+TouchFeedContext* s_touch_feed_ctx = nullptr;
+esp_lcd_touch_handle_t s_touch_feed_touch = nullptr;
+TouchPollCallback s_touch_feed_poll = nullptr;
+// 看门狗状态：心跳停摆判定与重启限频
+uint32_t s_touch_feed_last_hb = 0;
+int64_t s_touch_feed_last_progress_us = 0;
+int64_t s_touch_feed_last_restart_us = 0;
+esp_timer_handle_t s_touch_wd_timer = nullptr;
 
 const TouchVirtualKey* HitVirtualKey(int x, int y) {
     for (size_t i = 0; i < s_vk_count; ++i) {
@@ -516,9 +529,10 @@ void TouchFeedTask(void* arg) {
     auto* context = static_cast<TouchFeedContext*>(arg);
     auto* tp = context->touch;
     esp_lcd_touch_point_data_t pts[1] = {};
-    ESP_LOGI(TAG, "touch_feed start prio=%u period=%dms", static_cast<unsigned>(kTouchFeedPriority),
-             kTouchFeedPeriodMs);
-    while (s_touch_feed_run) {
+    ESP_LOGI(TAG, "touch_feed start prio=%u period=%dms gen=%u", static_cast<unsigned>(kTouchFeedPriority),
+             kTouchFeedPeriodMs, context->gen);
+    while (context->run) {
+        s_touch_feed_heartbeat++;
         uint8_t count = 0;
         int x = 0;
         int y = 0;
@@ -551,7 +565,14 @@ void TouchFeedTask(void* arg) {
         TouchFeedHandleSample(count, x, y);
         vTaskDelay(pdMS_TO_TICKS(kTouchFeedPeriodMs));
     }
-    s_touch_feed_task = nullptr;
+    // 只有最新一代的喂任务才清句柄：被看门狗换掉的旧任务退出时不能误清新句柄
+    if (context->gen == s_touch_feed_gen) {
+        s_touch_feed_task = nullptr;
+    }
+    if (context == s_touch_feed_ctx) {
+        s_touch_feed_ctx = nullptr;
+    }
+    delete context;
     // SpawnPsrWorker 包装层负责 WithCaps 自删,这里 return 即可
 }
 
@@ -563,25 +584,64 @@ void StartTouchFeed(esp_lcd_touch_handle_t tp, TouchPollCallback poll) {
         ESP_LOGE(TAG, "touch_feed requires a serialized hardware poll callback");
         return;
     }
-    s_touch_feed_run = true;
-    s_touch_feed_context = {tp, poll};
+    s_touch_feed_touch = tp;
+    s_touch_feed_poll = poll;
+    auto* ctx = new (std::nothrow) TouchFeedContext{tp, poll, true, ++s_touch_feed_gen};
+    if (ctx == nullptr) {
+        ESP_LOGE(TAG, "touch_feed ctx alloc failed");
+        return;
+    }
+    s_touch_feed_ctx = ctx;
     // 纯 I2C 轮询 + LVGL 喂点路径(无 NVS/flash 写),栈放 PSRAM 省 4KB 内部 RAM
-    if (!SpawnPsrWorker("touch_feed", 4096, kTouchFeedPriority, TouchFeedTask,
-                        &s_touch_feed_context, &s_touch_feed_task, 0)) {
-        s_touch_feed_run = false;
+    if (!SpawnPsrWorker("touch_feed", 4096, kTouchFeedPriority, TouchFeedTask, ctx, &s_touch_feed_task, 0)) {
         s_touch_feed_task = nullptr;
+        s_touch_feed_ctx = nullptr;
+        delete ctx;
         ESP_LOGE(TAG, "touch_feed create failed");
     }
 }
 
 void StopTouchFeed() {
-    if (s_touch_feed_task == nullptr) {
-        return;
+    if (s_touch_feed_ctx != nullptr) {
+        s_touch_feed_ctx->run = false;
     }
-    s_touch_feed_run = false;
     for (int i = 0; i < 50 && s_touch_feed_task != nullptr; ++i) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
+}
+
+/**
+ * 看门狗：喂任务心跳停摆（卡在 I2C / 崩溃 / 被挂起）时重启它。
+ * 真实触摸与虚拟注入都靠这个任务喂点，任务一死整个触摸就哑了。
+ */
+void RestartTouchFeedIfStalled() {
+    if (s_touch_feed_task == nullptr) {
+        return;
+    }
+    const uint32_t hb = s_touch_feed_heartbeat;
+    const int64_t now = esp_timer_get_time();
+    if (hb != s_touch_feed_last_hb) {
+        s_touch_feed_last_hb = hb;
+        s_touch_feed_last_progress_us = now;
+        return;
+    }
+    if (now - s_touch_feed_last_progress_us < 5 * 1000 * 1000) {
+        return; // 心跳停摆不足 5s（一次 I2C 超时也就 250ms），先不动
+    }
+    if (now - s_touch_feed_last_restart_us < 60 * 1000 * 1000) {
+        return; // 限频：60s 内最多重启一次，避免反复崩溃时刷屏
+    }
+    s_touch_feed_last_restart_us = now;
+    s_touch_feed_last_progress_us = now;
+    ESP_LOGE(TAG, "touch_feed heartbeat stalled %lldms, restarting",
+             (long long)((now - s_touch_feed_last_progress_us) / 1000));
+    // 让旧任务自行退出；它若卡在 I2C 里退不出来，也不再等它
+    if (s_touch_feed_ctx != nullptr) {
+        s_touch_feed_ctx->run = false;
+    }
+    s_touch_feed_task = nullptr;
+    s_touch_feed_ctx = nullptr;
+    StartTouchFeed(s_touch_feed_touch, s_touch_feed_poll);
 }
 
 /**
@@ -1344,6 +1404,22 @@ LVAdapterDisplay::LVAdapterDisplay(const esp_lcd_panel_handle_t panel,
     };
     ESP_ERROR_CHECK(esp_timer_create(&notification_timer_args, &notification_timer_));
 
+    // 触摸喂任务看门狗：心跳停摆 5s 就重启喂任务（真实触摸与远程注入都靠它喂点）
+    {
+        esp_timer_create_args_t touch_wd_args = {
+            .callback =
+                [](void* /*arg*/) {
+                    RestartTouchFeedIfStalled();
+                },
+            .arg = nullptr,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "epd_touch_wd",
+            .skip_unhandled_events = true,
+        };
+        ESP_ERROR_CHECK(esp_timer_create(&touch_wd_args, &s_touch_wd_timer));
+        ESP_ERROR_CHECK(esp_timer_start_periodic(s_touch_wd_timer, 2000));
+    }
+
     epd_flush_ctx_ = new EpdFlushCtx();
     epd_flush_ctx_->panel = panel;
     epd_flush_ctx_->panel_w = SSD1677_PANEL_WIDTH;
@@ -1688,6 +1764,11 @@ LVAdapterDisplay::~LVAdapterDisplay() {
         instance_ = nullptr;
     }
     StopTouchFeed();
+    if (s_touch_wd_timer != nullptr) {
+        esp_timer_stop(s_touch_wd_timer);
+        esp_timer_delete(s_touch_wd_timer);
+        s_touch_wd_timer = nullptr;
+    }
     if (notification_timer_) {
         esp_timer_stop(notification_timer_);
         esp_timer_delete(notification_timer_);
@@ -1904,17 +1985,35 @@ bool LVAdapterDisplay::InjectTouch(int x, int y, int duration_ms) {
         portEXIT_CRITICAL(&s_touch_inject_mux);
 
         // 等待整个按下与抬起周期真正喂完
+        bool delivered = false;
         const TickType_t seq_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(wait_prev_ms);
         for (;;) {
             portENTER_CRITICAL(&s_touch_inject_mux);
             const bool done = !s_touch_inject.active;
             portEXIT_CRITICAL(&s_touch_inject_mux);
-            if (done) break;
+            if (done) {
+                delivered = true;
+                break;
+            }
             if ((int)(xTaskGetTickCount() - seq_deadline) >= 0) {
                 ESP_LOGW(TAG, "InjectTouch: inject sequence timeout");
                 break;
             }
             vTaskDelay(pdMS_TO_TICKS(5));
+        }
+        if (!delivered) {
+            // 喂任务没消费（卡死/已死）→ 自己把这一轮按下-抬起喂完，
+            // 别让远程点击凭空消失（看门狗会另行重启喂任务）。
+            ESP_LOGE(TAG, "InjectTouch: feed task unresponsive, deliver directly");
+            portENTER_CRITICAL(&s_touch_inject_mux);
+            s_touch_inject.active = false;
+            s_touch_inject.remaining_ticks = 0;
+            portEXIT_CRITICAL(&s_touch_inject_mux);
+            for (int i = 0; i < actual_ticks; ++i) {
+                TouchFeedHandleSample(1, x, y);
+                vTaskDelay(pdMS_TO_TICKS(kTouchFeedPeriodMs));
+            }
+            TouchFeedHandleSample(0, 0, 0);
         }
         return true;
     } else {
