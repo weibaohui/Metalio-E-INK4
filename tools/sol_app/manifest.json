@@ -1,0 +1,10 @@
+{
+  "id": "sol",
+  "name": "纸牌接龙",
+  "icon": "icon.png",
+  "executable": "lib/sol.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "回合制纸牌接龙，一步一刷，52 张牌全用几何牌面，适配墨水屏低刷新率特性"
+}
