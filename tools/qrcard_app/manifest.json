@@ -1,0 +1,10 @@
+{
+  "id": "qrcard",
+  "name": "二维码名片",
+  "icon": "icon.png",
+  "executable": "lib/qrcard.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "把个人资料编成 vCard 二维码，手机扫一下直接存联系人；资料放 app 目录的 profile.txt，离线可用"
+}

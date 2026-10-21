@@ -1,0 +1,10 @@
+{
+  "id": "badge",
+  "name": "电子工牌",
+  "icon": "icon.png",
+  "executable": "lib/badge.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "头像+姓名职位公司+状态+可扫名片二维码，挂在胸前；资料与头像放 app 目录，离线可用"
+}
