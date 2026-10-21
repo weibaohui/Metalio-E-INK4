@@ -23,7 +23,6 @@
 #include <string>
 #include <vector>
 
-#include <esp_http_client.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -232,52 +231,38 @@ void HttpWorker(void* arg) {
     res->cb = job->cb;
     res->user_data = job->user_data;
 
-    esp_http_client_config_t cfg = {};
-    cfg.url = job->url.c_str();
-    cfg.timeout_ms = kHttpTimeoutMs;
-    cfg.buffer_size = 2048;
-    cfg.disable_auto_redirect = false;
-
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (client == nullptr) {
-        ESP_LOGW(kTag, "http: init 失败");
-        ScreenLvAsync(HttpDeliver, res);
-        vTaskDelete(nullptr);
-        return;
-    }
-    esp_http_client_set_method(client, HTTP_METHOD_GET);
-    esp_http_client_set_header(client, "Accept", "*/*");
-    esp_http_client_set_header(client, "User-Agent", "Metalio-DynApp/1.0");
     // 占网：否则电源策略收网后 socket 连不上（Connection failed, sock < 0）
     PowerPolicy::GetInstance().Acquire(PowerNeed::OtaDownload);
-    const esp_err_t open_err = esp_http_client_open(client, 0);
-    if (open_err != ESP_OK) {
-        PowerPolicy::GetInstance().Release(PowerNeed::OtaDownload);
-        ESP_LOGW(kTag, "http: open 失败");
-        esp_http_client_cleanup(client);
-        ScreenLvAsync(HttpDeliver, res);
-        vTaskDelete(nullptr);
-        return;
+    // https 握手要 14KB 连续内部 RAM；本任务自己占的内部栈也在抢这块，
+    // 内存碎片化时先等系统回收，最多等 3 秒。
+    for (int i = 0; i < 30; ++i) {
+        if (api::CheckUrlTlsPreflight(job->url, 14 * 1024)) break;
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
-    esp_http_client_fetch_headers(client);
-    const int status = esp_http_client_get_status_code(client);
-    res->status = status;
 
-    char* buf = static_cast<char*>(malloc(kHttpMaxBody + 1));
-    if (buf != nullptr) {
-        int used = 0;
-        while (used < kHttpMaxBody) {
-            const int n = esp_http_client_read(client, buf + used, kHttpMaxBody - used);
-            if (n <= 0) break;
-            used += n;
-        }
-        buf[used] = '\0';
-        res->data = buf;
-        res->len = used;
-    }
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
+    // 走项目自己的 HttpFetch（network->CreateHttp）：固件的 HTTPS 证书链在
+    // 那条路上（esp_crt_bundle_attach），裸 esp_http_client 没有挂证书包，
+    // 握手会报 "No server verification option set in esp_tls_cfg_t"。
+    api::HttpFetchOptions opts;
+    opts.timeout_ms = kHttpTimeoutMs;
+    opts.max_bytes = kHttpMaxBody;
+    opts.send_common_headers = false;  // 第三方 URL，不带 Device-Id 等公共头
+    opts.tls_min_largest_block = 14 * 1024;
+    const api::HttpReply rep = api::HttpGetString(job->url, opts);
     PowerPolicy::GetInstance().Release(PowerNeed::OtaDownload);
+
+    res->status = rep.status;
+    if (rep.ok) {
+        // 用 malloc：HttpDeliver 里是 free() 释放（不能混 new[]/free）
+        res->data = static_cast<char*>(malloc(rep.body.size() + 1));
+        if (res->data != nullptr) {
+            memcpy(res->data, rep.body.data(), rep.body.size());
+            res->data[rep.body.size()] = '\0';
+            res->len = static_cast<int>(rep.body.size());
+        }
+    } else {
+        ESP_LOGW(kTag, "http: %s -> %s", job->url.c_str(), rep.error.c_str());
+    }
 
     ScreenLvAsync(HttpDeliver, res);
     vTaskDelete(nullptr);
@@ -293,7 +278,8 @@ int dynapp_http_get_async(const char* url, dynapp_http_resp_cb_t cb, void* user_
     job->url = url;
     job->cb = cb;
     job->user_data = user_data;
-    if (xTaskCreate(HttpWorker, "dynapp_http", 8192, job, tskIDLE_PRIORITY + 3, nullptr) != pdPASS) {
+    // 内部栈 6KB：TLS 握手需要 14KB 连续内部 RAM，任务自己别占太多
+    if (xTaskCreate(HttpWorker, "dynapp_http", 6144, job, tskIDLE_PRIORITY + 3, nullptr) != pdPASS) {
         delete job;
         return 0;
     }
