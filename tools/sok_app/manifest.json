@@ -1,0 +1,10 @@
+{
+  "id": "sok",
+  "name": "推箱子",
+  "icon": "icon.png",
+  "executable": "lib/sok.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "经典推箱子，关卡逆向生成保证有解，一步一刷，滑动或方向键操作，适配墨水屏"
+}
