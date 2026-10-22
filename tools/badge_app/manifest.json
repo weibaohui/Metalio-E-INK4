@@ -4,7 +4,7 @@
   "icon": "icon.png",
   "executable": "lib/badge.so",
   "abi": 1,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "Metalio",
-  "description": "头像+姓名职位公司+状态+可扫名片二维码，挂在胸前；资料与头像放 app 目录，离线可用"
+  "description": "挂胸前的身份卡：大头像大字一眼看清，底部一张码方便别人加你；多张资料可切换，离线可用"
 }

@@ -1,10 +1,10 @@
 {
   "id": "qrcard",
-  "name": "二维码名片",
+  "name": "电子名片",
   "icon": "icon.png",
   "executable": "lib/qrcard.so",
   "abi": 1,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "Metalio",
-  "description": "把个人资料编成 vCard 二维码，手机扫一下直接存联系人；资料放 app 目录的 profile.txt，离线可用"
+  "description": "一张能递出去的名片：身份区 + 多个码入口（微信/企微/飞书/群/主页），标签切换；文本码与图片码都支持，资料放 app 目录离线可用"
 }

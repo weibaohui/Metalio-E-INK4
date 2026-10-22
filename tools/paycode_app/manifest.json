@@ -1,0 +1,10 @@
+{
+  "id": "paycode",
+  "name": "收款码",
+  "icon": "icon.png",
+  "executable": "lib/paycode.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "把微信/支付宝收款码摆在屏上：多张码标签切换，点一下全屏展示；图片与 pay.txt 放 app 目录，离线可用"
+}
