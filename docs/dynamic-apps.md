@@ -297,6 +297,90 @@ int dynapp_lv_async(void (*cb)(void*), void* user_data);
 const lv_font_t* fontpack_lv_font_get(uint16_t size, uint8_t weight);
 ```
 
+### 3.3 云能力：语音合成（TTS）与异步 HTTP
+
+> 固件实现见 [`main/services/dynamic_apps/dynamic_app_cloud.cc`](file:///Users/weibh/Desktop/Metalio-E-INK4/main/services/dynamic_apps/dynamic_app_cloud.cc)。
+> 这两个接口是**每个应用自己直接调用**的，不是某个公共 App 提供的中转服务——
+> 固件里不存在「云工具」之类的常驻中间件。
+
+#### 语音合成（朗读）
+
+电子墨水屏可以「熄屏只出声」：不烧屏、不消耗刷新电，这是墨水屏相对手机/平板的独占能力。
+
+```c
+// 简单版：合成并播放，函数立即返回，播完自动结束
+int  dynapp_tts_speak(const char* text);      // 返回 1=已排队, 0=没配 API Key 或排队失败
+void dynapp_tts_stop(void);                    // 停止当前朗读
+int  dynapp_tts_available(void);               // 1=已配置可朗读, 0=没配 MiniMax API Key
+
+// 带回调版：cb 在 LVGL 线程执行，可以直接改界面
+typedef void (*dynapp_tts_cb_t)(int ok, const char* err, void* user_data);
+int  dynapp_tts_speak_ex(const char* text, dynapp_tts_cb_t cb, void* user_data);
+```
+
+```c
+static void on_tts_done(int ok, const char* err, void* ud) {
+    (void)ud;
+    if (ok) {
+        dynapp_toast_show("播报完成", 1200);
+    } else {
+        dynapp_toast_show(err, 1800);
+    }
+}
+
+// 点击事件里：
+if (dynapp_tts_available() == 0) {
+    dynapp_toast_show("没配置 MiniMax API Key", 1600);
+    return;
+}
+dynapp_tts_speak_ex("北京，多云，当前温度 18 度。", on_tts_done, NULL);
+```
+
+#### 异步 HTTP GET
+
+```c
+// 回调在 LVGL 线程执行，可以直接操作界面。
+// data=响应体(不含结尾 \0，但固件保证已补 \0)，len=长度，status=HTTP 状态码。
+typedef void (*dynapp_http_resp_cb_t)(const char* data, int len, int status, void* user_data);
+int dynapp_http_get_async(const char* url, dynapp_http_resp_cb_t cb, void* user_data);
+```
+
+```c
+static void on_http_resp(const char* data, int len, int status, void* ud) {
+    (void)ud;
+    if (status != 200 || data == NULL || len <= 0) {
+        dynapp_toast_show("获取失败", 1400);
+        return;
+    }
+    cJSON* root = cJSON_Parse(data);      // cJSON 已导出，直接用
+    if (root != nullptr) {
+        cJSON* cur = cJSON_GetObjectItem(root, "current");
+        // ...
+        cJSON_Delete(root);
+    }
+}
+```
+
+#### 三个必须知道的坑
+
+1. **https 握手要 14KB 连续内部 RAM**。内部内存碎片化时硬发 HTTPS 可能把 lwIP 饿崩
+   （整机软死：WiFi 掉线、HTTP 端口全无响应，串口日志还在滚）。
+   固件侧已经做了预检与等待，**应用侧也建议自己加一道闸门**：
+   ```c
+   dynapp_sysinfo_t info;
+   if (dynapp_sysinfo_get(&info) == 0 && info.ram_largest < 16 * 1024) {
+       // 内存不够，别发 HTTPS，等一会儿再来
+   }
+   ```
+   另外**设备刚重启完那会儿网络最脆**，首次请求延后几秒更稳。
+
+2. **响应体上限 16KB**，超了会按「响应过大」失败，不会截断返回。
+
+3. **别在应用里直接用 `esp_http_client`**：固件的 HTTPS 证书链挂在
+   `network->CreateHttp()` 那条路上，裸 `esp_http_client` 没挂证书包，握手会报
+   `No server verification option set in esp_tls_cfg_t`。动态应用只有
+   `dynapp_http_get_async` 这一个出口，已经处理好证书与重定向。
+
 ---
 
 ## 4. 应用代码框架与开发范式
@@ -412,6 +496,10 @@ curl -X POST "http://<设备IP>:8080/fs/delete?path=apps/<AppName>.app" \
 ```
 *自动删除应用文件并在桌面注销该应用入口。*
 
+> 只想**从桌面隐藏**、但保留包体（比如自用/测试 App），把
+> `main/services/dynamic_apps/dynamic_app_loader.cc` 里 `IsRetiredAppId()` 的
+> `kRetiredIds` 列表加上它的 id 即可：包还在 SD 卡上，但开机不注册、桌面不显示。
+
 ---
 
 ## 7. 符号表能力面与扩展
@@ -432,6 +520,11 @@ curl -X POST "http://<设备IP>:8080/fs/delete?path=apps/<AppName>.app" \
    - `dynapp_fopen_data`, `dynapp_get_data_path`, `dynapp_get_bundle_path`
    - `dynapp_screen_status_bar`, `dynapp_vk_attach`, `dynapp_screen_go_home`
    - `fontpack_lv_font_get`
+4. **云能力（每个应用直接调用，无公共中间件）**：
+   - 语音合成：`dynapp_tts_speak`, `dynapp_tts_speak_ex`, `dynapp_tts_stop`, `dynapp_tts_available`
+   - 异步 HTTP：`dynapp_http_get_async`
+   - 设备信息：`dynapp_sysinfo_get`（内存/PSRAM 余量，联网前判断能否发 HTTPS）
+   - 详见 [3.3 云能力](#33-云能力语音合成tts与异步-http)
 
 ### 7.2 如果缺少某个符号怎么办？
 1. 查看串口输出：如果动态应用引用了未导出的符号，`dlopen` 会在终端打印 `dlerror: symbol 'xxx' not found`。
@@ -445,3 +538,4 @@ curl -X POST "http://<设备IP>:8080/fs/delete?path=apps/<AppName>.app" \
 |---|---|---|
 | **Hello App** | [`tools/hello_app/`](file:///Users/weibh/Desktop/Metalio-E-INK4/tools/hello_app/) | 最小规范模板：Bundle 结构、状态栏、虚拟键、沙箱持久化计数器 |
 | **方方 (FangFang)** | [`tools/fangfang_app/`](file:///Users/weibh/Desktop/Metalio-E-INK4/tools/fangfang_app/) | 完整游戏：方块消除算法、墨水屏局部刷新优化、虚拟键按键控制、沙箱最高分排行榜 |
+| **天气 App** | [`tools/weather_app/`](file:///Users/weibh/Desktop/Metalio-E-INK4/tools/weather_app/) | 云能力实战：异步 HTTPS 取数（cJSON 解析）、TTS 朗读、断网缓存回退、内存闸门、353 城拼音首字母过滤面板 |
