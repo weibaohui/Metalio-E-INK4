@@ -31,8 +31,9 @@
 #define CARD_MARGIN 16
 #define CARD_CONTENT_W (CARD_SCR_W - CARD_MARGIN * 2) // 448
 
-#define CARD_AVATAR 84
-#define CARD_QR_SIZE 280
+#define CARD_AVATAR 76
+#define CARD_QR_CARD 340   // 码卡（含白边）
+#define CARD_QR_CODE 240   // 二维码本身；四周 (340-240)/2=50px 白边=静区
 #define CARD_TAB_H 34
 #define CARD_TAB_MAX 8
 
@@ -142,13 +143,7 @@ static void default_qr_of(const CardProfile *c, CardQr *out) {
         card_copy(out->content, sizeof(out->content), c->url);
     } else if (c != NULL) {
         char mini[512];
-        int n = snprintf(mini, sizeof(mini),
-                         "BEGIN:VCARD\r\nVERSION:3.0\r\nN:%s;;;;\r\nFN:%s\r\n", c->name, c->name);
-        if (c->phone[0] != '\0')
-            n += snprintf(mini + n, sizeof(mini) - n, "TEL;TYPE=CELL:%s\r\n", c->phone);
-        if (c->email[0] != '\0')
-            n += snprintf(mini + n, sizeof(mini) - n, "EMAIL:%s\r\n", c->email);
-        snprintf(mini + n, sizeof(mini) - n, "END:VCARD\r\n");
+        card_build_mini_vcard(c, mini, sizeof(mini));
         card_copy(out->content, sizeof(out->content), mini);
     }
 }
@@ -215,13 +210,9 @@ static void render_qr(void) {
         lv_obj_clean(s_qr_holder);
         CardQr q;
         get_qr(s_qr_idx, &q);
-        // 码外面套一圈细边框：让它看起来是「一张卡」而不是浮在白底上
-        const int frame = CARD_QR_SIZE + 16;
-        lv_obj_t *frame_obj = mk_rect(s_qr_holder, 0, 0, frame, frame, 10);
-        lv_obj_set_style_bg_opa(frame_obj, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_color(frame_obj, lv_color_black(), 0);
-        lv_obj_set_style_border_width(frame_obj, 2, 0);
-        card_qr_render(frame_obj, &q, CARD_QR_SIZE);
+        // 码卡：白底 + 细边框，二维码居中留足静区（紧贴码的黑框会让手机扫不出来）
+        card_qr_card(s_qr_holder, &q, CARD_QR_CARD,
+                     q.is_image ? CARD_QR_CARD : CARD_QR_CODE);
     }
 
     if (s_hint_lbl != NULL) {
@@ -260,7 +251,7 @@ static void render_tabs(void) {
                                    0);
         lv_obj_set_width(s_tab_lbl[i], cell);
         lv_obj_set_style_text_align(s_tab_lbl[i], LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_pos(s_tab_lbl[i], CARD_MARGIN + i * cell, 288);
+        lv_obj_set_pos(s_tab_lbl[i], CARD_MARGIN + i * cell, 266);
     }
     // 选中项下面一条黑线（1bpp 下没有粗体，用下划线表达"当前"）
     if (s_tab_underline != NULL) {
@@ -373,24 +364,24 @@ static void *qrcard_create(void) {
     load_profile();
 
     // ---- 标题行 ----
-    mk_label(scr, "电子名片", f_title, CARD_MARGIN, 44, lv_color_black());
+    mk_label(scr, "电子名片", f_title, CARD_MARGIN, 40, lv_color_black());
 
     // ---- 身份区：头像 + 三行字 ----
     s_avatar_holder = lv_obj_create(scr);
     lv_obj_remove_style_all(s_avatar_holder);
-    lv_obj_set_pos(s_avatar_holder, CARD_MARGIN, 92);
+    lv_obj_set_pos(s_avatar_holder, CARD_MARGIN, 86);
     lv_obj_set_size(s_avatar_holder, CARD_AVATAR, CARD_AVATAR);
     lv_obj_clear_flag(s_avatar_holder, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
 
-    const int tx = CARD_MARGIN + CARD_AVATAR + 16; // 116
-    s_name_lbl = mk_label(scr, "", f_title, tx, 90, lv_color_black());
-    s_title_lbl = mk_label(scr, "", f_ui, tx, 132, lv_color_black());
-    s_company_lbl = mk_label(scr, "", f_ui, tx, 166, grey);
+    const int tx = CARD_MARGIN + CARD_AVATAR + 16; // 108
+    s_name_lbl = mk_label(scr, "", f_title, tx, 84, lv_color_black());
+    s_title_lbl = mk_label(scr, "", f_ui, tx, 124, lv_color_black());
+    s_company_lbl = mk_label(scr, "", f_ui, tx, 156, grey);
 
     // ---- 分隔线 + 联系方式 ----
-    mk_rect(scr, CARD_MARGIN, 194, CARD_CONTENT_W, 1, 0);
-    s_contact_lbl = mk_label(scr, "", f_ui, CARD_MARGIN, 210, lv_color_black());
-    s_status_lbl = mk_label(scr, "", f_ui, CARD_MARGIN, 244, grey);
+    mk_rect(scr, CARD_MARGIN, 176, CARD_CONTENT_W, 1, 0);
+    s_contact_lbl = mk_label(scr, "", f_ui, CARD_MARGIN, 190, lv_color_black());
+    s_status_lbl = mk_label(scr, "", f_ui, CARD_MARGIN, 224, grey);
 
     // ---- 码标签行 ----
     for (int i = 0; i < CARD_TAB_MAX; ++i) {
@@ -402,26 +393,26 @@ static void *qrcard_create(void) {
         lv_obj_add_event_cb(s_tab_lbl[i], on_tab_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         lv_obj_set_pos(s_tab_lbl[i], CARD_MARGIN + i * 56, 288);
     }
-    s_tab_underline = mk_rect(scr, CARD_MARGIN, 288 + CARD_TAB_H - 4, 36, 3, 0);
+    s_tab_underline = mk_rect(scr, CARD_MARGIN, 266 + CARD_TAB_H - 4, 36, 3, 0);
 
     // ---- 大码 ----
     s_qr_holder = lv_obj_create(scr);
     lv_obj_remove_style_all(s_qr_holder);
-    lv_obj_set_pos(s_qr_holder, CARD_MARGIN, 336);
-    lv_obj_set_size(s_qr_holder, CARD_CONTENT_W, CARD_QR_SIZE + 16);
+    lv_obj_set_pos(s_qr_holder, (CARD_SCR_W - CARD_QR_CARD) / 2, 310);
+    lv_obj_set_size(s_qr_holder, CARD_QR_CARD, CARD_QR_CARD);
     lv_obj_clear_flag(s_qr_holder, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
 
     // ---- 说明 ----
-    s_hint_lbl = mk_label(scr, "", f_ui, CARD_MARGIN, 632, lv_color_black());
+    s_hint_lbl = mk_label(scr, "", f_ui, CARD_MARGIN, 658, lv_color_black());
     lv_obj_set_width(s_hint_lbl, CARD_CONTENT_W);
     lv_obj_set_style_text_align(s_hint_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
     // ---- 底部按钮 ----
-    mk_button(scr, "重载", CARD_MARGIN, 676, 140, 52, on_reload, NULL);
-    mk_button(scr, "怎么改", CARD_MARGIN + 148, 676, 140, 52, on_help, NULL);
+    mk_button(scr, "重载", CARD_MARGIN, 702, 140, 52, on_reload, NULL);
+    mk_button(scr, "怎么改", CARD_MARGIN + 148, 702, 140, 52, on_help, NULL);
     {
         // 右侧放张来源角标（拉丁字体，小字）
-        lv_obj_t *src = mk_label(scr, "Metalio", latin_font(), CARD_MARGIN + 300, 692, grey);
+        lv_obj_t *src = mk_label(scr, "Metalio", latin_font(), CARD_MARGIN + 300, 718, grey);
         lv_obj_set_width(src, 148);
         lv_obj_set_style_text_align(src, LV_TEXT_ALIGN_RIGHT, 0);
     }

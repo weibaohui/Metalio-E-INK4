@@ -353,17 +353,21 @@ static lv_obj_t *card_avatar_render(lv_obj_t *parent, const char *avatar_name, c
     return card_avatar_placeholder(parent, person_name, size, font);
 }
 
-/* 画一个码条目：
+/* 画一个码条目（parent 应是白底容器）：
      文本码 → lv_qrcode（内容太长时自动降级，扫不出来就没意义了）
      图片码 → 解码成 L8 位图
-   返回创建的对象（NULL = 失败），位置由调用方摆。 */
+   码在 parent 里**居中**：四周留出的白边就是二维码的静区（quiet zone），
+   标准要求 4 个模块，太窄很多手机（微信/支付宝）直接扫不出来。 */
 static lv_obj_t *card_qr_render(lv_obj_t *parent, const CardQr *q, int size) {
     if (parent == NULL || q == NULL) return NULL;
     if (q->is_image) {
         char path[192];
         card_data_path(path, sizeof(path), q->content);
         lv_obj_t *img = card_make_l8_image(parent, path, size, size);
-        if (img != NULL) return img;
+        if (img != NULL) {
+            lv_obj_center(img);
+            return img;
+        }
         return NULL;
     }
     if (q->content[0] == '\0') return NULL;
@@ -374,10 +378,49 @@ static lv_obj_t *card_qr_render(lv_obj_t *parent, const CardQr *q, int size) {
     lv_qrcode_set_light_color(qr, lv_color_white());
     lv_qrcode_update(qr, q->content, strlen(q->content));
     lv_obj_clear_flag(qr, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_center(qr);
     return qr;
 }
 
-/* 拼一份 vCard：手机扫码后可直接存成联系人 */
+/* 码卡：白底 + 细边框，二维码居中。
+   **边框必须画在静区之外**——紧贴二维码的黑框会破坏静区，扫码率大跌。
+   所以白边留够（card_size - code_size 的那一圈），黑框只画在白边之外。 */
+static lv_obj_t *card_qr_card(lv_obj_t *parent, const CardQr *q, int card_size, int code_size) {
+    if (parent == NULL) return NULL;
+    lv_obj_t *card = lv_obj_create(parent);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, card_size, card_size);
+    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(card, lv_color_black(), 0);
+    lv_obj_set_style_border_width(card, 2, 0);
+    lv_obj_set_style_radius(card, 10, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    if (q != NULL) card_qr_render(card, q, code_size);
+    return card;
+}
+
+/* 拼一份**精简** vCard：手机扫码后可直接存成联系人。
+   为什么不用完整 vCard：载荷越长版本越高、模块越多。
+   完整版（姓名+公司+职位+签名+电话+邮箱+网址 ≈ 243 字节）= 61 个模块，
+   240px 的码只剩 3.9px/模块，扫出来很费劲；精简版（133 字节）= 49 个模块，
+   同样的像素有 4.9px/模块，稳得多。 */
+static int card_build_mini_vcard(const CardProfile *c, char *out, size_t cap) {
+    int n = snprintf(out, cap,
+                     "BEGIN:VCARD\r\n"
+                     "VERSION:3.0\r\n"
+                     "N:%s;;;;\r\n"
+                     "FN:%s\r\n",
+                     c->name, c->name);
+    if (c->phone[0] != '\0')
+        n += snprintf(out + n, cap > (size_t)n ? cap - n : 0, "TEL;TYPE=CELL:%s\r\n", c->phone);
+    if (c->email[0] != '\0')
+        n += snprintf(out + n, cap > (size_t)n ? cap - n : 0, "EMAIL;TYPE=INTERNET:%s\r\n", c->email);
+    n += snprintf(out + n, cap > (size_t)n ? cap - n : 0, "END:VCARD\r\n");
+    return n;
+}
+
+/* 拼一份完整 vCard：手机扫码后可直接存成联系人 */
 static int card_build_vcard(const CardProfile *c, char *out, size_t cap) {
     int n = snprintf(out, cap,
                      "BEGIN:VCARD\r\n"

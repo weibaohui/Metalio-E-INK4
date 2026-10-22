@@ -28,8 +28,9 @@
 #define BADGE_SCR_H 800
 #define BADGE_MARGIN 16
 #define BADGE_CONTENT_W (BADGE_SCR_W - BADGE_MARGIN * 2)
-#define BADGE_AVATAR 140
-#define BADGE_QR_SIZE 180
+#define BADGE_AVATAR 120
+#define BADGE_QR_CARD 300   // 码卡（含白边）
+#define BADGE_QR_CODE 200   // 二维码本身；四周 50px 白边=静区
 
 static CardSet s_set;
 static int s_idx = 0;
@@ -144,13 +145,7 @@ static void badge_qr(const CardProfile *c, CardQr *out) {
         return;
     }
     char mini[512];
-    int n = snprintf(mini, sizeof(mini),
-                     "BEGIN:VCARD\r\nVERSION:3.0\r\nN:%s;;;;\r\nFN:%s\r\n", c->name, c->name);
-    if (c->phone[0] != '\0')
-        n += snprintf(mini + n, sizeof(mini) - n, "TEL;TYPE=CELL:%s\r\n", c->phone);
-    if (c->email[0] != '\0')
-        n += snprintf(mini + n, sizeof(mini) - n, "EMAIL:%s\r\n", c->email);
-    snprintf(mini + n, sizeof(mini) - n, "END:VCARD\r\n");
+    card_build_mini_vcard(c, mini, sizeof(mini));
     card_copy(out->content, sizeof(out->content), mini);
 }
 
@@ -185,12 +180,9 @@ static void render_badge(void) {
         lv_obj_clean(s_qr_holder);
         CardQr q;
         badge_qr(c, &q);
-        const int frame = BADGE_QR_SIZE + 12;
-        lv_obj_t *frame_obj = mk_rect(s_qr_holder, 0, 0, frame, frame);
-        lv_obj_set_style_bg_opa(frame_obj, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_color(frame_obj, lv_color_black(), 0);
-        lv_obj_set_style_border_width(frame_obj, 1, 0);
-        card_qr_render(frame_obj, &q, BADGE_QR_SIZE);
+        // 码卡：白底 + 细边框，二维码居中留足静区（紧贴码的黑框会让手机扫不出来）
+        card_qr_card(s_qr_holder, &q, BADGE_QR_CARD,
+                     q.is_image ? BADGE_QR_CARD : BADGE_QR_CODE);
     }
 
     if (s_idx_lbl != NULL) {
@@ -292,39 +284,39 @@ static void *badge_create(void) {
     load_profile();
 
     // ---- 标题行 ----
-    mk_center_label(scr, "电子工牌", f_title, BADGE_MARGIN, 40, BADGE_CONTENT_W, lv_color_black());
-    s_idx_lbl = mk_center_label(scr, "", latin_font(), BADGE_MARGIN + 300, 50, 148, grey);
+    mk_center_label(scr, "电子工牌", f_title, BADGE_MARGIN, 36, BADGE_CONTENT_W, lv_color_black());
+    s_idx_lbl = mk_center_label(scr, "", latin_font(), BADGE_MARGIN + 300, 46, 148, grey);
     lv_obj_set_style_text_align(s_idx_lbl, LV_TEXT_ALIGN_RIGHT, 0);
 
     // ---- 头像（居中）----
     s_avatar_holder = lv_obj_create(scr);
     lv_obj_remove_style_all(s_avatar_holder);
-    lv_obj_set_pos(s_avatar_holder, (BADGE_SCR_W - BADGE_AVATAR) / 2, 88);
+    lv_obj_set_pos(s_avatar_holder, (BADGE_SCR_W - BADGE_AVATAR) / 2, 78);
     lv_obj_set_size(s_avatar_holder, BADGE_AVATAR, BADGE_AVATAR);
     lv_obj_clear_flag(s_avatar_holder, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
 
     // ---- 身份三行 ----
-    s_name_lbl = mk_center_label(scr, "", f_title, BADGE_MARGIN, 248, BADGE_CONTENT_W, lv_color_black());
-    s_title_lbl = mk_center_label(scr, "", f_ui, BADGE_MARGIN, 292, BADGE_CONTENT_W, lv_color_black());
-    s_company_lbl = mk_center_label(scr, "", f_ui, BADGE_MARGIN, 330, BADGE_CONTENT_W, grey);
+    s_name_lbl = mk_center_label(scr, "", f_title, BADGE_MARGIN, 210, BADGE_CONTENT_W, lv_color_black());
+    s_title_lbl = mk_center_label(scr, "", f_ui, BADGE_MARGIN, 252, BADGE_CONTENT_W, lv_color_black());
+    s_company_lbl = mk_center_label(scr, "", f_ui, BADGE_MARGIN, 288, BADGE_CONTENT_W, grey);
 
-    mk_rect(scr, BADGE_MARGIN + 60, 372, BADGE_CONTENT_W - 120, 1);
+    mk_rect(scr, BADGE_MARGIN + 60, 324, BADGE_CONTENT_W - 120, 1);
 
     // ---- 码（居中，带细框）----
     s_qr_holder = lv_obj_create(scr);
     lv_obj_remove_style_all(s_qr_holder);
-    lv_obj_set_pos(s_qr_holder, (BADGE_SCR_W - (BADGE_QR_SIZE + 12)) / 2, 390);
-    lv_obj_set_size(s_qr_holder, BADGE_QR_SIZE + 12, BADGE_QR_SIZE + 12);
+    lv_obj_set_pos(s_qr_holder, (BADGE_SCR_W - BADGE_QR_CARD) / 2, 336);
+    lv_obj_set_size(s_qr_holder, BADGE_QR_CARD, BADGE_QR_CARD);
     lv_obj_clear_flag(s_qr_holder, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
 
     // ---- 联系方式 ----
-    s_phone_lbl = mk_center_label(scr, "", f_ui, BADGE_MARGIN, 592, BADGE_CONTENT_W, lv_color_black());
-    s_email_lbl = mk_center_label(scr, "", f_ui, BADGE_MARGIN, 628, BADGE_CONTENT_W, grey);
-    s_status_lbl = mk_center_label(scr, "", f_ui, BADGE_MARGIN, 664, BADGE_CONTENT_W, grey);
+    s_phone_lbl = mk_center_label(scr, "", f_ui, BADGE_MARGIN, 646, BADGE_CONTENT_W, lv_color_black());
+    s_email_lbl = mk_center_label(scr, "", f_ui, BADGE_MARGIN, 678, BADGE_CONTENT_W, grey);
+    s_status_lbl = mk_center_label(scr, "", f_ui, BADGE_MARGIN, 710, BADGE_CONTENT_W, grey);
 
     // ---- 底部按钮 ----
     const int bw = 106, gap = 8;
-    const int y = 704;
+    const int y = 744;
     mk_button(scr, "上一张", BADGE_MARGIN, y, bw, 48, on_prev, NULL);
     mk_button(scr, "下一张", BADGE_MARGIN + (bw + gap), y, bw, 48, on_next, NULL);
     mk_button(scr, "重载", BADGE_MARGIN + (bw + gap) * 2, y, bw, 48, on_reload, NULL);
