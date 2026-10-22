@@ -3,13 +3,16 @@
 //
 // 设计要点（都是墨水屏逼出来的）：
 //   1. 大温度用七段数码管（纯几何，1bpp 下最清晰）；图标也是几何拼的，不用位图。
+//      灭掉的段一律不画——留一圈空心框/细鬼影只会把字形搞脏。
 //   2. 不跳秒：只在数据真的变了的时候重画。定时刷新 30 分钟一次，值没变就不刷屏。
 //   3. 断网不白屏：读数缓存在 app 自己的 data/ 目录，下次打开先显示上次读数，
 //      联网成功后自动覆盖。墨水屏常断电常待机，缓存是刚需。
 //   4. 能熄屏只出声：点「朗读」用固件的 TTS 播报天气（电子墨水的独占能力）。
+//   5. 城市库 330+ 个（全国地级市 + 港澳台），面板按拼音首字母过滤 + 分页，
+//      不做成滚动的——墨水屏拖动会留满残影，翻页一次只刷一屏反而干净。
 //
 // 数据源：Open-Meteo（免注册、免 key、JSON、体积小）
-//   https://api.open-meteo.com/v1/forecast?latitude=..&longitude=..&current=..&daily=..&timezone=auto
+//   https://api.open-meteo.com/v1/forecast?latitude=..&longitude=..&current=..&daily=..
 // JSON 解析用固件导出的 cJSON。
 #include <stdint.h>
 #include <stdio.h>
@@ -24,10 +27,11 @@
 #include "cJSON.h"
 
 #include "../../_shared/sevenseg.h"
+#include "city_db.h" // 自动生成的城市库（纯字符数组）
 
 // ================= 配置 =================
 #define CITY_NAME_MAX 24
-#define MAX_CITIES 24
+#define MAX_CUSTOM 16     // cities.txt 里的自定义城市上限
 #define NDAYS 3
 #define REFRESH_MS (30 * 60 * 1000) // 30 分钟自动刷新一次
 #define DATA_FILE "weather.txt"
@@ -35,10 +39,16 @@
 #define API_FILE "api.txt"
 #define DEFAULT_API "https://api.open-meteo.com/v1/forecast"
 
+// 城市面板
+#define ROWS_PER_PAGE 11
+#define ROW_H 35
+#define LETTER_COLS 13
+
 typedef struct {
     char name[CITY_NAME_MAX];
-    int lat_e4; // 纬度 ×10000（整数：固件没导出 double→int 转换，全程别碰浮点）
-    int lon_e4; // 经度 ×10000
+    int lat_e4;
+    int lon_e4;
+    char initial; // 拼音首字母
 } City;
 
 typedef struct {
@@ -56,20 +66,11 @@ typedef struct {
     int valid;
 } Weather;
 
-// 内置城市用字符串表，启动时解析成 度×10000 的整数。
-// （不用浮点常量：固件导出表里没有 __fixdfsi，double→int 会链接失败。）
-static const char *const kPresetCsv[] = {
-    "北京,39.9042,116.4074", "上海,31.2304,121.4737", "广州,23.1291,113.2644",
-    "深圳,22.5431,114.0579", "杭州,30.2741,120.1551", "成都,30.5728,104.0668",
-    "南京,32.0603,118.7969", "武汉,30.5928,114.3055", "西安,34.3416,108.9398",
-    "重庆,29.5630,106.5516", "天津,39.3434,117.3616", "苏州,31.2989,120.5853",
-};
-#define PRESET_N ((int)(sizeof(kPresetCsv) / sizeof(kPresetCsv[0])))
-
 // ================= 全局状态 =================
-static City s_cities[MAX_CITIES];
-static int s_city_n = 0;
-static int s_city_idx = 0;
+static City s_custom[MAX_CUSTOM];
+static int s_custom_n = 0;
+static int s_db_n = 0;    // kCityDb 条目数
+static int s_city_idx = 0; // 当前城市（统一索引空间：0..db-1 是库，db.. 是自定义）
 static Weather s_w;
 static int s_loading = 0;
 static int s_have_data = 0;
@@ -91,11 +92,57 @@ static lv_obj_t *s_fcp_lbl[NDAYS] = {NULL};
 static lv_obj_t *s_status_lbl = NULL;
 static lv_obj_t *s_src_lbl = NULL;
 static lv_obj_t *s_hint_lbl = NULL;
-static lv_obj_t *s_picker = NULL;
-static lv_obj_t *s_picker_grid = NULL;
-static lv_timer_t *s_auto_timer = NULL;
 
-static void build_picker_grid(void);
+// 城市面板
+static lv_obj_t *s_picker = NULL;
+static lv_obj_t *s_picker_list = NULL;
+static lv_obj_t *s_picker_status = NULL;
+static lv_obj_t *s_letter_lbl[26] = {NULL};
+static lv_obj_t *s_letter_hl = NULL;
+static lv_obj_t *s_btn_prev = NULL;
+static lv_obj_t *s_btn_next = NULL;
+static char s_filter = 0; // 0 = 全部，否则 'A'..'Z'
+static int s_page = 0;
+static int s_total_rows = 0;
+static int s_row_total = 0;
+static int s_row_on_page = 0;
+static int s_match_cities = 0;
+
+typedef struct {
+    int kind; // 0 = 组标题, 1 = 城市
+    int idx;  // 城市在统一索引空间里的下标
+    char initial;
+} Row;
+static Row s_rows[ROWS_PER_PAGE];
+
+static lv_timer_t *s_auto_timer = NULL;
+static lv_timer_t *s_retry_timer = NULL;
+static lv_timer_t *s_first_timer = NULL;
+
+static void picker_build_page(void);
+static void schedule_retry(void);
+static void build_picker(void);
+static void fetch_weather(void);
+
+// 内存不够时 2 分钟后再试一次（别让用户干等半小时）
+static void on_retry_tick(lv_timer_t *tmr) {
+    (void)tmr;
+    s_retry_timer = NULL;
+    fetch_weather();
+}
+
+static void schedule_retry(void) {
+    if (s_retry_timer != NULL) return;
+    s_retry_timer = lv_timer_create(on_retry_tick, 120000, NULL);
+}
+
+// 首次取数延后 8 秒：设备刚开机那会儿网络栈还在建连/碎片化，
+// 这时候硬发 HTTPS 最容易把网络打死（实测过整机软死）。
+static void on_first_fetch(lv_timer_t *tmr) {
+    (void)tmr;
+    s_first_timer = NULL;
+    fetch_weather();
+}
 
 // ================= UTF-8 边界 =================
 // 汉字 3 字节，按字节硬截会把一个字劈成两半 → 非法 UTF-8 → 显示豆腐块。
@@ -255,6 +302,17 @@ static int icon_category(int code) {
     return 1;
 }
 
+// 把 度×10000 格式回 "39.9042"
+static void fmt_deg(char *out, size_t n, int e4) {
+    const int a = e4 / 10000;
+    const int b = e4 % 10000;
+    if (b < 0) {
+        snprintf(out, n, "%d.%04d", a, -b);
+    } else {
+        snprintf(out, n, "%d.%04d", a, b);
+    }
+}
+
 // 四舍五入取整。
 // 固件导出表里有 __floatsidf / __subdf3 / __gedf2（int→double、double 减法、
 // double 比较），唯独没有 double→int 的 __fixdfsi。所以不能直接 (int)v，
@@ -315,7 +373,112 @@ static void draw_icon(int code) {
     }
 }
 
-// ================= 城市表 =================
+// 在 [p, end) 里找字符 c（固件导出表里没有 memchr）
+static const char *find_chr(const char *p, const char *end, char c) {
+    while (p < end) {
+        if (*p == c) return p;
+        p++;
+    }
+    return NULL;
+}
+
+// ================= 城市库 =================
+// 统一索引空间：0 .. db_n-1 是内置库，db_n .. 是 cities.txt 里的自定义。
+// 不用指针数组存名字——动态应用里全局 const char* 指针表会触发 LoadProhibited。
+static int db_count(void) {
+    if (s_db_n > 0) return s_db_n;
+    int n = 0;
+    for (const char *p = kCityDb; *p != '\0';) {
+        const char *eol = strchr(p, '\n');
+        if (eol == NULL) break;
+        if (find_chr(p, eol, '|') != NULL) n++;
+        p = eol + 1;
+    }
+    s_db_n = n;
+    return n;
+}
+
+static int db_get(int idx, City *out) {
+    const char *p = kCityDb;
+    int i = 0;
+    while (*p != '\0') {
+        const char *eol = strchr(p, '\n');
+        if (eol == NULL) eol = p + strlen(p);
+        const char *f1 = find_chr(p, eol, '|');
+        if (f1 != NULL) {
+            const char *f2 = find_chr(f1 + 1, eol, '|');
+            if (f2 != NULL) {
+                const char *f3 = find_chr(f2 + 1, eol, '|');
+                if (f3 != NULL) {
+                    if (i == idx) {
+                        // 行格式：名称|首字母|纬度|经度
+                        //   f1 = 第 1 个 '|'（名称后）
+                        //   f2 = 第 2 个 '|'（首字母后）→ [f2+1, f3) 是纬度
+                        //   f3 = 第 3 个 '|'（纬度后）   → [f3+1, eol) 是经度
+                        size_t nl = (size_t)(f1 - p);
+                        if (nl >= CITY_NAME_MAX) nl = CITY_NAME_MAX - 1;
+                        memcpy(out->name, p, nl);
+                        out->name[nl] = '\0';
+                        out->initial = (f1 + 1 < f2) ? f1[1] : '#';
+                        char nb[16];
+                        size_t l1 = (size_t)(f3 - (f2 + 1));
+                        if (l1 >= sizeof(nb)) l1 = sizeof(nb) - 1;
+                        memcpy(nb, f2 + 1, l1);
+                        nb[l1] = '\0';
+                        out->lat_e4 = atoi(nb);
+                        size_t l2 = (size_t)(eol - (f3 + 1));
+                        if (l2 >= sizeof(nb)) l2 = sizeof(nb) - 1;
+                        memcpy(nb, f3 + 1, l2);
+                        nb[l2] = '\0';
+                        out->lon_e4 = atoi(nb);
+                        return 1;
+                    }
+                    i++;
+                }
+            }
+        }
+        p = (*eol == '\n') ? eol + 1 : eol;
+    }
+    return 0;
+}
+
+static int city_total(void) { return db_count() + s_custom_n; }
+
+static int city_get(int idx, City *out) {
+    if (idx < 0) return 0;
+    if (idx < db_count()) return db_get(idx, out);
+    const int ci = idx - db_count();
+    if (ci < 0 || ci >= s_custom_n) return 0;
+    *out = s_custom[ci];
+    return 1;
+}
+
+// 按名字找城市（单趟扫描，别写成「每个城市再扫一遍」的 O(n²)——
+// 353 个城市时那会白吃掉 1 秒 LVGL 线程）
+static int city_find(const char *name) {
+    const char *p = kCityDb;
+    int i = 0;
+    while (*p != '\0') {
+        const char *eol = strchr(p, '\n');
+        if (eol == NULL) eol = p + strlen(p);
+        const char *f1 = find_chr(p, eol, '|');
+        if (f1 != NULL) {
+            const size_t nl = (size_t)(f1 - p);
+            char buf[CITY_NAME_MAX];
+            const size_t cl = (nl >= CITY_NAME_MAX) ? CITY_NAME_MAX - 1 : nl;
+            memcpy(buf, p, cl);
+            buf[cl] = '\0';
+            if (strcmp(buf, name) == 0) return i;
+            i++;
+        }
+        p = (*eol == '\n') ? eol + 1 : eol;
+    }
+    for (int k = 0; k < s_custom_n; ++k) {
+        if (strcmp(s_custom[k].name, name) == 0) return db_count() + k;
+    }
+    return -1;
+}
+
 // 解析十进制度字符串 → 度×10000 的整数（不碰浮点）
 static int parse_deg(const char *s, int *out) {
     int sign = 1;
@@ -350,66 +513,10 @@ static int parse_deg(const char *s, int *out) {
     return 1;
 }
 
-// 把 度×10000 格式回 "39.9042"
-static void fmt_deg(char *out, size_t n, int e4) {
-    const int a = e4 / 10000;
-    const int b = e4 % 10000;
-    if (b < 0) {
-        snprintf(out, n, "%d.%04d", a, -b);
-    } else {
-        snprintf(out, n, "%d.%04d", a, b);
-    }
-}
-
-static void cities_reset(void) {
-    s_city_n = 0;
-    for (int i = 0; i < PRESET_N && s_city_n < MAX_CITIES; ++i) {
-        const char *row = kPresetCsv[i];
-        const char *c1 = strchr(row, ',');
-        if (c1 == NULL) continue;
-        const char *c2 = strchr(c1 + 1, ',');
-        if (c2 == NULL) continue;
-        char nm[CITY_NAME_MAX];
-        const size_t nl = (size_t)(c1 - row);
-        if (nl >= sizeof(nm)) continue;
-        memcpy(nm, row, nl);
-        nm[nl] = '\0';
-        int lat = 0, lon = 0;
-        char latbuf[16], lonbuf[16];
-        const size_t l1 = (size_t)(c2 - (c1 + 1));
-        if (l1 >= sizeof(latbuf)) continue;
-        memcpy(latbuf, c1 + 1, l1);
-        latbuf[l1] = '\0';
-        snprintf(lonbuf, sizeof(lonbuf), "%s", c2 + 1);
-        if (!parse_deg(latbuf, &lat) || !parse_deg(lonbuf, &lon)) continue;
-        City *c = &s_cities[s_city_n];
-        snprintf(c->name, CITY_NAME_MAX, "%s", nm);
-        utf8_clip(c->name, CITY_NAME_MAX - 1);
-        c->lat_e4 = lat;
-        c->lon_e4 = lon;
-        s_city_n++;
-    }
-}
-
-static int city_find(const char *name) {
-    for (int i = 0; i < s_city_n; ++i) {
-        if (strcmp(s_cities[i].name, name) == 0) return i;
-    }
-    return -1;
-}
-
-static int city_add(const char *name, int lat_e4, int lon_e4) {
-    if (s_city_n >= MAX_CITIES) return -1;
-    City *c = &s_cities[s_city_n];
-    snprintf(c->name, CITY_NAME_MAX, "%s", name);
-    utf8_clip(c->name, CITY_NAME_MAX - 1);
-    c->lat_e4 = lat_e4;
-    c->lon_e4 = lon_e4;
-    return s_city_n++;
-}
-
 // 从 app data 目录读自定义城市：每行 "名称,纬度,经度"
-static void load_custom_cities(void) {    FILE *fp = (FILE *)dynapp_fopen_data(CITY_FILE, "r");
+static void load_custom_cities(void) {
+    s_custom_n = 0;
+    FILE *fp = (FILE *)dynapp_fopen_data(CITY_FILE, "r");
     if (fp == NULL) return;
     char line[128];
     while (fgets(line, sizeof(line), fp) != NULL) {
@@ -422,27 +529,29 @@ static void load_custom_cities(void) {    FILE *fp = (FILE *)dynapp_fopen_data(C
         char *comma2 = strchr(comma + 1, ',');
         if (comma2 == NULL) continue;
         *comma2 = '\0';
-        // 去掉行尾
         size_t nl = strlen(p);
         while (nl > 0 && (p[nl - 1] == '\n' || p[nl - 1] == '\r' || p[nl - 1] == ' ')) p[--nl] = '\0';
         nl = strlen(comma2);
         while (nl > 0 && (comma2[nl - 1] == '\n' || comma2[nl - 1] == '\r' || comma2[nl - 1] == ' '))
             comma2[--nl] = '\0';
         if (p[0] == '\0') continue;
-        // 这时 p=名称, comma+1=纬度, comma2+1=经度（逗号已替换成 \0）
         int lat = 0, lon = 0;
         if (!parse_deg(comma + 1, &lat)) continue;
         if (!parse_deg(comma2 + 1, &lon)) continue;
         if (lat < -900000 || lat > 900000 || lon < -1800000 || lon > 1800000) continue;
         if (city_find(p) >= 0) continue;
-        city_add(p, lat, lon);
+        if (s_custom_n >= MAX_CUSTOM) break;
+        City *c = &s_custom[s_custom_n++];
+        snprintf(c->name, CITY_NAME_MAX, "%s", p);
+        utf8_clip(c->name, CITY_NAME_MAX - 1);
+        c->lat_e4 = lat;
+        c->lon_e4 = lon;
+        c->initial = 'Z'; // 自定义城市排在库后面，单独一个组
     }
     fclose(fp);
 }
 
 // API 基址可覆盖：data/api.txt 里写一行完整基址（默认 Open-Meteo）。
-// 用途：open-meteo 在某些网络下不通时，可以指向自建代理；
-// 也方便把请求导到本地做离线验证。
 static void load_api_base(char *out, size_t n) {
     snprintf(out, n, "%s", DEFAULT_API);
     FILE *fp = (FILE *)dynapp_fopen_data(API_FILE, "r");
@@ -463,10 +572,10 @@ static void load_api_base(char *out, size_t n) {
 static void save_state(void) {
     FILE *fp = (FILE *)dynapp_fopen_data(DATA_FILE, "w");
     if (fp == NULL) return;
-    const City *c = (s_city_n > 0) ? &s_cities[s_city_idx] : NULL;
-    fprintf(fp, "WTH2\n");
-    if (c != NULL)
-        fprintf(fp, "name=%s\nlat=%d\nlon=%d\n", c->name, c->lat_e4, c->lon_e4);
+    City c;
+    if (city_get(s_city_idx, &c)) {
+        fprintf(fp, "WTH2\nname=%s\nlat=%d\nlon=%d\n", c.name, c.lat_e4, c.lon_e4);
+    }
     if (s_w.valid) {
         fprintf(fp, "temp=%d\nfeels=%d\nhum=%d\nwind=%d\ncode=%d\nobs=%s\nupdated=%ld\n", s_w.temp,
                 s_w.feels, s_w.hum, s_w.wind, s_w.code, s_w.obs, s_w.updated);
@@ -527,7 +636,16 @@ static void load_state(void) {
     fclose(fp);
     if (have_city && name[0] != '\0') {
         int idx = city_find(name);
-        if (idx < 0) idx = city_add(name, lat, lon);
+        if (idx < 0 && s_custom_n < MAX_CUSTOM) {
+            // 上次选的城市不在库里（自定义或老版本存的）：补进自定义区
+            City *c = &s_custom[s_custom_n++];
+            snprintf(c->name, CITY_NAME_MAX, "%s", name);
+            utf8_clip(c->name, CITY_NAME_MAX - 1);
+            c->lat_e4 = lat;
+            c->lon_e4 = lon;
+            c->initial = 'Z';
+            idx = db_count() + s_custom_n - 1;
+        }
         if (idx >= 0) s_city_idx = idx;
     }
     if (have_days) {
@@ -544,11 +662,12 @@ static void load_state(void) {
 // ================= 界面 =================
 static void render_main(void) {
     if (s_scr == NULL) return;
-    const City *c = (s_city_n > 0) ? &s_cities[s_city_idx] : NULL;
+    City c;
+    const int have_city = city_get(s_city_idx, &c);
 
     if (s_city_lbl != NULL) {
         char b[CITY_NAME_MAX + 4];
-        snprintf(b, sizeof(b), "%s", c != NULL ? c->name : "—");
+        snprintf(b, sizeof(b), "%s", have_city ? c.name : "—");
         utf8_clip(b, sizeof(b) - 1);
         lv_label_set_text(s_city_lbl, b);
     }
@@ -557,12 +676,12 @@ static void render_main(void) {
         if (s_desc_lbl != NULL) lv_label_set_text(s_desc_lbl, s_loading ? "获取中…" : "暂无数据");
         if (s_status_lbl != NULL)
             lv_label_set_text(s_status_lbl, s_loading ? "正在联网获取天气" : "点「刷新」获取天气");
-        if (s_hint_lbl != NULL) lv_label_set_text(s_hint_lbl, "首次使用需要联网一次");
-        sevenseg_show_ghost(&s_seg);
+        if (s_hint_lbl != NULL) lv_label_set_text(s_hint_lbl, "");
+        sevenseg_clear(&s_seg);
         return;
     }
 
-    // 大温度：隐藏前导零（8 度不该显示成 "  8"，也不留 "8" 的鬼影）
+    // 大温度：隐藏前导零（8 度不该显示成 "  8"）
     const int v = s_w.temp;
     uint8_t blank = 0;
     if (v >= 0) {
@@ -625,18 +744,12 @@ static void render_main(void) {
     }
 
     if (s_status_lbl != NULL) {
-        if (s_loading) {
-            lv_label_set_text(s_status_lbl, "正在更新…");
-        } else {
-            char st[64];
-            snprintf(st, sizeof(st), "更新于 %s", s_w.obs[0] != '\0' ? s_w.obs : "—");
-            utf8_clip(st, sizeof(st) - 1);
-            lv_label_set_text(s_status_lbl, st);
-        }
+        char st[64];
+        snprintf(st, sizeof(st), "更新于 %s", s_w.obs[0] != '\0' ? s_w.obs : "—");
+        utf8_clip(st, sizeof(st) - 1);
+        lv_label_set_text(s_status_lbl, st);
     }
-    if (s_hint_lbl != NULL) {
-        lv_label_set_text(s_hint_lbl, "点「朗读」播报天气 · 上下键换城市");
-    }
+    if (s_hint_lbl != NULL) lv_label_set_text(s_hint_lbl, "");
     if (s_src_lbl != NULL) {
         // 数据源标签跟着实际用的 API 基址走（api.txt 可覆盖）
         char base[192];
@@ -655,9 +768,24 @@ static void render_main(void) {
 // ================= 联网 =================
 static void on_http_resp(const char *data, int len, int status, void *user_data);
 
+// https 握手要 14KB 连续内部 RAM，内部内存碎片化时硬连会把网络栈饿崩
+// （实测整机软死：WiFi 掉线、HTTP 端口全无响应，只有串口还活着）。
+// 所以取数前先看最大连续块，不够就等一会儿再说——宁可数据晚到，也别把网络打死。
+static int ram_ok_for_tls(void) {
+    dynapp_sysinfo_t info;
+    if (dynapp_sysinfo_get(&info) != 0) return 1; // 拿不到就按可以处理
+    return info.ram_largest >= 16 * 1024;
+}
+
 static void fetch_weather(void) {
-    if (s_city_n <= 0) return;
+    City c;
+    if (!city_get(s_city_idx, &c)) return;
     if (s_loading) return;
+    if (!ram_ok_for_tls()) {
+        if (s_status_lbl != NULL) lv_label_set_text(s_status_lbl, "内存紧张 · 稍后更新");
+        schedule_retry();
+        return;
+    }
     if (dynapp_is_network_ready() == 0) {
         if (s_status_lbl != NULL)
             lv_label_set_text(s_status_lbl, s_have_data ? "离线 · 显示上次读数" : "无网络连接");
@@ -665,10 +793,9 @@ static void fetch_weather(void) {
         dynapp_toast_show("无网络连接", 1400);
         return;
     }
-    const City *c = &s_cities[s_city_idx];
     char lat[24], lon[24];
-    fmt_deg(lat, sizeof(lat), c->lat_e4);
-    fmt_deg(lon, sizeof(lon), c->lon_e4);
+    fmt_deg(lat, sizeof(lat), c.lat_e4);
+    fmt_deg(lon, sizeof(lon), c.lon_e4);
     char base[192];
     load_api_base(base, sizeof(base));
     char url[512];
@@ -718,12 +845,12 @@ static void on_http_resp(const char *data, int len, int status, void *user_data)
 
 // 只用 cJSON 的 valueint / json_round()：本工程不直接做 double→int，
 // 固件导出表里没有 __fixdfsi，那样写会在链接期失败。
-#define NUM_GET(obj, key, dst)                          \
-    do {                                                \
-        it = cJSON_GetObjectItem((obj), (key));         \
-        if (it != NULL && cJSON_IsNumber(it)) {         \
-            (dst) = json_round(it);                     \
-        }                                               \
+#define NUM_GET(obj, key, dst)                  \
+    do {                                        \
+        it = cJSON_GetObjectItem((obj), (key)); \
+        if (it != NULL && cJSON_IsNumber(it)) { \
+            (dst) = json_round(it);             \
+        }                                       \
     } while (0)
 
     NUM_GET(cur, "temperature_2m", w.temp);
@@ -788,23 +915,13 @@ static void on_http_resp(const char *data, int len, int status, void *user_data)
         utf8_clip(st, sizeof(st) - 1);
         lv_label_set_text(s_status_lbl, st);
     }
-    if (s_hint_lbl != NULL) lv_label_set_text(s_hint_lbl, "点「朗读」播报天气 · 上下键换城市");
+    if (s_hint_lbl != NULL) lv_label_set_text(s_hint_lbl, "");
 }
 
-// ================= 交互 =================
-static void switch_city(int delta) {
-    if (s_city_n <= 0) return;
-    s_city_idx = (s_city_idx + delta + s_city_n) % s_city_n;
-    s_have_data = 0; // 换城市先清空，避免显示上一个城市的读数
-    memset(&s_w, 0, sizeof(s_w));
-    render_main();
-    save_state();
-    fetch_weather();
-}
-
-static void on_city_pick(lv_event_t *e) {
+// ================= 城市面板 =================
+static void on_city_row_clicked(lv_event_t *e) {
     const int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (idx < 0 || idx >= s_city_n) return;
+    if (idx < 0 || idx >= city_total()) return;
     s_city_idx = idx;
     if (s_picker != NULL) lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
     s_have_data = 0;
@@ -814,28 +931,186 @@ static void on_city_pick(lv_event_t *e) {
     fetch_weather();
 }
 
+static void picker_update_letters(void) {
+    // 高亮用「一根黑条 + 该字母改白字」实现——不用 26 个按钮/标签，
+    // 省下几十个 LVGL 对象（墨水屏设备的内部 RAM 很紧，TLS 握手要 14KB 连续块）。
+    for (int i = 0; i < 26; ++i) {
+        if (s_letter_lbl[i] == NULL) continue;
+        const char ch = (char)('A' + i);
+        const int on = (s_filter == ch);
+        lv_obj_set_style_text_color(s_letter_lbl[i], on ? lv_color_white() : lv_color_black(), 0);
+    }
+    if (s_letter_hl == NULL) return;
+    if (s_filter == 0) {
+        lv_obj_add_flag(s_letter_hl, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    const int li = s_filter - 'A';
+    const int row = li / LETTER_COLS;
+    const int col = li % LETTER_COLS;
+    lv_obj_set_pos(s_letter_hl, 16 + col * 34, 540 + row * 36);
+    lv_obj_clear_flag(s_letter_hl, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void picker_build_page(void) {
+    if (s_picker_list == NULL) return;
+    lv_obj_clean(s_picker_list);
+
+    s_row_total = 0;
+    s_row_on_page = 0;
+    s_match_cities = 0;
+    char cur = 0;
+    const int total = city_total();
+    for (int i = 0; i < total; ++i) {
+        City c;
+        if (!city_get(i, &c)) continue;
+        if (s_filter != 0 && c.initial != s_filter) continue;
+        if (s_filter == 0 && c.initial != cur) {
+            cur = c.initial;
+            // 组标题占一行
+            if (s_row_total >= s_page * ROWS_PER_PAGE && s_row_on_page < ROWS_PER_PAGE) {
+                s_rows[s_row_on_page].kind = 0;
+                s_rows[s_row_on_page].idx = -1;
+                s_rows[s_row_on_page].initial = cur;
+                s_row_on_page++;
+            }
+            s_row_total++;
+        }
+        if (s_row_total >= s_page * ROWS_PER_PAGE && s_row_on_page < ROWS_PER_PAGE) {
+            s_rows[s_row_on_page].kind = 1;
+            s_rows[s_row_on_page].idx = i;
+            s_rows[s_row_on_page].initial = c.initial;
+            s_row_on_page++;
+        }
+        s_row_total++;
+        s_match_cities++;
+    }
+    s_total_rows = s_row_total;
+
+    int pages = (s_total_rows + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
+    if (pages <= 0) pages = 1;
+    if (s_page >= pages) s_page = pages - 1;
+    if (s_page < 0) s_page = 0;
+
+    const lv_font_t *f_ui = ui_font();
+    const lv_font_t *f_title = title_font();
+    const lv_color_t grey = lv_palette_darken(LV_PALETTE_GREY, 2);
+
+    for (int r = 0; r < s_row_on_page; ++r) {
+        const int y = r * ROW_H;
+        if (s_rows[r].kind == 0) {
+            char t[4];
+            snprintf(t, sizeof(t), "%c", s_rows[r].initial);
+            mk_label(s_picker_list, t, f_title, 20, y + 2, lv_color_black());
+            mk_rect(s_picker_list, 50, y + 16, 398, 1, 0, 1);
+        } else {
+            City c;
+            if (!city_get(s_rows[r].idx, &c)) continue;
+            lv_obj_t *l = mk_label(s_picker_list, c.name, f_ui, 24, y + 4, lv_color_black());
+            lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(l, on_city_row_clicked, LV_EVENT_CLICKED,
+                                (void *)(intptr_t)s_rows[r].idx);
+        }
+    }
+    (void)grey;
+
+    // 状态行：当前过滤 + 命中数量 + 页码
+    if (s_picker_status != NULL) {
+        char st[80];
+        if (s_filter != 0) {
+            snprintf(st, sizeof(st), "%c 组 · %d 个城市 · %d/%d 页", s_filter, s_match_cities,
+                     s_page + 1, pages);
+        } else {
+            snprintf(st, sizeof(st), "全部 %d 个城市 · %d/%d 页", s_match_cities, s_page + 1, pages);
+        }
+        utf8_clip(st, sizeof(st) - 1);
+        lv_label_set_text(s_picker_status, st);
+    }
+    if (s_btn_prev != NULL) {
+        lv_obj_set_style_opa(s_btn_prev, s_page > 0 ? LV_OPA_COVER : LV_OPA_30, 0);
+    }
+    if (s_btn_next != NULL) {
+        lv_obj_set_style_opa(s_btn_next, s_page + 1 < pages ? LV_OPA_COVER : LV_OPA_30, 0);
+    }
+    picker_update_letters();
+}
+
+static void on_letter_clicked(lv_event_t *e) {
+    (void)e;
+    // 字母条是「一块透明点击层 + 26 个文字标签」，这里按触点坐标反推字母
+    lv_indev_t *indev = lv_indev_active();
+    lv_point_t pt;
+    if (indev == NULL) return;
+    lv_indev_get_point(indev, &pt);
+    const int rel_y = pt.y - 540;
+    const int row = (rel_y < 36) ? 0 : 1;
+    const int col = (pt.x - 16) / 34;
+    if (col < 0 || col >= LETTER_COLS) return;
+    const int li = row * LETTER_COLS + col;
+    if (li < 0 || li > 25) return;
+    const char letter = (char)('A' + li);
+    s_filter = (s_filter == letter) ? 0 : letter; // 再点一次取消过滤
+    s_page = 0;
+    picker_build_page();
+}
+
+static void on_show_all_clicked(lv_event_t *e) {
+    (void)e;
+    s_filter = 0;
+    s_page = 0;
+    picker_build_page();
+}
+
+static void on_prev_page(lv_event_t *e) {
+    (void)e;
+    if (s_page <= 0) return;
+    s_page--;
+    picker_build_page();
+}
+
+static void on_next_page(lv_event_t *e) {
+    (void)e;
+    const int pages = (s_total_rows + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
+    if (s_page + 1 >= pages) return;
+    s_page++;
+    picker_build_page();
+}
+
+static void on_picker_reload(lv_event_t *e) {
+    (void)e;
+    load_custom_cities();
+    s_page = 0;
+    picker_build_page();
+    dynapp_toast_show("城市列表已重载", 1200);
+}
+
 static void on_picker_cancel(lv_event_t *e) {
     (void)e;
     if (s_picker != NULL) lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void on_picker_reload(lv_event_t *e) {
-    (void)e;
-    char cur[CITY_NAME_MAX] = {0};
-    if (s_city_n > 0) snprintf(cur, sizeof(cur), "%s", s_cities[s_city_idx].name);
-    cities_reset();
-    load_custom_cities();
-    int idx = (cur[0] != '\0') ? city_find(cur) : -1;
-    s_city_idx = (idx >= 0) ? idx : 0;
-    build_picker_grid();
-    dynapp_toast_show("城市列表已重载", 1200);
-}
-
 static void on_city_btn(lv_event_t *e) {
     (void)e;
+    if (s_picker == NULL) {
+        // 面板延后建：主界面 + 联网取数时先别占那几十个 LVGL 对象的内存
+        // （https 握手要 14KB 连续内部 RAM，省下来的都是余量）
+        build_picker();
+    }
     if (s_picker == NULL) return;
-    build_picker_grid();
+    s_page = 0;
+    picker_build_page();
     lv_obj_clear_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void switch_city(int delta) {
+    const int total = city_total();
+    if (total <= 0) return;
+    s_city_idx = (s_city_idx + delta + total) % total;
+    s_have_data = 0; // 换城市先清空，避免显示上一个城市的读数
+    memset(&s_w, 0, sizeof(s_w));
+    render_main();
+    save_state();
+    fetch_weather();
 }
 
 static void on_refresh(lv_event_t *e) {
@@ -865,10 +1140,12 @@ static void on_speak(lv_event_t *e) {
         dynapp_toast_show("还没有天气数据", 1400);
         return;
     }
+    City c;
+    const char *name = city_get(s_city_idx, &c) ? c.name : "";
     char text[320];
-    const char *name = (s_city_n > 0) ? s_cities[s_city_idx].name : "";
-    snprintf(text, sizeof(text), "%s，%s。当前温度 %d 度，体感 %d 度，湿度 %d%%，风速 %d 公里每小时。"
-                             "今天最高 %d 度，最低 %d 度，降水概率 %d%%。",
+    snprintf(text, sizeof(text),
+             "%s，%s。当前温度 %d 度，体感 %d 度，湿度 %d%%，风速 %d 公里每小时。"
+             "今天最高 %d 度，最低 %d 度，降水概率 %d%%。",
              name, wmo_text(s_w.code), s_w.temp, s_w.feels, s_w.hum, s_w.wind, s_w.tmax[0], s_w.tmin[0],
              s_w.pop[0]);
     utf8_clip(text, sizeof(text) - 1);
@@ -876,28 +1153,6 @@ static void on_speak(lv_event_t *e) {
         dynapp_toast_show("正在合成语音…", 1400);
     } else {
         dynapp_toast_show("排队失败", 1200);
-    }
-}
-
-// ================= 城市选择面板 =================
-static void build_picker_grid(void) {
-    if (s_picker_grid == NULL) return;
-    lv_obj_clean(s_picker_grid);
-    const int cols = 3;
-    const int cw = 144, ch = 52, gap = 8;
-    const int x0 = 16, y0 = 120;
-    for (int i = 0; i < s_city_n; ++i) {
-        const int r = i / cols, c = i % cols;
-        const int x = x0 + c * (cw + gap);
-        const int y = y0 + r * (ch + gap);
-        if (y + ch > 660) break; // 放不下就截断（自定义城市很多时）
-        lv_obj_t *btn = mk_button(s_picker_grid, s_cities[i].name, x, y, cw, ch, on_city_pick,
-                                  (void *)(intptr_t)i);
-        if (i == s_city_idx) {
-            lv_obj_set_style_bg_color(btn, lv_color_black(), 0);
-            lv_obj_t *lbl = lv_obj_get_child(btn, 0);
-            if (lbl != NULL) lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
-        }
     }
 }
 
@@ -913,26 +1168,50 @@ static void build_picker(void) {
     lv_obj_clear_flag(s_picker, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
 
-    mk_label(s_picker, "选择城市", title_font(), 16, 48, lv_color_black());
-    // 注意：这里必须用带汉字的 UI 字体（latin_font 是纯 ASCII 规格，中文会整片空白）
-    mk_label(s_picker, "可编辑 cities.txt 增加城市", ui_font(), 16, 88,
-             lv_palette_darken(LV_PALETTE_GREY, 2));
+    mk_label(s_picker, "选择城市", title_font(), 16, 40, lv_color_black());
+    mk_button(s_picker, "全部", 392, 36, 72, 42, on_show_all_clicked, NULL);
+    s_picker_status = mk_label(s_picker, "", ui_font(), 16, 92,
+                               lv_palette_darken(LV_PALETTE_GREY, 2));
 
-    s_picker_grid = lv_obj_create(s_picker);
-    lv_obj_remove_style_all(s_picker_grid);
-    lv_obj_set_pos(s_picker_grid, 0, 0);
-    lv_obj_set_size(s_picker_grid, 480, 800);
-    lv_obj_clear_flag(s_picker_grid, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    s_picker_list = lv_obj_create(s_picker);
+    lv_obj_remove_style_all(s_picker_list);
+    lv_obj_set_pos(s_picker_list, 16, 126);
+    lv_obj_set_size(s_picker_list, 448, ROWS_PER_PAGE * ROW_H);
+    lv_obj_clear_flag(s_picker_list, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-    mk_button(s_picker, "重载列表", 16, 700, 144, 56, on_picker_reload, NULL);
-    mk_button(s_picker, "取消", 168, 700, 144, 56, on_picker_cancel, NULL);
+    mk_rect(s_picker, 16, 528, 448, 2, 0, 1);
 
-    build_picker_grid();
+    // 拼音首字母过滤条：26 个字母标签（定距排布）+ 一根高亮条 + 一个透明点击层
+    s_letter_hl = mk_rect(s_picker, 0, 0, 34, 36, 4, 1);
+    lv_obj_add_flag(s_letter_hl, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 26; ++i) {
+        const int row = i / LETTER_COLS;
+        const int col = i % LETTER_COLS;
+        const int x = 16 + col * 34;
+        const int y = 540 + row * 36;
+        char t[2] = {(char)('A' + i), '\0'};
+        lv_obj_t *l = mk_label(s_picker, t, latin_font(), x, y + 8, lv_color_black());
+        lv_obj_set_width(l, 34);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+        s_letter_lbl[i] = l;
+    }
+    {
+        lv_obj_t *hit = lv_obj_create(s_picker);
+        lv_obj_remove_style_all(hit);
+        lv_obj_set_pos(hit, 10, 536);
+        lv_obj_set_size(hit, 460, 76);
+        lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(hit, on_letter_clicked, LV_EVENT_CLICKED, NULL);
+    }
+
+    s_btn_prev = mk_button(s_picker, "上页", 16, 622, 104, 52, on_prev_page, NULL);
+    s_btn_next = mk_button(s_picker, "下页", 128, 622, 104, 52, on_next_page, NULL);
+    mk_button(s_picker, "重载", 240, 622, 104, 52, on_picker_reload, NULL);
+    mk_button(s_picker, "取消", 352, 622, 112, 52, on_picker_cancel, NULL);
 }
 
 // ================= 生命周期 =================
-// 30 分钟一次的自动刷新：值没变就只更新不刷屏（render_main 里会重画，
-// 所以这里只在数据真正变了时才重建界面）。
+// 30 分钟一次的自动刷新：值没变就不重画界面。
 static void on_auto_tick(lv_timer_t *tmr) {
     (void)tmr;
     fetch_weather();
@@ -943,6 +1222,14 @@ static void on_screen_deleted(lv_event_t *e) {
     if (s_auto_timer != NULL) {
         lv_timer_delete(s_auto_timer);
         s_auto_timer = NULL;
+    }
+    if (s_retry_timer != NULL) {
+        lv_timer_delete(s_retry_timer);
+        s_retry_timer = NULL;
+    }
+    if (s_first_timer != NULL) {
+        lv_timer_delete(s_first_timer);
+        s_first_timer = NULL;
     }
     save_state();
     s_scr = NULL;
@@ -958,14 +1245,19 @@ static void on_screen_deleted(lv_event_t *e) {
     s_src_lbl = NULL;
     s_hint_lbl = NULL;
     s_picker = NULL;
-    s_picker_grid = NULL;
-    memset(&s_seg, 0, sizeof(s_seg));
+    s_picker_list = NULL;
+    s_picker_status = NULL;
+    s_btn_prev = NULL;
+    s_btn_next = NULL;
+    for (int i = 0; i < 26; ++i) s_letter_lbl[i] = NULL;
+    s_letter_hl = NULL;
     for (int i = 0; i < NDAYS; ++i) {
         s_day_lbl[i] = NULL;
         s_fc_lbl[i] = NULL;
         s_fct_lbl[i] = NULL;
         s_fcp_lbl[i] = NULL;
     }
+    memset(&s_seg, 0, sizeof(s_seg));
 }
 
 static int weather_on_vk_key(const char *key) {
@@ -1009,11 +1301,11 @@ static void *weather_create(void) {
 
     // 2. 七段数码管大温度（3 位）
     {
-        const int dw = 90, dh = 132, stroke = 14, x0 = 16, y0 = 96;
+        const int dw = 90, dh = 140, stroke = 15, x0 = 16, y0 = 96;
         sevenseg_init(&s_seg, scr, 3, x0, y0, dw, dh, stroke);
         sevenseg_set_minus_pos(&s_seg, x0, y0 + dh / 2 - stroke / 2);
     }
-    mk_label(scr, "℃", f_title, 322, 168, lv_color_black());
+    mk_label(scr, "℃", f_title, 322, 174, lv_color_black());
 
     // 3. 天气图标
     s_icon_box = lv_obj_create(scr);
@@ -1023,48 +1315,47 @@ static void *weather_create(void) {
     lv_obj_clear_flag(s_icon_box, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
 
     // 4. 天气描述 + 四项指标
-    s_desc_lbl = mk_label(scr, "—", f_title, 16, 244, lv_color_black());
-    s_feels_lbl = mk_label(scr, "", f_ui, 16, 292, lv_color_black());
-    s_hum_lbl = mk_label(scr, "", f_ui, 250, 292, lv_color_black());
-    s_wind_lbl = mk_label(scr, "", f_ui, 16, 328, lv_color_black());
-    s_pop_lbl = mk_label(scr, "", f_ui, 250, 328, lv_color_black());
+    s_desc_lbl = mk_label(scr, "—", f_title, 16, 252, lv_color_black());
+    s_feels_lbl = mk_label(scr, "", f_ui, 16, 302, lv_color_black());
+    s_hum_lbl = mk_label(scr, "", f_ui, 250, 302, lv_color_black());
+    s_wind_lbl = mk_label(scr, "", f_ui, 16, 340, lv_color_black());
+    s_pop_lbl = mk_label(scr, "", f_ui, 250, 340, lv_color_black());
 
     // 5. 分隔线
-    mk_rect(scr, 16, 374, 448, 2, 0, 1);
+    mk_rect(scr, 16, 386, 448, 2, 0, 1);
 
     // 6. 三天预报
     for (int i = 0; i < NDAYS; ++i) {
         const int x = 16 + i * 149;
-        s_day_lbl[i] = mk_label(scr, "", f_ui, x, 392, lv_color_black());
-        s_fc_lbl[i] = mk_label(scr, "", f_ui, x, 426, lv_color_black());
-        s_fct_lbl[i] = mk_label(scr, "", f_ui, x, 460, lv_color_black());
-        s_fcp_lbl[i] = mk_label(scr, "", f_ui, x, 494, grey);
-        if (i > 0) mk_rect(scr, x - 10, 392, 1, 120, 0, 1);
+        s_day_lbl[i] = mk_label(scr, "", f_ui, x, 404, lv_color_black());
+        s_fc_lbl[i] = mk_label(scr, "", f_ui, x, 440, lv_color_black());
+        s_fct_lbl[i] = mk_label(scr, "", f_ui, x, 476, lv_color_black());
+        s_fcp_lbl[i] = mk_label(scr, "", f_ui, x, 512, grey);
+        if (i > 0) mk_rect(scr, x - 10, 404, 1, 120, 0, 1);
     }
 
     // 7. 分隔线 + 状态行
-    mk_rect(scr, 16, 540, 448, 2, 0, 1);
-    s_status_lbl = mk_label(scr, "", f_ui, 16, 558, lv_color_black());
-    s_src_lbl = mk_label(scr, "Open-Meteo", f_latin, 16, 592, grey);
-    s_hint_lbl = mk_label(scr, "", f_ui, 16, 620, grey);
+    mk_rect(scr, 16, 556, 448, 2, 0, 1);
+    s_status_lbl = mk_label(scr, "", f_ui, 16, 574, lv_color_black());
+    s_src_lbl = mk_label(scr, "Open-Meteo", f_latin, 16, 610, grey);
+    s_hint_lbl = mk_label(scr, "", f_ui, 16, 644, grey);
 
     // 8. 按钮行
-    mk_button(scr, "城市", 16, 680, 144, 60, on_city_btn, NULL);
-    mk_button(scr, "刷新", 168, 680, 144, 60, on_refresh, NULL);
-    mk_button(scr, "朗读", 320, 680, 144, 60, on_speak, NULL);
+    mk_button(scr, "城市", 16, 700, 144, 60, on_city_btn, NULL);
+    mk_button(scr, "刷新", 168, 700, 144, 60, on_refresh, NULL);
+    mk_button(scr, "朗读", 320, 700, 144, 60, on_speak, NULL);
 
-    // 9. 城市选择面板（最后建，保证盖在最上层）
-    build_picker();
+    // 9. 城市选择面板：第一次点「城市」时才建（见 on_city_btn）
 
     // 10. 数据
-    cities_reset();
+    db_count();
     load_custom_cities();
     load_state();
     render_main();
 
-    // 11. 自动刷新 + 首次联网
+    // 11. 自动刷新 + 首次联网（延后 8 秒，避开刚开机那会儿的网络碎片化）
     s_auto_timer = lv_timer_create(on_auto_tick, REFRESH_MS, NULL);
-    fetch_weather();
+    s_first_timer = lv_timer_create(on_first_fetch, 8000, NULL);
     return scr;
 }
 
