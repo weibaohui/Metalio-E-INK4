@@ -231,8 +231,13 @@ bool DecodeImageToL8(const uint8_t* data, size_t len, int max_w, int max_h, Rast
             }
             return false;
         }
-        Rgb888ToL8Scaled(rgba, static_cast<int>(w), static_cast<int>(h), true, max_w, max_h, out);
-        free(rgba);
+        // LVGL 打过补丁的 lodepng：*out 返回的是 lv_draw_buf_t*（像素在 ->data 里），
+        // 不是像素缓冲本身。把它当像素缓冲读会全是垃圾（表现为图像被拉成横条纹）。
+        // LVGL 自己的解码器就是这么用的（lv_lodepng.c: decode_png_data）。
+        auto* decoded = reinterpret_cast<lv_draw_buf_t*>(rgba);
+        Rgb888ToL8Scaled(decoded->data, static_cast<int>(w), static_cast<int>(h), true, max_w, max_h,
+                          out);
+        lv_draw_buf_destroy(decoded);
         return !out.empty();
     }
 
