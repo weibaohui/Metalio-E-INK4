@@ -7,6 +7,7 @@
 #include "assets/lang_config.h"
 #include "haptic_feedback.h"
 #include "lv_adapter_display.h"
+#include "reader_core/text_encoding.h"
 #include "screen_common.h"
 #include "settings.h"
 #include "services/wifi_file/wifi_file_service.h"
@@ -40,6 +41,12 @@
 #define HOME_PAGE_INDICATOR_H 18      // 多页时底部圆点指示高度 (px);圆点取代"1/2"文字,压矮抽屉
 // NVS 无记录时的默认卡片样式：0=白底，1=网点灰底，2=白底+黑色描边
 #define HOME_APP_CARD_STYLE_DEFAULT HomeScreen::kCardStyleBorder
+// 桌面卡片里的 app 名字最多显示几个字：4 个汉字。
+// 卡片宽 116px、UI 字体 25@2（汉字一个字 25px），5 个字就是 125px 放不下，
+// LVGL 会把名字折成两行、顶到图标上（看着像坏掉了）。所以超了直接截断。
+#define HOME_APP_NAME_MAX_WIDE 4
+// 纯 ASCII 名字按 8 个字符封顶（同样为了不折行）。
+#define HOME_APP_NAME_MAX_ASCII 8
 
 namespace
 {
@@ -122,6 +129,55 @@ namespace
     lv_obj_t *s_page_dots = nullptr;
     lv_obj_t *s_home_scr = nullptr;
     int s_home_page = 0; // 离开子页再回首页时保持页码
+    // 判断一个码点是不是「宽字符」（汉字/全角）：宽字符一个字占 25px，窄的占 ~13px。
+    bool IsWideCodepoint(uint32_t cp)
+    {
+        return cp >= 0x1100 && (cp <= 0x115F ||                  // 朝鲜文字母
+                               cp == 0x2329 || cp == 0x232A ||  // 尖括号
+                               (cp >= 0x2E80 && cp <= 0xA4CF && cp != 0x303F) || // CJK 部首 ~ 彝文
+                               (cp >= 0xAC00 && cp <= 0xD7A3) || // 谚文音节
+                               (cp >= 0xF900 && cp <= 0xFAFF) || // 兼容汉字
+                               (cp >= 0xFE30 && cp <= 0xFE6F) || // 竖排标点
+                               (cp >= 0xFF00 && cp <= 0xFF60) || // 全角形式
+                               (cp >= 0xFFE0 && cp <= 0xFFE6));  // 全角符号
+    }
+
+    // app 显示名截断：最多 4 个汉字（宽字符），纯 ASCII 部分最多 8 个字符。
+    // 在字符边界上截断（不能把一个汉字劈成半个字节，截出来的必须是合法 UTF-8）。
+    std::string TruncateAppName(const char *name)
+    {
+        std::string out;
+        if (name == nullptr) {
+            return out;
+        }
+        const uint8_t *p = reinterpret_cast<const uint8_t *>(name);
+        const size_t len = std::strlen(name);
+        size_t i = 0;
+        size_t wide = 0;
+        size_t narrow = 0;
+        while (i < len) {
+            uint32_t cp = 0;
+            const size_t n = reader::Utf8Next(p + i, len - i, &cp);
+            if (n == 0) {
+                break;
+            }
+            if (IsWideCodepoint(cp)) {
+                if (wide >= HOME_APP_NAME_MAX_WIDE) {
+                    break;
+                }
+                wide++;
+            } else {
+                if (narrow >= HOME_APP_NAME_MAX_ASCII) {
+                    break;
+                }
+                narrow++;
+            }
+            out.append(reinterpret_cast<const char *>(p + i), n);
+            i += n;
+        }
+        return out;
+    }
+
     lv_obj_t *CreateAppCell(lv_obj_t *parent, AppModule &entry, int card_style);
 
     int PageCount()
@@ -418,9 +474,12 @@ namespace
         lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_t *name = lv_label_create(cell);
-        lv_label_set_text(name, entry.GetName());
+        // 名字最多 4 个汉字，超了直接截断：卡片只有 116px 宽，5 个字放不下，
+        // LVGL 会折成两行、顶到图标上。截完再配合 LONG_CLIP，保证永远单行。
+        const std::string shown_name = TruncateAppName(entry.GetName());
+        lv_label_set_text(name, shown_name.c_str());
         lv_obj_set_width(name, HOME_APP_CARD_W);
-        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
         lv_obj_set_style_text_font(name, fontpack_lv_font_ui(), 0);
         lv_obj_set_style_text_color(name, lv_color_black(), 0);
         lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
