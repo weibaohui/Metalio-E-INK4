@@ -28,10 +28,17 @@ constexpr uint8_t kBayer4[4][4] = {
 };
 
 uint8_t GrayToL8Dither(uint8_t gray, int x, int y) {
-    // gray 0=黑 255=白；阈值映射 0..15，低于阈值为黑
-    const int level = (255 - gray) * 16 / 256;  // 黑度
-    const int thr = kBayer4[y & 3][x & 3];
-    return (level > thr) ? 0x00 : 0xFF;
+    // gray 0=黑 255=白；阈值映射 0..16，低于阈值为黑
+    //
+    // 注意这里为什么是 /255 而不是 /256、而且阈值要 +1：
+    // 原来的写法 ((255-gray)*16/256 > bayer) 里，纯黑的 level 被整数截断成 15，
+    // 而 Bayer 阈值最大也是 15 → `15 > 15` 为假 → **每 16 个纯黑像素里有 1 个
+    // 被抖成白点（6.25% 误码率）**。后果有两个：黑色剪影看起来像一团网点；
+    // 更要命的是**二维码直接报废**（检测得到但解不出内容）。
+    // 现在：level 取 0..16，阈值取 1..16 → 纯黑恒黑、纯白恒白，只有中间调才抖。
+    const int level = (255 - gray) * 16 / 255;  // 黑度 0..16
+    const int thr = kBayer4[y & 3][x & 3] + 1;   // 阈值 1..16
+    return (level >= thr) ? 0x00 : 0xFF;
 }
 
 bool LooksLikeJpeg(const uint8_t* data, size_t len) {

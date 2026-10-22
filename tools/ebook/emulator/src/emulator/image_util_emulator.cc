@@ -28,9 +28,12 @@ constexpr uint8_t kBayer4[4][4] = {
 };
 
 uint8_t GrayToL8Dither(uint8_t gray, int x, int y) {
-    const int level = (255 - gray) * 16 / 256;
-    const int thr = kBayer4[y & 3][x & 3];
-    return (level > thr) ? 0x00 : 0xFF;
+    // 与固件 main/reader/image_util.cc 保持一致：
+    // level 取 0..16、阈值取 1..16 → 纯黑恒黑、纯白恒白。
+    // （旧的 /256 + `>` 写法会让纯黑像素每 16 个抖出 1 个白点，二维码会报废。）
+    const int level = (255 - gray) * 16 / 255;
+    const int thr = kBayer4[y & 3][x & 3] + 1;
+    return (level >= thr) ? 0x00 : 0xFF;
 }
 
 bool LooksLikeJpeg(const uint8_t* data, size_t len) {
