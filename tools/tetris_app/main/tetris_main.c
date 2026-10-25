@@ -7,7 +7,8 @@
 //   - VkKey_AttachScreen / ScreenLvAsync / ScreenRequestHome / 全刷请求 → dynapp_* 垫片
 //   - 最高分 NVS → SD 文件 apps/fangfang/hiscore.txt（fopen 系，已进符号表）
 //   - HapticAttachClick 触觉反馈省略
-// 输入：盖板三键 vk_home=旋转 vk_prev=左移 vk_next=右移；屏上按钮=暂停/重开/退出/速降。
+// 输入：盖板三键 vk_home=旋转 vk_prev=左移 vk_next=右移；屏上按钮=暂停/重开/退出/速降/自动。
+// 自动模式：AI 逐块评估旋转×落点后自走自放，游戏结束停 2.7 秒自动开新局。
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -195,6 +196,94 @@ static void core_cells(const int shape[TYPES][4][2] /*未用*/, int t, int r, in
     }
 }
 
+// ---- 自动模式 AI(1 层贪心:枚举旋转×落点,在副本棋盘上模拟硬降,按形状打分)----
+static int s_auto;           // 自动模式开关:AI 自玩 + 结束后自动开新局
+static int s_ai_rot, s_ai_x; // 当前一块的投放计划(目标旋转态与横坐标)
+static int s_ai_plan_piece;  // 计划对应的 pieces_ 快照(-1 = 失效需重算)
+static int s_ai_plan_type;   // 计划对应的方块类型(hold/重开后必须重算)
+static int s_ai_fail;        // 连续无进展步数(踢墙卡死兜底)
+static int s_over_ticks;     // 结束界面停留的 AI tick 计数,攒够自动重开
+
+static int ai_fits(const uint8_t b[FH][FW], int t, int r, int x, int y) {
+    for (int i = 0; i < 4; ++i) {
+        const int cx = x + k_shapes[t][r][i][0];
+        const int cy = y + k_shapes[t][r][i][1];
+        if (cx < 0 || cx >= FW || cy >= FH) return 0;
+        if (cy < 0) continue;
+        if (b[cy][cx] != 0) return 0;
+    }
+    return 1;
+}
+
+// 把 (t,r,x) 硬降进副本棋盘并就地消行,返回消行数;放不进去返回 -1
+static int ai_drop_and_clear(uint8_t b[FH][FW], int t, int r, int x) {
+    if (!ai_fits(b, t, r, x, 0)) return -1;
+    int y = 0;
+    while (ai_fits(b, t, r, x, y + 1)) ++y;
+    for (int i = 0; i < 4; ++i) {
+        const int cy = y + k_shapes[t][r][i][1];
+        if (cy >= 0) b[cy][x + k_shapes[t][r][i][0]] = 1;
+    }
+    int cleared = 0;
+    for (int yy = FH - 1; yy >= 0; --yy) {
+        int full = 1;
+        for (int xx = 0; xx < FW; ++xx) {
+            if (b[yy][xx] == 0) { full = 0; break; }
+        }
+        if (!full) continue;
+        ++cleared;
+        for (int ty = yy; ty > 0; --ty) {
+            for (int xx = 0; xx < FW; ++xx) b[ty][xx] = b[ty - 1][xx];
+        }
+        for (int xx = 0; xx < FW; ++xx) b[0][xx] = 0;
+        ++yy;
+    }
+    return cleared;
+}
+
+// 棋盘形状罚分:堆高 + 空洞 + 相邻列起伏(经典 0.76/-0.51/-0.36/-0.18 权重 ×100 取整)
+static int ai_penalty(const uint8_t b[FH][FW]) {
+    int height[FW] = {0};
+    int agg = 0, holes = 0, bump = 0;
+    for (int x = 0; x < FW; ++x) {
+        for (int y = 0; y < FH; ++y) {
+            if (b[y][x] != 0) { height[x] = FH - y; break; }
+        }
+        agg += height[x];
+        for (int y = FH - height[x]; y < FH; ++y) {
+            if (b[y][x] == 0) ++holes;
+        }
+    }
+    for (int x = 0; x + 1 < FW; ++x) {
+        bump += height[x] > height[x + 1] ? height[x] - height[x + 1]
+                                          : height[x + 1] - height[x];
+    }
+    return 51 * agg + 36 * holes + 18 * bump;
+}
+
+static void ai_compute_plan(void) {
+    int best = -(1 << 30);
+    s_ai_rot = rot_;
+    s_ai_x = px_;
+    for (int r = 0; r < 4; ++r) {
+        for (int x = -2; x <= FW; ++x) {
+            uint8_t tmp[FH][FW];
+            memcpy(tmp, board, sizeof(tmp));
+            const int cleared = ai_drop_and_clear(tmp, type_, r, x);
+            if (cleared < 0) continue;
+            const int score = 76 * cleared - ai_penalty(tmp);
+            if (score > best) {
+                best = score;
+                s_ai_rot = r;
+                s_ai_x = x;
+            }
+        }
+    }
+    s_ai_plan_piece = pieces_;
+    s_ai_plan_type = type_;
+    s_ai_fail = 0;
+}
+
 // ---- UI 状态 ----
 #define CELL_PX 30
 #define BOARD_X 22
@@ -226,7 +315,9 @@ static char s_score_txt[16];
 static char s_lines_txt[8];
 static char s_level_txt[8];
 static lv_obj_t* s_pause_lbl;
+static lv_obj_t* s_auto_lbl;
 static lv_timer_t* s_timer;
+static lv_timer_t* s_ai_timer;
 static int s_last_full_piece;
 static lv_obj_t* s_mask;
 static lv_obj_t* s_card;
@@ -430,6 +521,14 @@ static void sync_pause_btn(void) {
     lv_label_set_text(s_pause_lbl, state_ == STATE_PAUSED ? "继续" : "暂停");
 }
 
+static void sync_auto_btn(void) {
+    if (s_auto_lbl == NULL) return;
+    lv_obj_t* btn = lv_obj_get_parent(s_auto_lbl);
+    lv_obj_set_style_bg_color(btn, s_auto ? lv_color_black() : lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(s_auto_lbl, s_auto ? lv_color_white() : lv_color_black(), 0);
+}
+
 static void sync_timer_period(void) {
     if (s_timer == NULL) return;
     lv_timer_set_period(s_timer, (uint32_t)drop_ms_);
@@ -451,6 +550,9 @@ static void do_restart(void) {
     }
     core_reset();
     s_last_full_piece = 0;
+    s_ai_plan_piece = -1;
+    s_ai_plan_type = -1;
+    s_over_ticks = 0;
     sync_timer_period();
     if (s_timer != NULL) lv_timer_resume(s_timer);
     memset(s_render, 0xFF, sizeof(s_render));
@@ -545,6 +647,41 @@ static void apply_input(int input) {
 
 static void input_async_cb(void* arg) { apply_input((int)(intptr_t)arg); }
 
+// ---- 自动模式执行:每个 tick 走一步(转→平移→硬降),完全复用 apply_input 的渲染路径 ----
+#define AI_STEP_MS 150
+#define AI_OVER_RESTART_TICKS 18  // 150ms × 18 ≈ 2.7s,结束画面停留片刻再自动开局
+
+static void on_ai_tick(lv_timer_t* t) {
+    (void)t;
+    if (!s_alive || !s_auto) return;
+    if (state_ == STATE_OVER) {
+        if (++s_over_ticks >= AI_OVER_RESTART_TICKS) {
+            s_over_ticks = 0;
+            do_restart();
+        }
+        return;
+    }
+    if (state_ != STATE_RUNNING) return;
+    s_over_ticks = 0;
+    if (s_ai_plan_piece != pieces_ || s_ai_plan_type != type_) {
+        ai_compute_plan();  // 新块/被 hold/被手动干预过:先重新评估落点,本 tick 只做决策
+        return;
+    }
+    const int pre_rot = rot_, pre_px = px_;
+    if (rot_ != s_ai_rot) apply_input(K_IN_ROTATE);
+    else if (px_ != s_ai_x) apply_input(px_ < s_ai_x ? K_IN_RIGHT : K_IN_LEFT);
+    else apply_input(K_IN_DROP);
+    if (rot_ == pre_rot && px_ == pre_px) {
+        // 旋转/平移被踢墙挡住等异常:连 3 步毫无进展就直接硬降放弃该计划
+        if (++s_ai_fail >= 3) {
+            s_ai_fail = 0;
+            apply_input(K_IN_DROP);
+        }
+    } else {
+        s_ai_fail = 0;
+    }
+}
+
 // esp_timer 上下文回调：只投递（线程安全垫片），不碰 LVGL
 static int on_vk_key(const char* key) {
     if (key == NULL || !s_alive) return 0;
@@ -585,6 +722,12 @@ static void on_btn_clicked(lv_event_t* e) {
         case 3:  // 速降
             apply_input(K_IN_DROP);
             break;
+        case 4:  // 自动:AI 自玩 + 结束后自动开新局
+            s_auto = !s_auto;
+            s_ai_plan_piece = -1;
+            s_over_ticks = 0;
+            sync_auto_btn();
+            break;
         default: break;
     }
 }
@@ -624,6 +767,10 @@ static void on_screen_unloaded(lv_event_t* e) {
         lv_timer_delete(s_timer);
         s_timer = NULL;
     }
+    if (s_ai_timer != NULL) {
+        lv_timer_delete(s_ai_timer);
+        s_ai_timer = NULL;
+    }
     if (state_ == STATE_RUNNING) core_toggle_pause();
     s_mask = NULL;
     s_card = NULL;
@@ -639,6 +786,7 @@ static void on_screen_unloaded(lv_event_t* e) {
     s_board = NULL;
     s_score_lbl = s_lines_lbl = s_level_lbl = s_best_lbl = NULL;
     s_pause_lbl = NULL;
+    s_auto_lbl = NULL;
     s_score_txt[0] = s_lines_txt[0] = s_level_txt[0] = '\0';
     s_next_fp = -1;
     s_hold_fp = -1;
@@ -795,7 +943,7 @@ static void* fangfang_create(void) {
     make_text(s_scr, "最高", 25, SIDE_X, row_y);
     sync_best_label();
 
-    // 底部按键行：暂停 / 重开 / 退出 / 速降（黑底反白）
+    // 底部按键行：暂停 / 重开 / 退出 / 速降（黑底反白）/ 自动（点亮后 AI 自玩）
     lv_obj_t* row = lv_obj_create(s_scr);
     lv_obj_remove_style_all(row);
     lv_obj_set_size(row, 436, BTN_H);
@@ -804,10 +952,11 @@ static void* fangfang_create(void) {
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     disable_scroll(row);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
-    s_pause_lbl = make_btn(row, "暂停", 102, BTN_H, on_btn_clicked, (void*)0, 0);
-    make_btn(row, "重开", 102, BTN_H, on_btn_clicked, (void*)1, 0);
-    make_btn(row, "退出", 102, BTN_H, on_btn_clicked, (void*)2, 0);
-    make_btn(row, "速降", 102, BTN_H, on_btn_clicked, (void*)3, 1);
+    s_pause_lbl = make_btn(row, "暂停", 84, BTN_H, on_btn_clicked, (void*)0, 0);
+    make_btn(row, "重开", 84, BTN_H, on_btn_clicked, (void*)1, 0);
+    make_btn(row, "退出", 84, BTN_H, on_btn_clicked, (void*)2, 0);
+    make_btn(row, "速降", 84, BTN_H, on_btn_clicked, (void*)3, 1);
+    s_auto_lbl = make_btn(row, "自动", 84, BTN_H, on_btn_clicked, (void*)4, 0);
 
     redraw_board();
     draw_current();
@@ -818,6 +967,11 @@ static void* fangfang_create(void) {
 
     s_timer = lv_timer_create(on_game_tick, (uint32_t)drop_ms_, NULL);
     if (state_ == STATE_PAUSED) lv_timer_pause(s_timer);
+
+    // 自动模式执行器:常驻低频 tick,关着的时候近乎零开销(只查两个标志位)
+    s_ai_plan_piece = -1;
+    s_ai_plan_type = -1;
+    s_ai_timer = lv_timer_create(on_ai_tick, AI_STEP_MS, NULL);
 
     s_alive = 1;
     // 盖板三键：vk_home=旋转 vk_prev=左移 vk_next=右移；factory 供返回栈重建
