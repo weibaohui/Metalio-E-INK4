@@ -4,7 +4,7 @@
   "icon": "icon.png",
   "executable": "lib/minesweeper.so",
   "abi": 1,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "Metalio",
-  "description": "回合制扫雷，一步一刷，适配墨水屏低刷新率特性"
+  "description": "经典扫雷 1bpp 复刻:立体砖块、LED 计数器、笑脸按钮"
 }

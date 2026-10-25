@@ -105,3 +105,19 @@ When debugging or testing any GUI feature:
 4. **Wait**: Sleep 0.5s ~ 1s for LVGL render and partial e-ink refresh.
 5. **Verify**: Run `./tools/screenshot.sh` again to inspect the new screen state.
 6. **Exit / Reset**: Run `./tools/click.sh 80 900` to trigger `vk_home` and return to desktop.
+
+---
+
+## 6. ⚠ 插电待机会吞点击 —— 牺牲点击协议(必读)
+
+设备**插电时空闲 3 分钟自动进待机**,此时:
+- HTTP 全活(截图/launch/重启都正常)→ **你以为设备在正常工作**
+- 但待机层吞掉一切触摸注入 → 点击"成功返回"却毫无效果
+- syslog 也暂停发送 → 日志静默,更加误导
+
+**判定**:点击连续无效果 + 截图正常 = 九成在待机里。重启可解但太重。
+
+**协议**:闲置 ≥3 分钟后,先发一发"牺牲点击"(点屏幕底部空白处,如 `x=240,y=780`),
+等 1 秒,再发真点击。牺牲点击会把电源策略的活动计时重置,后续点击恢复正常。
+
+**串行长任务注意**:编译/构建期间设备会闲置进待机——部署完先补一发牺牲点击再开始交互。
