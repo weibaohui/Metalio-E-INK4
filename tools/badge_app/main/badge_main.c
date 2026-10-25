@@ -251,7 +251,9 @@ static int badge_on_vk_key(const char *key) {
 
 // ================= 生命周期 =================
 static void on_screen_deleted(lv_event_t *e) {
-    (void)e;
+    // 同 app 重开时固件是"新屏先加载、旧屏随后卸载"，这里只能清理当前屏自己的状态，
+    // 否则旧屏卸载会把新屏的对象指针一起清掉，App 变僵尸。
+    if (lv_event_get_target(e) != s_scr) return;
     s_scr = NULL;
     s_avatar_holder = NULL;
     s_name_lbl = NULL;

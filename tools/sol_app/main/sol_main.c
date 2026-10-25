@@ -18,6 +18,8 @@
 #include "dynamic_app_shims.h"
 #include "fontpack_lvgl.h"
 
+#include "../../_shared/gray_dither.h" // 1bpp 上的"灰"：Bayer 网点
+
 #define NSUIT 4
 #define NRANK 13
 #define NCARD (NSUIT * NRANK)
@@ -175,6 +177,15 @@ static int group_can_go(int target_pile) {
 }
 
 // ================= 绘制 =================
+// 牌背：1bpp 没有真灰，用**网点浅灰**模拟。
+// 原来画成实心黑牌：牌堆一压就是一大片死黑，又丑又费墨（墨水屏大块纯黑
+// 局刷留灰影、刷新慢）。浅灰 + 黑框，牌是牌、堆是堆，一眼分得开。
+static void sol_card_back(lv_obj_t *o) {
+    gray_dither_fill(o, GRAY_DITHER_MID);
+    lv_obj_set_style_border_color(o, lv_color_black(), 0);
+    lv_obj_set_style_border_width(o, 1, 0);
+}
+
 static void render_card(int id) {
     lv_obj_t *o = s_card_obj[id];
     if (o == NULL) return;
@@ -186,8 +197,8 @@ static void render_card(int id) {
 
     const int red = is_red(id);
     // 红花色：黑底白字；黑花色：白底黑字（1bpp 无颜色，用明暗区分阵营）
-    lv_obj_set_style_bg_color(o, red ? lv_color_black() : lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    // 正面一律用**实色底**（从"牌背=网点灰"翻回来时要撤掉网点）
+    gray_solid_fill(o, red ? lv_color_black() : lv_color_white());
     lv_obj_set_style_border_color(o, red ? lv_color_white() : lv_color_black(), 0);
     lv_obj_set_style_border_width(o, 1, 0);
 
@@ -211,10 +222,8 @@ static void relayout_pile(int p) {
             const bool top = (i == s_pile_n[p] - 1);
             if (top) {
                 lv_obj_clear_flag(s_card_obj[id], LV_OBJ_FLAG_HIDDEN);
-                lv_obj_set_style_bg_color(s_card_obj[id], lv_color_black(), 0);
-                lv_obj_set_style_bg_opa(s_card_obj[id], LV_OPA_COVER, 0);
-                lv_obj_set_style_border_color(s_card_obj[id], lv_color_white(), 0);
-                lv_obj_set_style_border_width(s_card_obj[id], 1, 0);
+                sol_card_back(s_card_obj[id]);
+                s_rendered_card[id] = 0xFF; // 缓存作废：翻回正面时要重画实色底
             } else {
                 lv_obj_add_flag(s_card_obj[id], LV_OBJ_FLAG_HIDDEN);
             }
@@ -252,12 +261,10 @@ static void relayout_pile(int p) {
             render_card(id);
             y += GAP_UP;
         } else {
-            // 暗牌：画成黑牌背（不能隐藏，否则看不到这列还压着几张暗牌）
+            // 暗牌：牌背（不能隐藏，否则看不到这列还压着几张暗牌）
             lv_obj_clear_flag(s_card_obj[id], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_style_bg_color(s_card_obj[id], lv_color_black(), 0);
-            lv_obj_set_style_bg_opa(s_card_obj[id], LV_OPA_COVER, 0);
-            lv_obj_set_style_border_color(s_card_obj[id], lv_color_white(), 0);
-            lv_obj_set_style_border_width(s_card_obj[id], 1, 0);
+            sol_card_back(s_card_obj[id]);
+            s_rendered_card[id] = 0xFF; // 缓存作废：翻回正面时要重画实色底
             lv_obj_add_flag(s_card_rank[id], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_card_suit[id], LV_OBJ_FLAG_HIDDEN);
             y += GAP_DOWN;

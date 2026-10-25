@@ -18,6 +18,8 @@
 #include "dynamic_app_shims.h"
 #include "fontpack_lvgl.h"
 
+#include "../../_shared/gray_dither.h" // 1bpp 上的"灰"：Bayer 网点
+
 #define MAX_PAIRS 8
 #define MAX_CARDS (MAX_PAIRS * 2)
 #define NCOL 4
@@ -108,17 +110,17 @@ static void render_card(int i) {
     lv_obj_t *l = s_card_lbl[i];
     if (o == NULL || l == NULL) return;
     if (s_state[i] == 0) {
-        // 暗牌：黑牌背
-        lv_obj_set_style_bg_color(o, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(o, lv_color_white(), 0);
+        // 暗牌：牌背用**网点浅灰**（1bpp 没有真灰，Bayer 抖动模拟）。
+        // 原来画成实心黑牌，16 张牌一屏全是黑、又丑又费墨（墨水屏大块纯黑
+        // 局刷留灰影、刷新也慢）。浅灰 + 白边框，牌与牌还是一眼分得开。
+        gray_dither_fill(o, GRAY_DITHER_MID);
+        lv_obj_set_style_border_color(o, lv_color_black(), 0);
         lv_obj_set_style_border_width(o, 2, 0);
         lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
         return;
     }
     // 翻开：白底黑字；已配对的加双线框（再画一圈内框）
-    lv_obj_set_style_bg_color(o, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    gray_solid_fill(o, lv_color_white());
     lv_obj_set_style_border_color(o, lv_color_black(), 0);
     lv_obj_set_style_border_width(o, s_state[i] == 2 ? 3 : 2, 0);
     lv_label_set_text(l, kSym[s_card[i]]);

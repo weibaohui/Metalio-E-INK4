@@ -4,7 +4,31 @@
 |---|---|
 | `card_kit.h` | 电子名片 / 电子工牌 共用的「名片套件」：资料解析、多码条目、文本码/图片码统一渲染 |
 | `badge_profile.h` | 旧版资料解析（`profile.txt`），已被 `card_kit.h` 取代，新代码别用 |
+| `gray_dither.h` | **1bpp 上的「灰」**：Bayer 网点（浅灰/中灰），给实心区域用 |
 | `sevenseg.h` | 七段数码管（天气 App 用；番茄钟有一份自己内联的几何拷贝） |
+
+## gray_dither.h
+
+墨水屏物理只有黑白两色，"灰"只能靠**有序抖动（网点）**模拟：4×4 Bayer 矩阵，
+每个格放大成 2×2 像素块，生成 8×8 的 `LV_COLOR_FORMAT_L8` 点阵图，
+用 `bg_image_src` + `bg_image_tiled` 平铺到目标对象上。
+
+```c
+gray_dither_fill(obj, GRAY_DITHER_MID);  // 25% 网点 = 浅灰
+gray_solid_fill(obj, lv_color_white());  // 撤掉网点，回实色
+```
+
+三档灰：`GRAY_DITHER_LIGHT` 12.5% / `GRAY_DITHER_MID` 25% / `GRAY_DITHER_DARK` 50%。
+
+**用在哪**：整块实心区域（卡牌游戏的牌背、推箱子的墙砖、目标地砖）。
+**别用在哪**：细线、描边、小图标——1bpp 下细线的网点会被抖没；网点底上的**黑**线会消失，
+要看得见得用**白**色。
+
+用它的 App：`sok_app`（墙/目标格）、`mem_app`（暗牌背）、`sol_app`（暗牌背）。
+
+> 顺带的好处：墨水屏**大块纯黑**局刷留灰影、刷新慢、费墨；换成浅灰网点后
+> 整屏黑色占比能从 43% 降到 15%，刷新和残影都好转。
+
 
 ## card_kit.h
 
