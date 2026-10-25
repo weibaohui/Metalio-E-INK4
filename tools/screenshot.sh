@@ -12,13 +12,16 @@
 # 示例：
 #   ./tools/screenshot.sh                        # 默认输出到 /tmp/device_screenshot_upright.png
 #   ./tools/screenshot.sh my_screen.png          # 指定输出文件路径
-#   ./tools/screenshot.sh screen.png --ip 192.168.0.84 --pin 444108
+#   ./tools/screenshot.sh screen.png --ip <设备IP> --pin <PIN>
 #
 set -euo pipefail
 
-DEFAULT_IP="192.168.0.84"
+# 设备地址与 PIN 优先从环境变量读取（避免把局域网地址/凭据提交进仓库）：
+#   export METALIO_DEVICE_IP=192.168.x.x
+#   export METALIO_DEVICE_PIN=123456
+DEFAULT_IP="${METALIO_DEVICE_IP:-}"
 DEFAULT_PORT="8080"
-DEFAULT_PIN="444108"
+DEFAULT_PIN="${METALIO_DEVICE_PIN:-}"
 OUTPUT_PATH="${1:-/tmp/device_screenshot_upright.png}"
 
 DEVICE_IP="$DEFAULT_IP"
@@ -40,6 +43,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ -z "$DEVICE_IP" || -z "$PIN" ]]; then
+    echo "错误: 缺少设备 IP 或 PIN。用 --ip/--pin 传入,或先 export METALIO_DEVICE_IP / METALIO_DEVICE_PIN"
+    exit 1
+fi
 
 TMP_RAW="/tmp/metalio_raw_screen_$$.bmp"
 trap 'rm -f "$TMP_RAW"' EXIT

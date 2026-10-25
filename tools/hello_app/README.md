@@ -40,7 +40,7 @@ tools/hello_app/
 ### 通过 Wi-Fi 直接热部署到真机
 设备开机连上 Wi-Fi 后，执行：
 ```bash
-./tools/package_app.sh tools/hello_app --upload 192.168.0.84 --pin 444108
+./tools/package_app.sh tools/hello_app --upload <设备IP> --pin <PIN>
 ```
 - 无需插拔 SD 卡，无需连接 USB 线，无需编译整机固件。
 - 秒级上传并热重载，桌面即时出现应用图标。

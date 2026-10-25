@@ -469,7 +469,7 @@ void metalio_app_entry(metalio_app_desc_t *out) {
 ### 5.2 编译并通过 WiFi 一键推送至真机
 在连接同局域网 Wi-Fi 下，设备开启 Local MCP 服务，可直接一键部署（热重载，桌面立即可见）：
 ```bash
-./tools/package_app.sh tools/hello_app --upload 192.168.0.84 --pin 444108
+./tools/package_app.sh tools/hello_app --upload <设备IP> --pin <PIN>
 ```
 > [!TIP]
 > 设备的 IP 地址与 MCP PIN 码可在开机 USB 串口日志中查看到，也可在设备的「系统设置」界面中查看。

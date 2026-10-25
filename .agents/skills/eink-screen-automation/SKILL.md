@@ -38,7 +38,7 @@ Use the built-in script `tools/screenshot.sh` to grab the current screen state. 
 
 ```bash
 # Custom output path or target device
-./tools/screenshot.sh /tmp/custom_screen.png --ip 192.168.0.84 --pin 444108
+./tools/screenshot.sh /tmp/custom_screen.png --ip <设备IP> --pin <PIN>
 ```
 
 ---
@@ -63,8 +63,8 @@ Use `tools/click.sh` to inject a physical touch tap into the device's LVGL input
 ### Alternative REST API & MCP Calls
 - **REST HTTP**:
   ```bash
-  curl -s -X POST -H "Authorization: Bearer 444108" \
-    "http://192.168.0.84:8080/input/click?x=240&y=502&duration_ms=60"
+  curl -s -X POST -H "Authorization: Bearer <PIN>" \
+    "http://<设备IP>:8080/input/click?x=240&y=502&duration_ms=60"
   ```
 - **MCP Tool**:
   Call `self.input.click` with `{"x": 240, "y": 502, "duration_ms": 60}`.

@@ -114,8 +114,8 @@ idf.py -p /dev/cu.usbmodem* flash
 针对 `tools/` 目录下的各个动态应用，无需重新编译整个固件，即可直接将单个应用部署至设备：
 ```bash
 # 语法：./tools/package_app.sh <app_dir> --upload <device_ip> --pin <pin>
-./tools/package_app.sh tools/radio_app --upload 192.168.0.84 --pin 444108
-./tools/package_app.sh tools/glm_app --upload 192.168.0.84 --pin 444108
+./tools/package_app.sh tools/radio_app --upload <设备IP> --pin <PIN>
+./tools/package_app.sh tools/glm_app --upload <设备IP> --pin <PIN>
 ```
 设备会完成热解包并触发桌面重载，新图标即刻可见。
 
@@ -139,7 +139,7 @@ while True:
 ```
 
 ### 3.2 局域网 REST 自动化控制端点（端口 8080）
-所有接口均支持 HTTP Bearer PIN 码认证：`Authorization: Bearer 444108`。
+所有接口均支持 HTTP Bearer PIN 码认证：`Authorization: Bearer <PIN>`。
 
 | 目标动作 | HTTP 请求与参数 | 说明 |
 | :--- | :--- | :--- |
@@ -180,14 +180,14 @@ idf.py -p /dev/cu.usbmodem* monitor
 
 # 默认保存至 /tmp/device_screenshot_upright.png，可直接在 IDE 或浏览器查看
 # 也可以指定输出路径或远程设备：
-./tools/screenshot.sh my_screen.png --ip 192.168.0.84 --pin 444108
+./tools/screenshot.sh my_screen.png --ip <设备IP> --pin <PIN>
 ```
 
 ### 4.3 命令行手动获取与校准
 若需在自己的脚本或流水线中手动操作：
 ```bash
 # 1. 下载原始数据 (800x480 单色 BMP)
-curl -s -H "Authorization: Bearer 444108" http://192.168.0.84:8080/screen/screenshot -o /tmp/raw.bmp
+curl -s -H "Authorization: Bearer <PIN>" http://<设备IP>:8080/screen/screenshot -o /tmp/raw.bmp
 
 # 2. 顺时针旋转 90 度并转换为 PNG (480x800)
 # 方法 A：macOS 自带原生 sips 工具（极速且画质完美）
@@ -333,7 +333,7 @@ convert /tmp/raw.bmp -rotate 90 /tmp/screen_upright.png
 
 ### 6.2 RESTful HTTP 自动化接口全量清单 (Port 8080 & Port 80)
 
-所有 8080 端口接口均要求在请求头中附带 PIN 码：`Authorization: Bearer 444108`。
+所有 8080 端口接口均要求在请求头中附带 PIN 码：`Authorization: Bearer <PIN>`。
 
 #### A. 设备控制与自动化端点 (Port 8080)
 | 路径 | 方法 | 请求体 / Query 参数 | 响应格式 | 核心行为说明 |

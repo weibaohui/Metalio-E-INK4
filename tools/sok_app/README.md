@@ -138,8 +138,8 @@ cc -O2 -o /tmp/sok_gen_test tools/sok_app/test/sok_gen_test.c && /tmp/sok_gen_te
 墨水屏截图可能是旧帧，肉眼也容易看错（黑箱/白箱、灰底/白底）。以**设备存档**为准做逐像素比对：
 
 ```bash
-curl -s -H "Authorization: Bearer 444108" \
-  "http://192.168.0.84:8080/fs/download?path=apps/sok.app/data/sok.txt" -o /tmp/sok.txt
+curl -s -H "Authorization: Bearer <PIN>" \
+  "http://<设备IP>:8080/fs/download?path=apps/sok.app/data/sok.txt" -o /tmp/sok.txt
 python3 docs/mockups/verify_sok_render.py <截图.png> /tmp/sok.txt
 ```
 
