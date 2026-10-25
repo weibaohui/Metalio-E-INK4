@@ -208,6 +208,10 @@ static bool IsWifiNetwork()
 
 esp_err_t power_hw_wifi_stop(void)
 {
+    if (Board::GetInstance().IsUsbConnected()) {
+        ESP_LOGI(TAG, "WiFi pause suppressed (USB connected)");
+        return ESP_OK;
+    }
     if (!IsWifiNetwork()) {
         return ESP_ERR_NOT_SUPPORTED;
     }

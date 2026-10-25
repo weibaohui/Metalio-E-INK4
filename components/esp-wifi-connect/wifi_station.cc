@@ -136,7 +136,7 @@ esp_err_t WifiStation::ResumeFromLp() {
         ESP_LOGE(TAG, "LP resume wifi start: %s", esp_err_to_name(err));
         return err;
     }
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    esp_wifi_set_ps(power_save_enabled_ ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE);
     ESP_LOGI(TAG, "STA resumed from LP");
     return ESP_OK;
 }
@@ -186,7 +186,7 @@ void WifiStation::Start() {
                                                         &instance_got_ip_));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(power_save_enabled_ ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE));
 
     if (max_tx_power_ != 0) {
         ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(max_tx_power_));
@@ -311,7 +311,45 @@ bool WifiStation::IsLinkInProgress() {
 }
 
 void WifiStation::SetPowerSaveMode(bool enabled) {
-    ESP_ERROR_CHECK(esp_wifi_set_ps(enabled ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE));
+    power_save_enabled_ = enabled;
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    if (esp_wifi_get_mode(&mode) == ESP_OK) {
+        esp_err_t err = esp_wifi_set_ps(enabled ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE);
+        ESP_LOGI(TAG, "WiFi power save set to: %s (%s)", enabled ? "MIN_MODEM" : "NONE", esp_err_to_name(err));
+    }
+}
+
+void WifiStation::TriggerConnect() {
+    if (IsConnected()) {
+        return;
+    }
+    if (lp_paused_) {
+        ResumeFromLp();
+        return;
+    }
+    if (station_netif_ == nullptr) {
+        Start();
+        return;
+    }
+    // 若正处在单次重连重试中，暂缓打断
+    if (reconnect_count_ > 0 && reconnect_count_ < MAX_RECONNECT_COUNT) {
+        return;
+    }
+    if (timer_handle_ != nullptr) {
+        esp_timer_stop(timer_handle_);
+    }
+    reconnect_count_ = 0;
+    wifi_config_t cfg = {};
+    if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0] != '\0') {
+        esp_err_t err = esp_wifi_connect();
+        if (err == ESP_OK || err == ESP_ERR_WIFI_CONN) {
+            ESP_LOGI(TAG, "TriggerConnect: connecting to %s (%s)", (char*)cfg.sta.ssid, esp_err_to_name(err));
+            return;
+        }
+    }
+    esp_wifi_scan_stop();
+    esp_err_t err = esp_wifi_scan_start(nullptr, false);
+    ESP_LOGI(TAG, "TriggerConnect: started scan (%s)", esp_err_to_name(err));
 }
 
 // Static event handler functions
@@ -384,8 +422,8 @@ void WifiStation::IpEventHandler(void* arg, esp_event_base_t event_base, int32_t
     this_->ip_address_ = ip_address;
     ESP_LOGI(TAG, "Got IP: %s", this_->ip_address_.c_str());
     
-    // 默认开启 Wi-Fi Modem Sleep 省电模式 (空闲时射频自动在 DTIM 间隙休眠，降低 ~75-85mA 功耗)
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    // 根据 power_save_enabled_ 决定是否开启 Wi-Fi Modem Sleep
+    esp_wifi_set_ps(this_->power_save_enabled_ ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE);
 
     xEventGroupSetBits(this_->event_group_, WIFI_EVENT_CONNECTED);
     if (this_->on_connected_) {

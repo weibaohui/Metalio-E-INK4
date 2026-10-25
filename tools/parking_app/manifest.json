@@ -1,0 +1,10 @@
+{
+  "id": "parking",
+  "name": "挪车电话",
+  "icon": "icon.png",
+  "executable": "lib/parking.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "800x480 横屏挪车电话牌，支持3组号码与滚轮配置"
+}

@@ -16,6 +16,7 @@ public:
     virtual bool EnsureNetworkReady(int timeout_ms = 30000) override;
     virtual void RefreshNetworkWaitDeadline(int timeout_ms = 30000) override;
     virtual void PauseNetworkIfNotReady() override;
+    virtual void TriggerNetworkConnect() override;
     virtual bool IsNetworkReady() override;
     virtual bool IsWifiConfigMode() override;
     virtual NetworkInterface* GetNetwork() override;

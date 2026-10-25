@@ -145,9 +145,14 @@ void WifiBoard::StartNetwork() {
         const int wait = static_cast<int>(reinterpret_cast<intptr_t>(arg));
         auto& ws = WifiStation::GetInstance();
         if (!ws.WaitForConnected(wait)) {
-            ESP_LOGW(TAG, "WiFi not connected within net_grace %d s; skip auto SoftAP, pause STA",
-                     wait / 1000);
-            ws.PauseForLp();
+            if (!Board::GetInstance().IsUsbConnected()) {
+                ESP_LOGW(TAG, "WiFi not connected within net_grace %d s; skip auto SoftAP, pause STA",
+                         wait / 1000);
+                ws.PauseForLp();
+            } else {
+                ESP_LOGI(TAG, "WiFi not connected within net_grace %d s, but USB connected -> keep STA active",
+                         wait / 1000);
+            }
         }
         vTaskDelete(NULL);
     }, "wifi_boot_wait", 2048, reinterpret_cast<void*>(static_cast<intptr_t>(wait_ms)), 2, nullptr);
@@ -175,7 +180,7 @@ void WifiBoard::RefreshNetworkWaitDeadline(int timeout_ms) {
 }
 
 void WifiBoard::PauseNetworkIfNotReady() {
-    if (wifi_config_mode_) {
+    if (wifi_config_mode_ || IsUsbConnected()) {
         return;
     }
     auto& wifi = WifiStation::GetInstance();
@@ -184,6 +189,16 @@ void WifiBoard::PauseNetworkIfNotReady() {
     }
     ESP_LOGI(TAG, "PauseNetworkIfNotReady: pause STA (stop scan)");
     wifi.PauseForLp();
+}
+
+void WifiBoard::TriggerNetworkConnect() {
+    if (wifi_config_mode_) {
+        return;
+    }
+    auto& wifi = WifiStation::GetInstance();
+    if (!wifi.IsConnected()) {
+        wifi.TriggerConnect();
+    }
 }
 
 bool WifiBoard::EnsureNetworkReady(int timeout_ms) {
@@ -287,7 +302,7 @@ bool WifiBoard::EnsureNetworkReady(int timeout_ms) {
              static_cast<int>((esp_timer_get_time() - t0) / 1000),
              static_cast<unsigned>(stack_before), static_cast<unsigned>(stack_after));
     // 整段等网失败：停扫省电；短切片（百问/翻译）由预算循环结束时 PauseNetworkIfNotReady
-    if (timeout_ms >= kEnsureGiveUpPauseMs) {
+    if (timeout_ms >= kEnsureGiveUpPauseMs && !IsUsbConnected()) {
         ESP_LOGI(TAG, "EnsureNetworkReady give-up (>=%d ms) -> Pause STA", kEnsureGiveUpPauseMs);
         wifi.PauseForLp();
     }

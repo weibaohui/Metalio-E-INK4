@@ -105,6 +105,10 @@ public:
      */
     virtual void PauseNetworkIfNotReady() {}
     /**
+     * @brief 触发网络重连（非阻塞，已连上则 no-op）
+     */
+    virtual void TriggerNetworkConnect() {}
+    /**
      * @brief 网络是否已就绪（WiFi：已关联且拿到 IP），不触发重连
      */
     virtual bool IsNetworkReady() { return true; }

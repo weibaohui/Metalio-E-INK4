@@ -180,6 +180,9 @@ bool UserInactiveLongEnoughLocked()
 
 bool WouldPauseWifiFromAppIdleLocked()
 {
+    if (pwr::IsUsbConnectedLocked()) {
+        return false;
+    }
     if (NeedsHardNetActiveLocked() || NeedsSoftKeepNetLocked()) {
         return false;
     }
@@ -292,6 +295,11 @@ pwr::Mode EvaluateLocked()
         return pwr::Mode::StandbyUi;
     }
     if (NeedsHardNetActiveLocked()) {
+        pwr::ClearNetGraceLocked();
+        return pwr::Mode::NetActive;
+    }
+    // 插电（USB 供电）时：严禁省电降级为 AppIdle，保持网络活跃常开
+    if (pwr::IsUsbConnectedLocked()) {
         pwr::ClearNetGraceLocked();
         return pwr::Mode::NetActive;
     }
@@ -428,17 +436,50 @@ void TickCb(void* /*arg*/)
     }
     xSemaphoreTake(pwr::mu, portMAX_DELAY);
     static bool s_usb_connected_prev = false;
+    static bool s_first_tick = true;
+    static uint32_t s_usb_reconnect_tick = 0;
     const bool usb_now = pwr::IsUsbConnectedLocked();
-    if (s_usb_connected_prev && !usb_now) {
+    bool trigger_reconnect = false;
+
+    if (s_first_tick) {
+        s_first_tick = false;
+        s_usb_connected_prev = usb_now;
+        if (pwr::board != nullptr) {
+            pwr::board->SetPowerSaveMode(!usb_now);
+            if (usb_now && !pwr::board->IsNetworkReady()) {
+                trigger_reconnect = true;
+            }
+        }
+    } else if (s_usb_connected_prev && !usb_now) {
         pwr::last_user_activity_us = esp_timer_get_time();
-        ESP_LOGI(TAG, "USB disconnected -> restart user idle timer");
+        ESP_LOGI(TAG, "USB disconnected -> restart user idle timer, enable power save");
+        if (pwr::board != nullptr) {
+            pwr::board->SetPowerSaveMode(true);
+        }
     } else if (!s_usb_connected_prev && usb_now) {
-        ESP_LOGI(TAG, "USB connected -> inhibit standby and shutdown");
+        ESP_LOGI(TAG, "USB connected -> keep WiFi active, disable power save, trigger reconnect");
         if (StandbyScreen::IsActive() || pwr::standby_ui_requested) {
             pwr::RequestDismissStandbyOverlay();
         }
+        if (pwr::board != nullptr) {
+            pwr::board->SetPowerSaveMode(false);
+            if (!pwr::board->IsNetworkReady()) {
+                trigger_reconnect = true;
+            }
+        }
     }
     s_usb_connected_prev = usb_now;
+
+    // 插电状态下：若 WiFi 尚未连通，每 5 秒自动触发一次重连，确保断线自动恢复
+    if (usb_now && pwr::board != nullptr && !pwr::board->IsNetworkReady()) {
+        if (++s_usb_reconnect_tick >= 5) {
+            s_usb_reconnect_tick = 0;
+            ESP_LOGI(TAG, "USB connected & network not ready -> triggering auto-reconnect");
+            trigger_reconnect = true;
+        }
+    } else {
+        s_usb_reconnect_tick = 0;
+    }
 
     pwr::ReevaluateLocked();
     if (pwr::mode == pwr::Mode::StandbyUi && pwr::StandbyUiLongEnoughLocked()) {
@@ -446,6 +487,10 @@ void TickCb(void* /*arg*/)
     }
     xSemaphoreGive(pwr::mu);
     pwr::FlushPendingActionsOutsideLock();
+
+    if (trigger_reconnect && pwr::board != nullptr) {
+        pwr::board->TriggerNetworkConnect();
+    }
 }
 
 void SelfCheckThresholdsOnce()
@@ -595,18 +640,18 @@ void ApplyLocked(Mode next)
     // 仅进入正式待机界面后才切断外设总电源 MAIN_PWR；
     // 浅度空闲 AppIdle 下保持外设供电，确保 BT 音频芯片/I2S 时钟不中断，避免音频无声或超时
     const bool want_main_rail_off =
-        (next == Mode::StandbyUi && StandbyScreen::IsActive());
+        (next == Mode::StandbyUi && StandbyScreen::IsActive() && !pwr::IsUsbConnectedLocked());
 
     if (next == prev) {
         if (next == Mode::StandbyUi && !standby_wake_exit && !shutdown_requested) {
             ArmStandbyLpTaskLocked();
             // 空闲先进 StandbyUi 再 Show：等 Overlay 就绪后补停网（对齐电源键路径）
-            if (StandbyScreen::IsActive() && IsWifiBoard() && !wifi_stopped_by_policy) {
+            if (StandbyScreen::IsActive() && IsWifiBoard() && !wifi_stopped_by_policy && !pwr::IsUsbConnectedLocked()) {
                 wifi_stopped_by_policy = true;
                 wifi_start_pending = false;
                 wifi_stop_pending = true;
             }
-            if (StandbyScreen::IsActive()) {
+            if (StandbyScreen::IsActive() && !pwr::IsUsbConnectedLocked()) {
                 QueueMainRailForModeLocked(true);
             }
         }
@@ -652,9 +697,11 @@ void ApplyLocked(Mode next)
         ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)) ||
          NeedHeld(PowerNeed::RadioPlayback) || NeedHeld(PowerNeed::AiChatTts));
     // 待机须 Overlay 已起来再停网（电源键短按就是先 Show 再 Reevaluate）
+    // 插电时禁止停 WiFi
     const bool want_wifi_off =
-        (next == Mode::AppIdle) ||
-        (next == Mode::StandbyUi && StandbyScreen::IsActive());
+        !pwr::IsUsbConnectedLocked() &&
+        ((next == Mode::AppIdle) ||
+         (next == Mode::StandbyUi && StandbyScreen::IsActive()));
 
     QueueCpuMhzLocked(want_mhz);
 

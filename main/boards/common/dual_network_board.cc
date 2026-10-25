@@ -99,6 +99,12 @@ void DualNetworkBoard::PauseNetworkIfNotReady() {
     current_board_->PauseNetworkIfNotReady();
 }
 
+void DualNetworkBoard::TriggerNetworkConnect() {
+    if (current_board_ != nullptr) {
+        current_board_->TriggerNetworkConnect();
+    }
+}
+
 bool DualNetworkBoard::IsNetworkReady() {
     return current_board_->IsNetworkReady();
 }

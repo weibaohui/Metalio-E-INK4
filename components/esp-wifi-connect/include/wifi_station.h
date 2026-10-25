@@ -48,6 +48,7 @@ public:
     std::string GetIpAddress() const { return ip_address_; }
     uint8_t GetChannel();
     void SetPowerSaveMode(bool enabled);
+    void TriggerConnect();
 
     void OnConnect(std::function<void(const std::string& ssid)> on_connect);
     void OnConnected(std::function<void(const std::string& ssid)> on_connected);
@@ -65,6 +66,7 @@ private:
     esp_event_handler_instance_t instance_got_ip_ = nullptr;
     esp_netif_t* station_netif_ = nullptr;
     bool lp_paused_ = false;
+    bool power_save_enabled_ = true;
     bool fast_reconnect_on_start_ = false; // LP resume：STA_START 直 connect，跳过扫网
     std::string ssid_;
     std::string password_;
