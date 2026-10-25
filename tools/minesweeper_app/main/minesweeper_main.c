@@ -82,8 +82,8 @@ static int s_last_full_refresh = 0;
 #define FULL_REFRESH_EVERY 12
 
 // ---- 头部：LED 计数器 + 笑脸 ----
-static lv_obj_t *s_cnt_seg[3][7], *s_cnt_ghost[3][7];
-static lv_obj_t *s_tim_seg[3][7], *s_tim_ghost[3][7];
+static lv_obj_t *s_cnt_seg[3][7];
+static lv_obj_t *s_tim_seg[3][7];
 static lv_obj_t *s_face_btn = NULL;
 static lv_obj_t *s_eye_l, *s_eye_r, *s_mouth_mid, *s_mouth_l, *s_mouth_r, *s_shades;
 static lv_obj_t *s_diff_lbl = NULL;
@@ -290,8 +290,7 @@ static const uint8_t kSegMask[10] = {
 #define LED_H 48
 #define LED_S 6
 
-static void seg_make_digit(lv_obj_t *parent, int x, int y,
-                           lv_obj_t *out_seg[7], lv_obj_t *out_ghost[7]) {
+static void seg_make_digit(lv_obj_t *parent, int x, int y, lv_obj_t *out_seg[7]) {
     const int gap = 2;
     const int half = (LED_H - LED_S) / 2 - gap;
     struct {
@@ -314,46 +313,22 @@ static void seg_make_digit(lv_obj_t *parent, int x, int y,
         lv_obj_set_style_bg_opa(on, LV_OPA_COVER, 0);
         lv_obj_clear_flag(on, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
         out_seg[i] = on;
-
-        // 未点亮的段：段中央 1px 细线（粗了整只数字看着像空盒子）
-        lv_obj_t *ghost = lv_obj_create(parent);
-        lv_obj_remove_style_all(ghost);
-        const int thin = 1;
-        if (r[i].w > r[i].h) {
-            lv_obj_set_pos(ghost, r[i].x, r[i].y + (r[i].h - thin) / 2);
-            lv_obj_set_size(ghost, r[i].w, thin);
-        } else {
-            lv_obj_set_pos(ghost, r[i].x + (r[i].w - thin) / 2, r[i].y);
-            lv_obj_set_size(ghost, thin, r[i].h);
-        }
-        lv_obj_set_style_bg_color(ghost, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(ghost, LV_OPA_COVER, 0);
-        lv_obj_clear_flag(ghost, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-        out_ghost[i] = ghost;
     }
 }
 
-// ch: '0'..'9' / ' ' 全灭（ghost 也藏——白底上空位的 ghost 远看像 0） / '-' 只有 g 段
-static void seg_set_char(lv_obj_t *seg[7], lv_obj_t *ghost[7], char ch) {
+// ch: '0'..'9' / ' ' 全灭 / '-' 只有 g 段。只画点亮的段,熄灭段不显示
+static void seg_set_char(lv_obj_t *seg[7], char ch) {
     uint8_t mask = 0;
     if (ch >= '0' && ch <= '9') mask = kSegMask[ch - '0'];
     else if (ch == '-') mask = 0x40;
     for (int i = 0; i < 7; ++i) {
         if (seg[i] == NULL) continue;
-        if (mask & (1u << i)) {
-            lv_obj_clear_flag(seg[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(ghost[i], LV_OBJ_FLAG_HIDDEN);
-        } else if (ch == ' ') {
-            lv_obj_add_flag(seg[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(ghost[i], LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(seg[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(ghost[i], LV_OBJ_FLAG_HIDDEN);
-        }
+        if (mask & (1u << i)) lv_obj_clear_flag(seg[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(seg[i], LV_OBJ_FLAG_HIDDEN);
     }
 }
 
-static void led_show(lv_obj_t *seg[3][7], lv_obj_t *ghost[3][7], int value) {
+static void led_show(lv_obj_t *seg[3][7], int value) {
     char buf[4];
     if (value < 0) {
         if (value < -99) value = -99;
@@ -362,7 +337,7 @@ static void led_show(lv_obj_t *seg[3][7], lv_obj_t *ghost[3][7], int value) {
         if (value > 999) value = 999;
         snprintf(buf, sizeof(buf), "%3d", value);
     }
-    for (int i = 0; i < 3; ++i) seg_set_char(seg[i], ghost[i], buf[i]);
+    for (int i = 0; i < 3; ++i) seg_set_char(seg[i], buf[i]);
 }
 
 // ================= 笑脸 =================
@@ -571,8 +546,8 @@ static void render_all(void) {
     for (int r = 0; r < N; ++r) {
         for (int c = 0; c < N; ++c) render_cell(r, c);
     }
-    led_show(s_cnt_seg, s_cnt_ghost, mine_total() - s_flags);
-    led_show(s_tim_seg, s_tim_ghost, elapsed_seconds());
+    led_show(s_cnt_seg, mine_total() - s_flags);
+    led_show(s_tim_seg, elapsed_seconds());
     sync_face();
     if (s_diff_lbl != NULL) {
         char buf[32];
@@ -780,9 +755,7 @@ static void on_screen_deleted(lv_event_t *e) {
     memset(s_flag_obj, 0, sizeof(s_flag_obj));
     memset(s_mine_obj, 0, sizeof(s_mine_obj));
     memset(s_cnt_seg, 0, sizeof(s_cnt_seg));
-    memset(s_cnt_ghost, 0, sizeof(s_cnt_ghost));
     memset(s_tim_seg, 0, sizeof(s_tim_seg));
-    memset(s_tim_ghost, 0, sizeof(s_tim_ghost));
 }
 
 static void *minesweeper_create(void) {
@@ -811,8 +784,8 @@ static void *minesweeper_create(void) {
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
     for (int i = 0; i < 3; ++i) {
-        seg_make_digit(panel, 24 + i * (LED_W + 6), 15, s_cnt_seg[i], s_cnt_ghost[i]);
-        seg_make_digit(panel, 338 + i * (LED_W + 6), 15, s_tim_seg[i], s_tim_ghost[i]);
+        seg_make_digit(panel, 24 + i * (LED_W + 6), 15, s_cnt_seg[i]);
+        seg_make_digit(panel, 338 + i * (LED_W + 6), 15, s_tim_seg[i]);
     }
 
     // 笑脸按钮（点击 = 新游戏）
