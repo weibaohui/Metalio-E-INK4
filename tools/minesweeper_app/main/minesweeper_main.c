@@ -24,6 +24,7 @@
 #include "dynamic_app_shims.h"
 #include "fontpack_lvgl.h"
 #include "../../_shared/gray_dither.h"  // 1bpp 上的"灰"：Bayer 网点
+#include "mine_sprite.h"  // 经典样式雷的 30x30 像素贴图(L8,硬阈值混到 1bpp)
 
 #define N 9
 #define CELL 50
@@ -425,67 +426,41 @@ static lv_obj_t *ensure_flag(int r, int c) {
     return f;
 }
 
-static lv_obj_t *ensure_mine(int r, int c) {
-    if (s_mine_obj[r][c] != NULL) return s_mine_obj[r][c];
-    lv_obj_t *m = lv_obj_create(s_cell_obj[r][c]);
-    lv_obj_remove_style_all(m);
-    lv_obj_set_size(m, 30, 30);
-    lv_obj_set_pos(m, 10, 10);
-    lv_obj_clear_flag(m, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    // 圆核（radius 拉满 = 圆），十字臂 + 四角点 = 经典八角雷
-    lv_obj_t *core = lv_obj_create(m);
-    lv_obj_remove_style_all(core);
-    lv_obj_set_pos(core, 9, 9);
-    lv_obj_set_size(core, 12, 12);
-    lv_obj_set_style_radius(core, 6, 0);
-    lv_obj_set_style_bg_color(core, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(core, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(core, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *vbar = lv_obj_create(m);
-    lv_obj_remove_style_all(vbar);
-    lv_obj_set_pos(vbar, 13, 0);
-    lv_obj_set_size(vbar, 4, 30);
-    lv_obj_set_style_bg_color(vbar, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(vbar, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(vbar, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *hbar = lv_obj_create(m);
-    lv_obj_remove_style_all(hbar);
-    lv_obj_set_pos(hbar, 0, 13);
-    lv_obj_set_size(hbar, 30, 4);
-    lv_obj_set_style_bg_color(hbar, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(hbar, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(hbar, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    for (int i = 0; i < 4; ++i) {
-        lv_obj_t *dot = lv_obj_create(m);
-        lv_obj_remove_style_all(dot);
-        lv_obj_set_size(dot, 5, 5);
-        lv_obj_set_style_bg_color(dot, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-        lv_obj_set_pos(dot, (i & 1) ? 21 : 4, (i & 2) ? 21 : 4);
-        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+// 雷:像素贴图(白底黑雷贴翻开的白格;踩雷格反色后贴黑底白雷)
+static lv_image_dsc_t s_mine_img;
+static lv_image_dsc_t s_mine_img_inv;
+static uint8_t s_mine_inv_buf[MINE_SPRITE_W * MINE_SPRITE_H];
+static int s_mine_img_ready = 0;
+
+static void ensure_mine_images(void) {
+    if (s_mine_img_ready) return;
+    s_mine_img.header.magic = LV_IMAGE_HEADER_MAGIC;
+    s_mine_img.header.cf = LV_COLOR_FORMAT_L8;
+    s_mine_img.header.w = MINE_SPRITE_W;
+    s_mine_img.header.h = MINE_SPRITE_H;
+    s_mine_img.header.stride = MINE_SPRITE_W;
+    s_mine_img.data_size = sizeof(k_mine_px);
+    s_mine_img.data = k_mine_px;
+    for (int i = 0; i < MINE_SPRITE_W * MINE_SPRITE_H; ++i) {
+        s_mine_inv_buf[i] = (uint8_t)(255 - k_mine_px[i]);
     }
-    // 高光点（雷体左上留一粒白，立起来的关键）
-    lv_obj_t *glint = lv_obj_create(m);
-    lv_obj_remove_style_all(glint);
-    lv_obj_set_pos(glint, 11, 11);
-    lv_obj_set_size(glint, 3, 3);
-    lv_obj_set_style_bg_color(glint, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(glint, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(glint, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    s_mine_obj[r][c] = m;
-    return m;
+    s_mine_img_inv = s_mine_img;
+    s_mine_img_inv.data = s_mine_inv_buf;
+    s_mine_img_inv.data_size = sizeof(s_mine_inv_buf);
+    s_mine_img_ready = 1;
 }
 
-// 踩雷格整格反色：黑底 + 雷体全部翻白（经典的红底炸弹在 1bpp 上的翻译）
-static void recolor_mine_hit(lv_obj_t *m, int hit) {
-    if (m == NULL) return;
-    const uint32_t n = lv_obj_get_child_count(m);
-    for (uint32_t i = 0; i < n; ++i) {
-        lv_obj_t *ch = lv_obj_get_child(m, i);
-        // 最后一个孩子是高光点：反色时它要从白点变黑点
-        const int is_glint = ((int)i == (int)n - 1);
-        lv_obj_set_style_bg_color(ch, (hit ^ is_glint) ? lv_color_white() : lv_color_black(), 0);
-    }
+static lv_obj_t *ensure_mine(int r, int c) {
+    if (s_mine_obj[r][c] != NULL) return s_mine_obj[r][c];
+    ensure_mine_images();
+    lv_obj_t *m = lv_obj_create(s_cell_obj[r][c]);
+    lv_obj_remove_style_all(m);
+    lv_obj_set_size(m, MINE_SPRITE_W, MINE_SPRITE_H);
+    lv_obj_set_pos(m, (CELL - MINE_SPRITE_W) / 2, (CELL - MINE_SPRITE_H) / 2);
+    lv_obj_set_style_bg_image_src(m, &s_mine_img, 0);
+    lv_obj_clear_flag(m, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    s_mine_obj[r][c] = m;
+    return m;
 }
 
 static void render_cell(int r, int c) {
@@ -532,10 +507,10 @@ static void render_cell(int r, int c) {
         lv_obj_add_flag(s_flag_obj[r][c], LV_OBJ_FLAG_HIDDEN);
     }
 
-    // 雷
+    // 雷:像素贴图(踩雷格切反色版)
     if (cc->open && cc->mine) {
         lv_obj_t *m = ensure_mine(r, c);
-        recolor_mine_hit(m, hit);
+        lv_obj_set_style_bg_image_src(m, hit ? &s_mine_img_inv : &s_mine_img, 0);
         lv_obj_clear_flag(m, LV_OBJ_FLAG_HIDDEN);
     } else if (s_mine_obj[r][c] != NULL) {
         lv_obj_add_flag(s_mine_obj[r][c], LV_OBJ_FLAG_HIDDEN);
