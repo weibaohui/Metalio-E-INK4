@@ -90,6 +90,7 @@
 
 | 应用 | 一句话 | 文档 |
 |:---|:---|:---|
+| **微信读书** | 微信扫码登录、云端书架同步、分片解密与墨水屏精致排版 | [`docs/app-weread.md`](docs/app-weread.md) |
 | **知识卡片** | 4.4 万卡个人知识库，`[[链接]]` 跳转，每日一卡 | [`docs/app-knowledge.md`](docs/app-knowledge.md) |
 | **唐诗宋词** | 1092 首 + 41 篇赏析，每日一诗、收藏夹、书目 | [`docs/app-poems.md`](docs/app-poems.md) |
 | **天气** | 七段数码管大温度 + 三天预报 + TTS 朗读，353 城 | [`docs/app-weather.md`](docs/app-weather.md) |

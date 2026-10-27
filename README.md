@@ -79,7 +79,7 @@ Each app has its own doc page (real-device screenshot + gameplay + data + e-ink 
 | Group | Apps |
 |:---|:---|
 | **Built-in system** | Home desktop, Reading (book), AI chat, App store, System upgrade, Power, Settings |
-| **Content & reading** | Knowledge cards (44k-card offline wiki), Tang/Song poetry (1092 poems + 41 essays), Weather (353 cities + TTS), Internet radio, Calendar |
+| **Content & reading** | WeChat Read (QR login / cloud shelf / decrypt / e-ink typography), Knowledge cards (44k-card offline wiki), Tang/Song poetry (1092 poems + 41 essays), Weather (353 cities + TTS), Internet radio, Calendar |
 | **Board games** | Gomoku (3-level AI), Chinese chess (full rules + checkmate), Peg solitaire (33-hole English board) |
 | **Logic puzzles** | Sudoku (unique-solution generator), Minesweeper, Nonogram (10 pictures), Slitherlink (procedural levels) |
 | **Casual games** | 2048, Tetris (hold/ghost/wall-kick), Sokoban (guaranteed-solvable levels), Klondike solitaire, Memory flip, Conway's Game of Life |
