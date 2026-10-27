@@ -27,6 +27,7 @@
 #include "services/radio/radio_player.h"
 #include "services/syslog_sender.h"
 #include "services/time_service.h"
+#include "services/weread/weread_service.h"
 
 namespace {
 constexpr const char* TAG = "BootOrchestrator";
@@ -84,6 +85,7 @@ void BootOrchestrator::Run(Application& app) {
          [&] {
              reader::book_home_snapshot::HydrateFromNvs();
              reader::book_library_warmup::RequestBootWarmup();
+             WereadService::GetInstance();
          }},
         {"app_toggles",
          [&] {

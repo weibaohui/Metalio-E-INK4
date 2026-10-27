@@ -224,6 +224,22 @@ void dynapp_modal_dialog(const char* title, const char* message, const char* ok_
 int dynapp_radio_get_volume(void);
 void dynapp_radio_set_volume(int volume);
 
+// ==================== 微信读书（WeRead）====================
+typedef void (*dynapp_weread_qr_cb_t)(const char* qr_url, void* user_data);
+typedef void (*dynapp_weread_login_cb_t)(int success, const char* err_msg, void* user_data);
+typedef void (*dynapp_weread_shelf_cb_t)(const char* json_shelf, int status, void* user_data);
+typedef void (*dynapp_weread_chapters_cb_t)(const char* json_toc, int status, void* user_data);
+typedef void (*dynapp_weread_text_cb_t)(const char* text, int len, int status, void* user_data);
+
+int  dynapp_weread_is_logged_in(void);
+void dynapp_weread_logout(void);
+int  dynapp_weread_start_qr_login(dynapp_weread_qr_cb_t qr_cb, dynapp_weread_login_cb_t login_cb, void* user_data);
+void dynapp_weread_cancel_qr_login(void);
+int  dynapp_weread_fetch_shelf_async(dynapp_weread_shelf_cb_t cb, void* user_data);
+int  dynapp_weread_fetch_chapters_async(const char* book_id, dynapp_weread_chapters_cb_t cb, void* user_data);
+int  dynapp_weread_fetch_chapter_text_async(const char* book_id, const char* chapter_uid, dynapp_weread_text_cb_t cb, void* user_data);
+void dynapp_weread_sync_progress(const char* book_id, const char* chapter_uid, int chapter_idx, int offset, int percent, int read_seconds);
+
 #ifdef __cplusplus
 }
 

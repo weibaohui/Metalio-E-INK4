@@ -1,0 +1,10 @@
+{
+  "id": "weread",
+  "name": "微信读书",
+  "icon": "icon.png",
+  "executable": "lib/weread.so",
+  "abi": 1,
+  "version": "1.0.0",
+  "author": "Metalio",
+  "description": "微信读书墨水屏客户端：微信扫码登录、同步书架、沉浸阅读、触控翻页与双向进度同步"
+}

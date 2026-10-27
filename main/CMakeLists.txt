@@ -21,6 +21,10 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/home_screen/home_hero.cc"
             "services/glm_usage/glm_usage.cc"
             "services/glm_usage/glm_usage_service.cc"
+            "services/weread/weread_auth_store.cc"
+            "services/weread/weread_crypto.cc"
+            "services/weread/weread_client.cc"
+            "services/weread/weread_service.cc"
             "services/local_mcp/local_mcp_server.cc"
             "services/dynamic_apps/dynamic_app_loader.cc"
             "services/dynamic_apps/dynamic_app_shims.cc"
@@ -130,7 +134,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/book_screen" "display/screen/system_upgrade_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/screen/app_store_screen" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services" "services/backup" "services/system_upgrade" "services/wallpaper" "services/wifi_file")
+set(INCLUDE_DIRS "." "core" "display" "display/LUT" "display/a2ui" "display/font" "display/screen" "display/screen/book_screen" "display/screen/system_upgrade_screen" "display/screen/settings_screen" "display/screen/settings_screen/settings_test" "display/screen/app_store_screen" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "reader" "services" "services/backup" "services/system_upgrade" "services/wallpaper" "services/wifi_file" "services/weread")
 
 # Metalio SDK 唯一事实源(metalio/abi.h、metalio/services.h 经转发头引用)
 list(APPEND INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/include")
