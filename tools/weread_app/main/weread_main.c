@@ -499,17 +499,17 @@ static void paginate_chapter(void) {
     s_cur_page = 0;
     if (s_chapter_text == NULL || s_chapter_text_len == 0) return;
 
-    // 480x800 竖屏排版参数 (可用宽度 428px, 可用高度 715px):
-    // 字号 20px: 行高 30px (20+10), 每页 23 行, 每行 21 全角字 (42 半角列宽)
-    // 字号 24px: 行高 34px (24+10), 每页 21 行, 每行 17 全角字 (34 半角列宽)
-    // 字号 28px: 行高 38px (28+10), 每页 18 行, 每行 15 全角字 (30 半角列宽)
-    int max_lines = 21;
+    // 480x800 竖屏排版参数 (正文可用宽度 428px, 顶部 y=22, 页脚 y=766):
+    // 字号 20px: 行高约 28px, 每页最多 20 行, 底部与页脚保留充分留白
+    // 字号 24px: 行高约 34-36px, 每页最多 17 行, 底部与页脚保留约 70-90px 间隔, 彻底根除覆盖
+    // 字号 28px: 行高约 40px, 每页最多 15 行, 底部与页脚保留充分留白
+    int max_lines = 17;
     int cols_per_line = 34;
     if (s_font_size == 20) {
-        max_lines = 23;
+        max_lines = 20;
         cols_per_line = 42;
     } else if (s_font_size == 28) {
-        max_lines = 18;
+        max_lines = 15;
         cols_per_line = 30;
     }
 
@@ -929,10 +929,10 @@ static void build_view_reader(void) {
     lv_obj_clear_flag(s_view_obj, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(s_view_obj, on_reader_touch_area, LV_EVENT_CLICKED, NULL);
 
-    // 正文文本区域 (480x800: 左右边距 26, 上 24, 下 44)
+    // 正文文本区域 (480x800: 左右边距 26, 顶部 y=22, 高度 710)
     s_reader_lbl = lv_label_create(s_view_obj);
-    lv_obj_set_pos(s_reader_lbl, 26, 24);
-    lv_obj_set_size(s_reader_lbl, 428, 715);
+    lv_obj_set_pos(s_reader_lbl, 26, 22);
+    lv_obj_set_size(s_reader_lbl, 428, 710);
     lv_label_set_long_mode(s_reader_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_clear_flag(s_reader_lbl, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(s_reader_lbl, LV_OBJ_FLAG_SCROLLABLE);
@@ -945,21 +945,24 @@ static void build_view_reader(void) {
     static int s_style_init = 0;
     if (!s_style_init) {
         lv_style_init(&s_reader_style);
-        lv_style_set_text_line_space(&s_reader_style, 10);
+        lv_style_set_text_line_space(&s_reader_style, 8);
         s_style_init = 1;
     }
     lv_obj_add_style(s_reader_lbl, &s_reader_style, 0);
 
-    // 页脚信息
+    // 页脚信息 (底部安全区: y=766, 高度 26, 纯白背景遮挡并置顶防穿透)
     s_reader_footer_lbl = lv_label_create(s_view_obj);
-    lv_obj_set_pos(s_reader_footer_lbl, 26, 755);
-    lv_obj_set_size(s_reader_footer_lbl, 428, 24);
+    lv_obj_set_pos(s_reader_footer_lbl, 20, 766);
+    lv_obj_set_size(s_reader_footer_lbl, 440, 26);
+    lv_obj_set_style_bg_color(s_reader_footer_lbl, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(s_reader_footer_lbl, LV_OPA_COVER, 0);
     lv_obj_clear_flag(s_reader_footer_lbl, LV_OBJ_FLAG_CLICKABLE);
     lv_label_set_text(s_reader_footer_lbl, "");
     const lv_font_t *f16 = get_safe_font(16, 0);
     if (f16) lv_obj_set_style_text_font(s_reader_footer_lbl, f16, 0);
     lv_obj_set_style_text_color(s_reader_footer_lbl, lv_color_black(), 0);
     lv_obj_set_style_text_align(s_reader_footer_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_move_foreground(s_reader_footer_lbl);
 
     // 只有当尚未拉取过全书目录，或者切换了书籍时，才拉取全书目录
     if (s_toc_items == NULL || s_toc_count == 0) {
