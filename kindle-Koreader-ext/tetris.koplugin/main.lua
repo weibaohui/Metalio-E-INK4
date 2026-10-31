@@ -21,6 +21,7 @@ function TetrisPlugin:addToMainMenu(menu_items)
         text = "方块战争 (俄罗斯方块)",
         sorting_hint = "tools",
         callback = function()
+            package.loaded["tetrisdialog"] = nil
             local TetrisDialog = require("tetrisdialog")
             local dlg = TetrisDialog:new()
             UIManager:show(dlg)
