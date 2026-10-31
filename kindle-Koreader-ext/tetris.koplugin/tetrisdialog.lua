@@ -26,6 +26,9 @@ local STATE_RUNNING = 0
 local STATE_PAUSED = 1
 local STATE_OVER = 2
 
+-- 恒定下落速度：0.90 秒 / 格。慢于墨水屏物理刷新周期，杜绝重影与动画拖影
+local CONSTANT_DROP_DELAY = 0.90
+
 -- 7 种经典俄罗斯方块定义 (0-indexed x, y)
 local SHAPES = {
     -- 1: I
@@ -233,13 +236,16 @@ function TetrisDialog:spawn()
     self.can_hold_ = true
     self.pieces = self.pieces + 1
 
+    if self.auto_mode and self.state == STATE_RUNNING then
+        self:computeAiPlan()
+        -- AI 模式：在顶部生成时立即对齐目标旋转形态与列坐标，随后匀速匀步下落
+        self.rot_ = self.ai_target_rot
+        self.px_ = self.ai_target_x
+    end
+
     if not self:fits(self.type_, self.rot_, self.px_, self.py_) then
         self.state = STATE_OVER
         self:saveHiscore()
-    end
-
-    if self.auto_mode and self.state == STATE_RUNNING then
-        self:computeAiPlan()
     end
 end
 
@@ -284,6 +290,11 @@ function TetrisDialog:lockAndClear()
         self.score = self.score + (pts[cleared] or 1000) * self.level
         self.level = math.floor(self.lines / 10) + 1
         self:saveHiscore()
+
+        -- 消行时若多行消除或满 5 行，执行一次全局全刷彻底清除底纹残影
+        if cleared >= 2 or self.lines % 5 == 0 then
+            UIManager:setDirty(self, "full")
+        end
     end
 
     self:spawn()
@@ -479,19 +490,14 @@ end
 function TetrisDialog:scheduleNextDrop()
     if self.is_closed then return end
 
-    local delay = math.max(0.18, 0.75 - (self.level - 1) * 0.06)
-    if self.auto_mode then
-        delay = 0.20 -- AI 观战模式
-    end
+    -- 无论手动还是 AI 观战模式，下落速度均严格保持恒定，绝不随关卡变快。
+    -- 必须慢于墨水屏粒子物理刷新周期，彻底杜绝重影与动画拖影异形。
+    local delay = CONSTANT_DROP_DELAY
 
     self.timer_action = UIManager:scheduleIn(delay, function()
         if self.is_closed then return end
         if self.state == STATE_RUNNING then
-            if self.auto_mode then
-                self:aiTick()
-            else
-                self:softDrop()
-            end
+            self:softDrop()
         elseif self.state == STATE_OVER and self.auto_mode then
             self:startNewGame()
         end
@@ -748,6 +754,8 @@ function TetrisDialog:onTap(arg, ges)
         self.auto_mode = not self.auto_mode
         if self.auto_mode and self.state == STATE_RUNNING then
             self:computeAiPlan()
+            self.rot_ = self.ai_target_rot
+            self.px_ = self.ai_target_x
         end
         self:refreshScreen()
         return true
