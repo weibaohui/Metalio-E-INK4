@@ -1,7 +1,11 @@
 --[[--
-方块战争 (俄罗斯方块) - Kindle 墨水屏深度定制极简手势版
-针对 Kindle 600x800 分辨率与触摸交互全新重构
-支持全屏划屏手势盲操、落点投影预判、AI 自动观战与底部极简触控提示区。
+方块战争 (俄罗斯方块) - Kindle 墨水屏全屏大视野定制版
+针对 Kindle 600x800 分辨率深度重构：
+- 棋盘空间最大化拓展 (单元格 35px，视野拓展 77% 以上)
+- 纯净去按键化设计，右侧看板微型化，底部精简为单行操作小提示
+- 点棋盘任意处直接顺时针旋转方块
+- 支持双击直坠到底、下滑直坠、划屏平移、长按暂存
+- 下落速度严格恒定 0.90s，完美匹配墨水屏物理刷新，杜绝重影与拖影
 --]]--
 
 local Device = require("device")
@@ -18,9 +22,9 @@ local logger = require("logger")
 
 local FW = 10
 local FH = 20
-local CELL_SZ = 27 -- 10 * 27 = 270px 宽, 20 * 27 = 540px 高
-local BOARD_X = 25
-local BOARD_Y = 65
+local CELL_SZ = 35 -- 10 * 35 = 350px 宽, 20 * 35 = 700px 高 (全屏大视野!)
+local BOARD_X = 15
+local BOARD_Y = 52
 
 local STATE_RUNNING = 0
 local STATE_PAUSED = 1
@@ -86,6 +90,7 @@ local TetrisDialog = InputContainer:extend{
     name = "tetris_dialog",
     dimen = Geom:new{ x = 0, y = 0, w = 600, h = 800 },
     modal = true,
+    disable_double_tap = false,
 }
 
 function TetrisDialog:init()
@@ -125,6 +130,9 @@ function TetrisDialog:init()
     self.timer_action = nil
     self.is_closed = false
     self.last_swipe_clock = 0
+    self.last_tap_clock = 0
+    self.last_tap_x = 0
+    self.last_tap_y = 0
 
     -- 注册全屏手势支持
     local full_range = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
@@ -238,7 +246,7 @@ function TetrisDialog:spawn()
 
     if self.auto_mode and self.state == STATE_RUNNING then
         self:computeAiPlan()
-        -- AI 模式：在顶部生成时立即对齐目标旋转形态与列坐标，随后匀速匀步下落
+        -- AI 模式：在顶部生成时立即对齐目标形态与列坐标，随后匀速匀步下落
         self.rot_ = self.ai_target_rot
         self.px_ = self.ai_target_x
     end
@@ -376,6 +384,8 @@ function TetrisDialog:holdPiece()
     end
     if self.auto_mode and self.state == STATE_RUNNING then
         self:computeAiPlan()
+        self.rot_ = self.ai_target_rot
+        self.px_ = self.ai_target_x
     end
     self:refreshScreen()
 end
@@ -472,25 +482,11 @@ function TetrisDialog:computeAiPlan()
     self.ai_target_x = best_x
 end
 
-function TetrisDialog:aiTick()
-    if self.state ~= STATE_RUNNING or not self.auto_mode then return end
-
-    if self.rot_ ~= self.ai_target_rot then
-        self:rotatePiece()
-    elseif self.px_ < self.ai_target_x then
-        self:moveRight()
-    elseif self.px_ > self.ai_target_x then
-        self:moveLeft()
-    else
-        self:hardDrop()
-    end
-end
-
 -- ======================= 定时器与刷新 =======================
 function TetrisDialog:scheduleNextDrop()
     if self.is_closed then return end
 
-    -- 无论手动还是 AI 观战模式，下落速度均严格保持恒定，绝不随关卡变快。
+    -- 无论手动还是 AI 观战模式，下落速度均严格保持恒定 0.90s，绝不随关卡变快。
     -- 必须慢于墨水屏粒子物理刷新周期，彻底杜绝重影与动画拖影异形。
     local delay = CONSTANT_DROP_DELAY
 
@@ -515,25 +511,26 @@ function TetrisDialog:paintTo(bb, x, y)
 
     local font_title = Font:getFace("tfont", 20)
     local font_num = Font:getFace("cfont", 16)
-    local font_small = Font:getFace("cfont", 14)
-    local font_btn = Font:getFace("cfont", 16)
+    local font_small = Font:getFace("cfont", 13)
+    local font_btn = Font:getFace("cfont", 14)
 
-    -- 1. 顶部标题与功能快捷键 (Y: 0 ~ 55)
-    bb:paintRect(0, 0, 600, 52, Blitbuffer.COLOR_BLACK)
-    RenderText:renderUtf8Text(bb, 20, 36, font_title, "方块战争 · 极简手势触控版", false, true, Blitbuffer.COLOR_WHITE)
+    -- 1. 顶部紧凑标题与功能按键 (Y: 0 ~ 46)
+    bb:paintRect(0, 0, 600, 46, Blitbuffer.COLOR_BLACK)
+    RenderText:renderUtf8Text(bb, 15, 32, font_title, "方块战争 · 全屏大视野版", false, true, Blitbuffer.COLOR_WHITE)
 
     -- 顶部按钮: [暂停/继续] [新开局] [退出]
     local btn_p_text = (self.state == STATE_PAUSED) and "▶ 继续" or "⏸ 暂停"
-    bb:paintRoundedRect(330, 10, 75, 32, Blitbuffer.COLOR_WHITE, 4)
-    RenderText:renderUtf8Text(bb, 342, 33, font_btn, btn_p_text, false, true, Blitbuffer.COLOR_BLACK)
+    bb:paintRoundedRect(330, 8, 75, 30, Blitbuffer.COLOR_WHITE, 4)
+    RenderText:renderUtf8Text(bb, 342, 29, font_btn, btn_p_text, false, true, Blitbuffer.COLOR_BLACK)
 
-    bb:paintRoundedRect(420, 10, 75, 32, Blitbuffer.COLOR_WHITE, 4)
-    RenderText:renderUtf8Text(bb, 432, 33, font_btn, "🔄 重开", false, true, Blitbuffer.COLOR_BLACK)
+    bb:paintRoundedRect(415, 8, 75, 30, Blitbuffer.COLOR_WHITE, 4)
+    RenderText:renderUtf8Text(bb, 427, 29, font_btn, "🔄 重开", false, true, Blitbuffer.COLOR_BLACK)
 
-    bb:paintRoundedRect(510, 10, 75, 32, Blitbuffer.COLOR_WHITE, 4)
-    RenderText:renderUtf8Text(bb, 525, 33, font_btn, "✕ 退出", false, true, Blitbuffer.COLOR_BLACK)
+    bb:paintRoundedRect(500, 8, 85, 30, Blitbuffer.COLOR_WHITE, 4)
+    RenderText:renderUtf8Text(bb, 515, 29, font_btn, "✕ 退出", false, true, Blitbuffer.COLOR_BLACK)
 
-    -- 2. 左侧主棋盘渲染 (BOARD_X=25, BOARD_Y=65, W=270, H=540)
+    -- 2. 超大主棋盘渲染 (BOARD_X=15, BOARD_Y=52, CELL_SZ=35, W=350, H=700)
+    -- 占据整个屏幕 58.3% 宽度与 87.5% 高度！
     bb:paintRect(BOARD_X - 3, BOARD_Y - 3, FW * CELL_SZ + 6, FH * CELL_SZ + 6, Blitbuffer.COLOR_BLACK)
     bb:paintRect(BOARD_X, BOARD_Y, FW * CELL_SZ, FH * CELL_SZ, Blitbuffer.COLOR_WHITE)
 
@@ -553,7 +550,7 @@ function TetrisDialog:paintTo(bb, x, y)
                 local bx = BOARD_X + (gx - 1) * CELL_SZ
                 local by = BOARD_Y + (gy - 1) * CELL_SZ
                 bb:paintRect(bx + 1, by + 1, CELL_SZ - 2, CELL_SZ - 2, Blitbuffer.COLOR_BLACK)
-                bb:paintRect(bx + 2, by + 2, CELL_SZ - 4, 1, Blitbuffer.COLOR_WHITE)
+                bb:paintRect(bx + 2, by + 2, CELL_SZ - 4, 2, Blitbuffer.COLOR_WHITE)
             end
         end
     end
@@ -569,7 +566,7 @@ function TetrisDialog:paintTo(bb, x, y)
                 local bx = BOARD_X + cx * CELL_SZ
                 local by = BOARD_Y + cy * CELL_SZ
                 bb:paintRect(bx + 2, by + 2, CELL_SZ - 4, CELL_SZ - 4, Blitbuffer.COLOR_GRAY_3)
-                bb:paintRect(bx + 3, by + 3, CELL_SZ - 6, CELL_SZ - 6, Blitbuffer.COLOR_WHITE)
+                bb:paintRect(bx + 4, by + 4, CELL_SZ - 8, CELL_SZ - 8, Blitbuffer.COLOR_WHITE)
             end
         end
 
@@ -581,108 +578,89 @@ function TetrisDialog:paintTo(bb, x, y)
                 local bx = BOARD_X + cx * CELL_SZ
                 local by = BOARD_Y + cy * CELL_SZ
                 bb:paintRect(bx + 1, by + 1, CELL_SZ - 2, CELL_SZ - 2, Blitbuffer.COLOR_BLACK)
-                bb:paintRect(bx + 2, by + 2, CELL_SZ - 4, 1, Blitbuffer.COLOR_WHITE)
+                bb:paintRect(bx + 2, by + 2, CELL_SZ - 4, 2, Blitbuffer.COLOR_WHITE)
             end
         end
     end
 
-    -- 3. 右侧信息看板 (Next / Hold / Stats / AI)
-    local side_x = 315
+    -- 3. 右侧微型看板 (NEXT / HOLD / STATS / AI)
+    -- X: 380 ~ 585 (宽 205px)
+    local side_x = 380
+    local side_w = 205
 
     -- 下一个预览框 (NEXT)
-    bb:paintRoundedRect(side_x, BOARD_Y, 260, 95, Blitbuffer.COLOR_GRAY_9, 6)
-    bb:paintRect(side_x, BOARD_Y, 260, 1, Blitbuffer.COLOR_BLACK)
-    RenderText:renderUtf8Text(bb, side_x + 12, BOARD_Y + 22, font_small, "下一个 (NEXT)", false, true, Blitbuffer.COLOR_BLACK)
+    bb:paintRoundedRect(side_x, BOARD_Y, side_w, 82, Blitbuffer.COLOR_GRAY_9, 5)
+    bb:paintRect(side_x, BOARD_Y, side_w, 1, Blitbuffer.COLOR_BLACK)
+    RenderText:renderUtf8Text(bb, side_x + 10, BOARD_Y + 18, font_small, "下一个 (NEXT)", false, true, Blitbuffer.COLOR_BLACK)
     if self.next_ > 0 then
         local n_shape = SHAPES[self.next_][1]
         for i = 1, 4 do
-            local nbx = side_x + 110 + n_shape[i][1] * 18
-            local nby = BOARD_Y + 28 + n_shape[i][2] * 18
-            bb:paintRect(nbx, nby, 16, 16, Blitbuffer.COLOR_BLACK)
+            local nbx = side_x + 80 + n_shape[i][1] * 16
+            local nby = BOARD_Y + 24 + n_shape[i][2] * 16
+            bb:paintRect(nbx, nby, 14, 14, Blitbuffer.COLOR_BLACK)
         end
     end
 
     -- 暂存框 (HOLD) - 支持轻触直接换块
-    local hold_y = BOARD_Y + 110
-    bb:paintRoundedRect(side_x, hold_y, 260, 95, Blitbuffer.COLOR_GRAY_9, 6)
-    bb:paintRect(side_x, hold_y, 260, 1, Blitbuffer.COLOR_BLACK)
-    RenderText:renderUtf8Text(bb, side_x + 12, hold_y + 22, font_small, "暂存 (HOLD · 点此换块)", false, true, Blitbuffer.COLOR_BLACK)
+    local hold_y = BOARD_Y + 92
+    bb:paintRoundedRect(side_x, hold_y, side_w, 82, Blitbuffer.COLOR_GRAY_9, 5)
+    bb:paintRect(side_x, hold_y, side_w, 1, Blitbuffer.COLOR_BLACK)
+    RenderText:renderUtf8Text(bb, side_x + 10, hold_y + 18, font_small, "暂存 (点此换块)", false, true, Blitbuffer.COLOR_BLACK)
     if self.hold_ > 0 then
         local h_shape = SHAPES[self.hold_][1]
         for i = 1, 4 do
-            local hbx = side_x + 110 + h_shape[i][1] * 18
-            local hby = hold_y + 28 + h_shape[i][2] * 18
-            bb:paintRect(hbx, hby, 16, 16, Blitbuffer.COLOR_BLACK)
+            local hbx = side_x + 80 + h_shape[i][1] * 16
+            local hby = hold_y + 24 + h_shape[i][2] * 16
+            bb:paintRect(hbx, hby, 14, 14, Blitbuffer.COLOR_BLACK)
         end
     end
 
     -- 统计指标卡
-    local stat_y = hold_y + 110
-    bb:paintRoundedRect(side_x, stat_y, 260, 175, Blitbuffer.COLOR_WHITE, 6)
-    bb:paintRect(side_x, stat_y, 260, 175, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(side_x + 1, stat_y + 1, 258, 173, Blitbuffer.COLOR_WHITE)
+    local stat_y = hold_y + 92
+    bb:paintRoundedRect(side_x, stat_y, side_w, 160, Blitbuffer.COLOR_WHITE, 5)
+    bb:paintRect(side_x, stat_y, side_w, 160, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(side_x + 1, stat_y + 1, side_w - 2, 158, Blitbuffer.COLOR_WHITE)
 
-    RenderText:renderUtf8Text(bb, side_x + 15, stat_y + 35, font_num, "当前得分:", false, false, Blitbuffer.COLOR_GRAY_3)
-    RenderText:renderUtf8Text(bb, side_x + 110, stat_y + 35, font_title, tostring(self.score), false, true, Blitbuffer.COLOR_BLACK)
+    RenderText:renderUtf8Text(bb, side_x + 12, stat_y + 30, font_small, "当前得分:", false, false, Blitbuffer.COLOR_GRAY_3)
+    RenderText:renderUtf8Text(bb, side_x + 95, stat_y + 30, font_num, tostring(self.score), false, true, Blitbuffer.COLOR_BLACK)
 
-    RenderText:renderUtf8Text(bb, side_x + 15, stat_y + 75, font_num, "最高纪录:", false, false, Blitbuffer.COLOR_GRAY_3)
-    RenderText:renderUtf8Text(bb, side_x + 110, stat_y + 75, font_title, tostring(math.max(self.score, self.hiscore)), false, true, Blitbuffer.COLOR_BLACK)
+    RenderText:renderUtf8Text(bb, side_x + 12, stat_y + 68, font_small, "最高纪录:", false, false, Blitbuffer.COLOR_GRAY_3)
+    RenderText:renderUtf8Text(bb, side_x + 95, stat_y + 68, font_num, tostring(math.max(self.score, self.hiscore)), false, true, Blitbuffer.COLOR_BLACK)
 
-    RenderText:renderUtf8Text(bb, side_x + 15, stat_y + 115, font_num, "消除行数:", false, false, Blitbuffer.COLOR_GRAY_3)
-    RenderText:renderUtf8Text(bb, side_x + 110, stat_y + 115, font_title, tostring(self.lines), false, true, Blitbuffer.COLOR_BLACK)
+    RenderText:renderUtf8Text(bb, side_x + 12, stat_y + 106, font_small, "消除行数:", false, false, Blitbuffer.COLOR_GRAY_3)
+    RenderText:renderUtf8Text(bb, side_x + 95, stat_y + 106, font_num, tostring(self.lines), false, true, Blitbuffer.COLOR_BLACK)
 
-    RenderText:renderUtf8Text(bb, side_x + 15, stat_y + 155, font_num, "游戏级别:", false, false, Blitbuffer.COLOR_GRAY_3)
-    RenderText:renderUtf8Text(bb, side_x + 110, stat_y + 155, font_title, "Lv " .. tostring(self.level), false, true, Blitbuffer.COLOR_BLACK)
+    RenderText:renderUtf8Text(bb, side_x + 12, stat_y + 144, font_small, "游戏级别:", false, false, Blitbuffer.COLOR_GRAY_3)
+    RenderText:renderUtf8Text(bb, side_x + 95, stat_y + 144, font_num, "Lv " .. tostring(self.level), false, true, Blitbuffer.COLOR_BLACK)
 
     -- AI 自动演示开关按键 (右侧下方)
-    local ai_btn_y = stat_y + 190
+    local ai_btn_y = stat_y + 172
     local ai_bg = self.auto_mode and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
     local ai_fg = self.auto_mode and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
-    bb:paintRoundedRect(side_x, ai_btn_y, 260, 42, ai_bg, 6)
-    bb:paintRect(side_x, ai_btn_y, 260, 42, Blitbuffer.COLOR_BLACK)
+    bb:paintRoundedRect(side_x, ai_btn_y, side_w, 40, ai_bg, 5)
+    bb:paintRect(side_x, ai_btn_y, side_w, 40, Blitbuffer.COLOR_BLACK)
     if not self.auto_mode then
-        bb:paintRect(side_x + 1, ai_btn_y + 1, 258, 40, Blitbuffer.COLOR_WHITE)
+        bb:paintRect(side_x + 1, ai_btn_y + 1, side_w - 2, 38, Blitbuffer.COLOR_WHITE)
     end
-    local ai_text = self.auto_mode and "★ AI 自动观战中 (点此手动)" or "☆ 开启 AI 自动观战"
-    RenderText:renderUtf8Text(bb, side_x + 20, ai_btn_y + 28, font_small, ai_text, false, true, ai_fg)
+    local ai_text = self.auto_mode and "★ AI 观战中 (点此手动)" or "☆ 开启 AI 自动观战"
+    RenderText:renderUtf8Text(bb, side_x + 14, ai_btn_y + 26, font_small, ai_text, false, true, ai_fg)
 
     -- 游戏状态浮层
     if self.state == STATE_PAUSED then
-        bb:paintRoundedRect(50, 240, 200, 80, Blitbuffer.COLOR_BLACK, 8)
-        bb:paintRoundedRect(52, 242, 196, 76, Blitbuffer.COLOR_WHITE, 6)
-        RenderText:renderUtf8Text(bb, 95, 288, font_title, "游戏已暂停", false, true, Blitbuffer.COLOR_BLACK)
+        bb:paintRoundedRect(90, 320, 200, 80, Blitbuffer.COLOR_BLACK, 8)
+        bb:paintRoundedRect(92, 322, 196, 76, Blitbuffer.COLOR_WHITE, 6)
+        RenderText:renderUtf8Text(bb, 135, 368, font_title, "游戏已暂停", false, true, Blitbuffer.COLOR_BLACK)
     elseif self.state == STATE_OVER then
-        bb:paintRoundedRect(40, 230, 220, 100, Blitbuffer.COLOR_BLACK, 8)
-        bb:paintRoundedRect(42, 232, 216, 96, Blitbuffer.COLOR_WHITE, 6)
-        RenderText:renderUtf8Text(bb, 85, 275, font_title, "游戏结束!", false, true, Blitbuffer.COLOR_BLACK)
-        RenderText:renderUtf8Text(bb, 75, 310, font_num, "轻触屏幕重开新局", false, false, Blitbuffer.COLOR_GRAY_3)
+        bb:paintRoundedRect(80, 310, 220, 100, Blitbuffer.COLOR_BLACK, 8)
+        bb:paintRoundedRect(82, 312, 216, 96, Blitbuffer.COLOR_WHITE, 6)
+        RenderText:renderUtf8Text(bb, 125, 355, font_title, "游戏结束!", false, true, Blitbuffer.COLOR_BLACK)
+        RenderText:renderUtf8Text(bb, 115, 390, font_num, "轻触屏幕重开新局", false, false, Blitbuffer.COLOR_GRAY_3)
     end
 
-    -- ======================= 4. 底部极简手势指南与辅助触控面板 =======================
-    -- Y: 620 ~ 785 (高度 165px)
-    local guide_y = 620
-    local guide_h = 165
-
-    bb:paintRoundedRect(25, guide_y, 550, guide_h, Blitbuffer.COLOR_GRAY_9, 8)
-    bb:paintRect(25, guide_y, 550, guide_h, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(27, guide_y + 2, 546, guide_h - 4, Blitbuffer.COLOR_WHITE)
-
-    -- 标题指示
-    RenderText:renderUtf8Text(bb, 185, guide_y + 28, font_title, "✦ 全屏手势交互指南 ✦", false, true, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(40, guide_y + 36, 520, 1, Blitbuffer.COLOR_GRAY_7)
-
-    -- 4 组手势图解与说明
-    -- Row 1: 左移与右移
-    RenderText:renderUtf8Text(bb, 45, guide_y + 68, font_btn, "◄ 向左滑动: 方块左移", false, true, Blitbuffer.COLOR_BLACK)
-    RenderText:renderUtf8Text(bb, 320, guide_y + 68, font_btn, "► 向右滑动: 方块右移", false, true, Blitbuffer.COLOR_BLACK)
-
-    -- Row 2: 旋转与直坠
-    RenderText:renderUtf8Text(bb, 45, guide_y + 105, font_btn, "▲ 向上滑动 / 点棋盘: 旋转", false, true, Blitbuffer.COLOR_BLACK)
-    RenderText:renderUtf8Text(bb, 320, guide_y + 105, font_btn, "▼ 向下滑动 / 双击: 直坠", false, true, Blitbuffer.COLOR_BLACK)
-
-    -- Row 3: 底部长按与辅助点按提示
-    bb:paintRect(40, guide_y + 120, 520, 1, Blitbuffer.COLOR_GRAY_7)
-    RenderText:renderUtf8Text(bb, 55, guide_y + 148, font_small, "★ 长按屏幕或轻触暂存框换块 | 亦可点按此区域左/右微调，点中央旋转", false, false, Blitbuffer.COLOR_GRAY_3)
+    -- ======================= 4. 底部极简单行微型提示 =======================
+    -- Y: 765 ~ 795 (单行精炼小字，彻底释放底部空间)
+    bb:paintRect(15, 764, 570, 1, Blitbuffer.COLOR_GRAY_7)
+    RenderText:renderUtf8Text(bb, 35, 785, font_small, "操作: 划屏平移 · 点棋盘/上划旋转 · 下滑/双击直降 · 长按/点暂存换块", false, false, Blitbuffer.COLOR_GRAY_3)
 end
 
 -- ======================= 手势与触控事件分发 =======================
@@ -710,18 +688,10 @@ function TetrisDialog:onTap(arg, ges)
     local y = ges.pos.y
 
     local now = os.clock()
-    -- 核心防误判：如果刚刚发生过滑动 (0.45 秒内)，完全忽略本次点击事件！
-    -- 彻底消除用户在下滑、划屏结束抬指离开屏幕时，电容屏瞬间产生的微小抖动 tap！
-    if (now - self.last_swipe_clock) < 0.45 then
-        logger.warn("TetrisDialog:onTap ignored (anti-ghost tap after swipe, dt=" .. tostring(now - self.last_swipe_clock) .. ")")
-        return true
-    end
 
-    logger.warn("TetrisDialog:onTap (" .. tostring(x) .. ", " .. tostring(y) .. ")")
-
-    -- 顶部按钮点击 (Y: 5 ~ 50)
-    if y >= 5 and y <= 50 then
-        if x >= 320 and x <= 410 then
+    -- 1. 顶部操作按钮优先处理 (Y: 5 ~ 46)
+    if y >= 5 and y <= 46 then
+        if x >= 325 and x <= 405 then
             -- 暂停 / 继续
             if self.state == STATE_RUNNING then
                 self.state = STATE_PAUSED
@@ -730,27 +700,27 @@ function TetrisDialog:onTap(arg, ges)
             end
             self:refreshScreen()
             return true
-        elseif x >= 415 and x <= 500 then
+        elseif x >= 415 and x <= 495 then
             -- 重开新局
             self:startNewGame()
             self:refreshScreen()
             return true
-        elseif x >= 505 and x <= 590 then
+        elseif x >= 500 and x <= 590 then
             -- 退出
             self:onClose()
             return true
         end
     end
 
-    -- 游戏结束状态下轻点任意处开新局
+    -- 2. 游戏结束状态下轻点任意处开新局
     if self.state == STATE_OVER then
         self:startNewGame()
         self:refreshScreen()
         return true
     end
 
-    -- 点击 AI 模式开关 (315, 470 ~ 575, 530)
-    if x >= 315 and x <= 575 and y >= 470 and y <= 530 then
+    -- 3. 点击 AI 模式开关 (380, 436 ~ 585, 480)
+    if x >= 380 and x <= 585 and y >= 436 and y <= 480 then
         self.auto_mode = not self.auto_mode
         if self.auto_mode and self.state == STATE_RUNNING then
             self:computeAiPlan()
@@ -761,35 +731,36 @@ function TetrisDialog:onTap(arg, ges)
         return true
     end
 
-    -- 点击右侧暂存区 HOLD (315, 170 ~ 575, 270)
-    if x >= 315 and x <= 575 and y >= 170 and y <= 270 then
+    -- 4. 点击右侧暂存区 HOLD (380, 145 ~ 585, 230)
+    if x >= 380 and x <= 585 and y >= 145 and y <= 230 then
         self:holdPiece()
         return true
     end
 
-    -- 底部触控指示区点击辅助微调 (Y: 620 ~ 785)
-    if y >= 620 and y <= 785 then
-        if x < 200 then
-            self:moveLeft()
-        elseif x > 400 then
-            self:moveRight()
-        else
-            self:rotatePiece()
-        end
+    -- 5. 滑动抬手微小抖动防抖 (滑动结束后 0.25 秒内过滤微弱残余误判)
+    if (now - self.last_swipe_clock) < 0.25 then
+        logger.warn("TetrisDialog: Ignored ghost tap right after swipe (dt=" .. tostring(now - self.last_swipe_clock) .. ")")
         return true
     end
 
-    -- 主棋盘区域智能分区点击:
-    -- 左侧 30% 左移，右侧 30% 右移，中间 40% 旋转
-    if x >= BOARD_X and x <= BOARD_X + FW * CELL_SZ and y >= BOARD_Y and y <= BOARD_Y + FH * CELL_SZ then
-        local rel_x = x - BOARD_X
-        if rel_x < FW * CELL_SZ * 0.30 then
-            self:moveLeft()
-        elseif rel_x > FW * CELL_SZ * 0.70 then
-            self:moveRight()
-        else
-            self:rotatePiece()
+    -- 6. 双击直降核心判定 (连续两次点击间隔 < 0.38 秒且位置相近)
+    if self.last_tap_clock and (now - self.last_tap_clock) < 0.38 then
+        local tap_dist = math.sqrt((x - self.last_tap_x)^2 + (y - self.last_tap_y)^2)
+        if tap_dist < 90 then
+            logger.warn("TetrisDialog: Double-tap detected -> hardDrop! dist=" .. tostring(tap_dist))
+            self.last_tap_clock = 0
+            self:hardDrop()
+            return true
         end
+    end
+    self.last_tap_clock = now
+    self.last_tap_x = x
+    self.last_tap_y = y
+
+    -- 7. 点棋盘任意区域直接旋转方块！
+    if x >= BOARD_X and x <= BOARD_X + FW * CELL_SZ and y >= BOARD_Y and y <= BOARD_Y + FH * CELL_SZ then
+        logger.warn("TetrisDialog: Tap on board -> rotatePiece!")
+        self:rotatePiece()
         return true
     end
 
@@ -813,7 +784,7 @@ function TetrisDialog:onSwipe(arg, ges)
     -- 1. 下滑 (直坠速降锁定) —— 第一优先级，极致放宽判定！
     -- 用户在墨水屏设备上下滑时，手指/拇指很容易划出斜线或弧度，不可能正上正下。
     -- 满足以下任一条件立即判定为【下滑直坠】：
-    --   a) 纵向下移量 dy >= 18 且 dy >= |dx| * 0.35 (即使倾斜达 70 度也判定为下滑!)
+    --   a) 纵向下移量 dy >= 20 且 dy >= |dx| * 0.55 (即使倾斜达 60 度也判定为下滑!)
     --   b) 系统方向为 "south", "southwest", "southeast"
     -- ========================================================
     local is_down = false
@@ -870,14 +841,14 @@ end
 
 -- 双击屏幕: 直坠到底
 function TetrisDialog:onDoubleTap(arg, ges)
-    logger.warn("TetrisDialog:onDoubleTap")
+    logger.warn("TetrisDialog:onDoubleTap event -> hardDrop")
     self:hardDrop()
     return true
 end
 
 -- 长按屏幕: 暂存方块 (HOLD)
 function TetrisDialog:onHold(arg, ges)
-    logger.warn("TetrisDialog:onHold")
+    logger.warn("TetrisDialog:onHold -> holdPiece")
     self:holdPiece()
     return true
 end
