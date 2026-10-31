@@ -20,10 +20,11 @@ local DataStorage = require("datastorage")
 local RenderText = require("ui/rendertext")
 local logger = require("logger")
 
-local FW = 10
-local FH = 20
-local CELL_W = 48 -- 10 * 48 = 480px 宽 (占屏幕 600px 的整整 80.0%!)
-local CELL_H = 36 -- 20 * 36 = 720px 高 (占屏幕 800px 的 90.0%!)
+local FW = 16
+local FH = 24
+local CELL_SZ = 30 -- 16 * 30 = 480px 宽 (严格占 600px 屏幕的 80.0%!), 24 * 30 = 720px 高 (严格占 800px 屏幕的 90.0%!), 1:1 绝对正方形无任何拉伸变形!
+local CELL_W = CELL_SZ
+local CELL_H = CELL_SZ
 local BOARD_X = 6
 local BOARD_Y = 48
 
@@ -118,7 +119,7 @@ function TetrisDialog:init()
 
     self.type_ = 1
     self.rot_ = 1
-    self.px_ = 3
+    self.px_ = math.floor((FW - 4) / 2)
     self.py_ = 1
     self.next_ = math.random(1, 7)
     self.hold_ = 0
@@ -126,7 +127,7 @@ function TetrisDialog:init()
 
     -- AI 自动规划缓存
     self.ai_target_rot = 1
-    self.ai_target_x = 3
+    self.ai_target_x = math.floor((FW - 4) / 2)
 
     -- 恒定下落速度选项 (默认 1.80s，支持轻触切换)
     self.speed_options = { 1.80, 2.40, 1.40, 1.00 }
@@ -247,7 +248,7 @@ function TetrisDialog:spawn()
     self.type_ = self.next_
     self.next_ = math.random(1, 7)
     self.rot_ = 1
-    self.px_ = 3
+    self.px_ = math.floor((FW - 4) / 2)
     self.py_ = 0
     self.can_hold_ = true
     self.pieces = self.pieces + 1
@@ -384,7 +385,7 @@ function TetrisDialog:holdPiece()
         self.type_ = self.hold_
         self.hold_ = tmp
         self.rot_ = 1
-        self.px_ = 3
+        self.px_ = math.floor((FW - 4) / 2)
         self.py_ = 0
         if not self:fits(self.type_, self.rot_, self.px_, self.py_) then
             self.state = STATE_OVER
@@ -403,7 +404,7 @@ end
 function TetrisDialog:computeAiPlan()
     local best_score = -9999999
     local best_rot = 1
-    local best_x = 3
+    local best_x = math.floor((FW - 4) / 2)
 
     for r = 1, 4 do
         local shape = SHAPES[self.type_][r]
