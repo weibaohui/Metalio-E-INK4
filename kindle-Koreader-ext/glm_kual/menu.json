@@ -1,0 +1,17 @@
+{
+	"items": [
+	{
+		"name": "GLM 用量监控",
+		"priority": 1,
+		"items": [
+		{
+			"name": "刷新并查看 GLM 用量",
+			"action": "./bin/query.sh",
+			"priority": 1,
+			"exitmenu": false,
+			"refresh": false
+		}
+		]
+	}
+	]
+}
