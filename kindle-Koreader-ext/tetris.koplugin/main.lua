@@ -3,9 +3,9 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local reader_order = require("ui/elements/reader_menu_order")
 local filemanager_order = require("ui/elements/filemanager_menu_order")
 
--- 插入到工具栏菜单
-table.insert(reader_order.tools, 2, "tetris_game")
-table.insert(filemanager_order.tools, 2, "tetris_game")
+-- 插入到工具栏菜单首位 (最显眼位置，无需翻页或点更多工具)
+table.insert(reader_order.tools, 1, "tetris_game")
+table.insert(filemanager_order.tools, 1, "tetris_game")
 
 local TetrisPlugin = WidgetContainer:extend{
     name = "tetris",

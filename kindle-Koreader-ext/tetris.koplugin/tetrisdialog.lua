@@ -31,8 +31,8 @@ local STATE_RUNNING = 0
 local STATE_PAUSED = 1
 local STATE_OVER = 2
 
--- 恒定下落速度：0.90 秒 / 格。慢于墨水屏物理刷新周期，杜绝重影与动画拖影
-local CONSTANT_DROP_DELAY = 0.90
+-- 恒定下落速度：1.80 秒 / 格。慢节奏从容休闲，彻底杜绝重影与动画拖影
+local CONSTANT_DROP_DELAY = 1.80
 
 -- 7 种经典俄罗斯方块定义 (0-indexed x, y)
 local SHAPES = {
@@ -127,6 +127,12 @@ function TetrisDialog:init()
     -- AI 自动规划缓存
     self.ai_target_rot = 1
     self.ai_target_x = 3
+
+    -- 恒定下落速度选项 (默认 1.80s，支持轻触切换)
+    self.speed_options = { 1.80, 2.40, 1.40, 1.00 }
+    self.speed_labels = { "1.8s", "2.4s", "1.4s", "1.0s" }
+    self.speed_idx = 1
+    self.drop_delay = self.speed_options[self.speed_idx]
 
     self.timer_action = nil
     self.is_closed = false
@@ -486,12 +492,28 @@ function TetrisDialog:computeAiPlan()
 end
 
 -- ======================= 定时器与刷新 =======================
+function TetrisDialog:stopDropTimer()
+    if self.timer_action then
+        UIManager:unschedule(self.timer_action)
+        self.timer_action = nil
+    end
+end
+
+function TetrisDialog:cycleSpeed()
+    self.speed_idx = (self.speed_idx % #self.speed_options) + 1
+    self.drop_delay = self.speed_options[self.speed_idx]
+    logger.warn("TetrisDialog: Switched speed to " .. tostring(self.drop_delay) .. "s")
+    self:scheduleNextDrop()
+    self:refreshScreen()
+end
+
 function TetrisDialog:scheduleNextDrop()
     if self.is_closed then return end
+    self:stopDropTimer()
 
-    -- 无论手动还是 AI 观战模式，下落速度均严格保持恒定 0.90s，绝不随关卡变快。
-    -- 必须慢于墨水屏粒子物理刷新周期，彻底杜绝重影与动画拖影异形。
-    local delay = CONSTANT_DROP_DELAY
+    -- 无论手动还是 AI 观战模式，下落速度均严格保持恒定，绝不随关卡变快。
+    -- 默认 1.80s 超从容节奏，彻底杜绝重影与动画拖影异形。
+    local delay = self.drop_delay or CONSTANT_DROP_DELAY
 
     self.timer_action = UIManager:scheduleIn(delay, function()
         if self.is_closed then return end
@@ -637,9 +659,10 @@ function TetrisDialog:paintTo(bb, x, y)
     RenderText:renderUtf8Text(bb, side_x + 36, stat_y + 136, font_mini, "消行", false, false, Blitbuffer.COLOR_GRAY_3)
     RenderText:renderUtf8Text(bb, side_x + 14, stat_y + 160, font_num, tostring(self.lines), false, true, Blitbuffer.COLOR_BLACK)
 
-    -- 级别
-    RenderText:renderUtf8Text(bb, side_x + 36, stat_y + 194, font_mini, "难度", false, false, Blitbuffer.COLOR_GRAY_3)
-    RenderText:renderUtf8Text(bb, side_x + 14, stat_y + 218, font_num, "Lv " .. tostring(self.level), false, true, Blitbuffer.COLOR_BLACK)
+    -- 速度 (轻触可循环切换 1.8s / 2.4s / 1.4s / 1.0s)
+    RenderText:renderUtf8Text(bb, side_x + 36, stat_y + 194, font_mini, "速度", false, false, Blitbuffer.COLOR_GRAY_3)
+    local cur_spd_lbl = self.speed_labels and self.speed_labels[self.speed_idx] or (tostring(self.drop_delay or 1.8) .. "s")
+    RenderText:renderUtf8Text(bb, side_x + 18, stat_y + 218, font_num, cur_spd_lbl, false, true, Blitbuffer.COLOR_BLACK)
 
     -- AI 自动演示开关按键 (右侧下方)
     local ai_btn_y = stat_y + 244
@@ -748,13 +771,19 @@ function TetrisDialog:onTap(arg, ges)
         return true
     end
 
-    -- 5. 仅在直坠硬降 (hardDrop) 刚刚发生的 0.20 秒内过滤残余抬手点击，防止刚落底的新方块被误转
+    -- 5. 点击速度卡片切换下落节奏 (492, 405 ~ 596, 465)
+    if x >= 492 and x <= 596 and y >= 405 and y <= 465 then
+        self:cycleSpeed()
+        return true
+    end
+
+    -- 6. 仅在直坠硬降 (hardDrop) 刚刚发生的 0.20 秒内过滤残余抬手点击，防止刚落底的新方块被误转
     if self.last_hard_drop_clock and (now - self.last_hard_drop_clock) < 0.20 then
         logger.warn("TetrisDialog: Ignored tap right after hardDrop")
         return true
     end
 
-    -- 6. 双击直降核心判定 (连续两次点击在 60ms ~ 380ms 内，且两点相距 < 90px)
+    -- 7. 双击直降核心判定 (连续两次点击在 60ms ~ 380ms 内，且两点相距 < 90px)
     if self.last_tap_clock and (now - self.last_tap_clock) >= 0.06 and (now - self.last_tap_clock) < 0.38 then
         local tap_dist = math.sqrt((x - self.last_tap_x)^2 + (y - self.last_tap_y)^2)
         if tap_dist < 90 then
@@ -768,7 +797,7 @@ function TetrisDialog:onTap(arg, ges)
     self.last_tap_x = x
     self.last_tap_y = y
 
-    -- 7. 点棋盘任意区域直接旋转方块！(占屏幕 80% 宽度，极易盲按)
+    -- 8. 点棋盘任意区域直接旋转方块！(占屏幕 80% 宽度，极易盲按)
     if x >= BOARD_X and x <= BOARD_X + FW * CELL_W and y >= BOARD_Y and y <= BOARD_Y + FH * CELL_H then
         logger.warn("TetrisDialog: Tap on board (" .. tostring(x) .. ", " .. tostring(y) .. ") -> rotatePiece!")
         self:rotatePiece()
